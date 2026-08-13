@@ -1,0 +1,1840 @@
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * {
+                box-sizing: border-box;
+                user-select: none;
+                margin: 0;
+                padding: 0;
+            }
+            html, body {
+                width: 100vw;
+                height: 100vh;
+                overflow: hidden;
+                background: transparent;
+                color: #cddbe8;
+                font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Liberation Sans', 'DejaVu Sans', Roboto, sans-serif;
+            }
+            #ui-wrapper {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 999999;
+            }
+            #wheel-container {
+                position: relative;
+                width: 580px;
+                height: 580px;
+                transform-origin: center center;
+                transition: transform 0.15s ease;
+            }
+            #filter-tabs-container {
+                position: absolute;
+                top: -55px;
+                left: 50%;
+                transform: translateX(-50%);
+                display: flex;
+                gap: 8px;
+                z-index: 100;
+                pointer-events: auto;
+            }
+            .filter-tab {
+                background: rgba(19, 27, 38, 0.92);
+                border: 1px solid rgba(108, 130, 156, 0.5);
+                border-radius: 20px;
+                padding: 6px 16px;
+                font-size: 11px;
+                font-weight: 700;
+                color: #a3b8cc;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+                letter-spacing: 0.5px;
+            }
+            .filter-tab:hover {
+                background: rgba(45, 62, 82, 0.95);
+                color: #ffffff;
+                border-color: #79bac1;
+                transform: translateY(-1px);
+            }
+            .filter-tab.active {
+                background: linear-gradient(135deg, rgba(82, 165, 245, 0.25) 0%, rgba(19, 27, 38, 0.95) 100%);
+                color: #ffffff;
+                border: 1px solid #52a5f5;
+                box-shadow: 0 0 12px rgba(82, 165, 245, 0.4), inset 0 0 6px rgba(82, 165, 245, 0.2);
+            }
+            #wheel-svg {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 580px;
+                height: 580px;
+                pointer-events: none;
+            }
+            #labels-container {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 580px;
+                height: 580px;
+                pointer-events: none;
+            }
+            @keyframes pulseEquipped {
+                0% { stroke: #34d399; }
+                50% { stroke: #6ee7b7; filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.8)); }
+                100% { stroke: #34d399; }
+            }
+            .slice-path {
+                fill: rgba(19, 27, 38, 0.85);
+                stroke: #6c829c;
+                stroke-width: 2px;
+                pointer-events: auto;
+                cursor: pointer;
+                transition: fill 0.2s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease;
+                transform-origin: 290px 290px;
+            }
+            .slice-path:hover {
+                fill: rgba(108, 130, 156, 0.95);
+                stroke: #cddbe8;
+                transform: scale(1.02);
+            }
+            .slice-path.empty {
+                fill: rgba(19, 27, 38, 0.55);
+                stroke: #384553;
+            }
+            .slice-path.empty:hover {
+                fill: rgba(56, 69, 83, 0.85);
+                stroke: #6c829c;
+                transform: scale(1.02);
+            }
+            .slice-path.equipped {
+                animation: pulseEquipped 2.5s infinite ease-in-out;
+            }
+            .wheel-slot-label {
+                position: absolute;
+                transform: translate(-50%, -50%);
+                width: 110px;
+                height: auto;
+                pointer-events: none;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                color: #cddbe8;
+                text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
+                text-align: center;
+                gap: 1px;
+            }
+            .slot-icon {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                width: 22px;
+                height: 22px;
+                margin-bottom: 1px;
+                pointer-events: none;
+            }
+            .slot-title {
+                font-size: 11px;
+                font-weight: 700;
+                max-width: 95px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                line-height: 1.2;
+                pointer-events: none;
+            }
+            .slot-subtitle {
+                font-size: 9px;
+                color: #6c829c;
+                line-height: 1.1;
+                pointer-events: none;
+            }
+            .slot-equipped-badge {
+                font-size: 7.5px;
+                font-weight: 800;
+                color: #34d399;
+                letter-spacing: 0.6px;
+                text-transform: uppercase;
+                background: rgba(16, 185, 129, 0.18);
+                border: 1px solid rgba(52, 211, 153, 0.65);
+                border-radius: 6px;
+                padding: 1px 5px;
+                margin-top: 3px;
+                box-shadow: 0 0 6px rgba(52, 211, 153, 0.3);
+                pointer-events: none;
+                white-space: nowrap;
+            }
+            .wheel-center {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 150px;
+                height: 150px;
+                border-radius: 50%;
+                background: rgba(19, 27, 38, 0.95);
+                border: 2px solid #6c829c;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                color: #cddbe8;
+                z-index: 10;
+                box-shadow: 0 0 25px rgba(0, 0, 0, 0.8);
+                pointer-events: auto;
+            }
+            .center-mode {
+                font-size: 10px;
+                font-weight: bold;
+                letter-spacing: 1.5px;
+                text-transform: uppercase;
+                color: #6c829c;
+            }
+            .center-title {
+                font-size: 14px;
+                font-weight: bold;
+                margin: 2px 0;
+                color: #cddbe8;
+            }
+            .center-actions {
+                display: flex;
+                gap: 6px;
+                margin-top: 4px;
+            }
+            .action-btn {
+                font-size: 10px;
+                padding: 3px 8px;
+                border-radius: 4px;
+                background: #384553;
+                border: 1px solid #6c829c;
+                color: #cddbe8;
+                cursor: pointer;
+                transition: all 0.15s;
+                pointer-events: auto;
+            }
+            .action-btn:hover {
+                background: #6c829c;
+                color: #131b26;
+                border-color: #cddbe8;
+            }
+            .step-btn {
+                font-size: 11px;
+                font-weight: bold;
+                padding: 2px 8px;
+                border-radius: 4px;
+                background: #384553;
+                border: 1px solid #6c829c;
+                color: #cddbe8;
+                cursor: pointer;
+                transition: all 0.15s;
+            }
+            .step-btn:hover {
+                background: #6c829c;
+                color: #131b26;
+            }
+            .number-input {
+                width: 70px;
+                padding: 4px 6px;
+                background: #131b26;
+                border: 1px solid #6c829c;
+                border-radius: 4px;
+                color: #cddbe8;
+                font-size: 11px;
+                font-weight: bold;
+                text-align: center;
+                outline: none;
+                user-select: auto;
+            }
+            .number-input:focus {
+                border-color: #cddbe8;
+                box-shadow: 0 0 6px rgba(108, 130, 156, 0.6);
+            }
+            .step-control-group {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+            }
+            .wheel-nav {
+                position: absolute;
+                width: 100%;
+                display: flex;
+                justify-content: space-between;
+                top: 50%;
+                transform: translateY(-50%);
+                pointer-events: none;
+                z-index: 15;
+            }
+            .nav-btn {
+                pointer-events: auto;
+                width: 44px;
+                height: 44px;
+                border-radius: 50%;
+                background: rgba(19, 27, 38, 0.95);
+                border: 2px solid #6c829c;
+                color: #cddbe8;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                cursor: pointer;
+                transition: all 0.15s ease;
+                box-shadow: 0 0 15px rgba(0, 0, 0, 0.6);
+            }
+            .nav-btn.prev {
+                margin-left: -35px;
+            }
+            .nav-btn.next {
+                margin-right: -35px;
+            }
+            .nav-btn:hover {
+                background: #6c829c;
+                color: #131b26;
+                transform: scale(1.1);
+                border-color: #cddbe8;
+            }
+            .context-menu-popup {
+                position: fixed;
+                width: 180px;
+                background: rgba(19, 27, 38, 0.98);
+                border: 2px solid #6c829c;
+                border-radius: 8px;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.9);
+                z-index: 1000000000;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+                pointer-events: auto;
+            }
+            .ctx-header {
+                font-size: 11px;
+                font-weight: bold;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: #cddbe8;
+                padding: 8px 10px;
+                background: #384553;
+                border-bottom: 1px solid #6c829c;
+                text-align: center;
+            }
+            .ctx-item {
+                font-size: 11px;
+                font-weight: 600;
+                padding: 9px 12px;
+                color: #cddbe8;
+                cursor: pointer;
+                transition: background 0.15s, color 0.15s;
+            }
+            .ctx-item:hover {
+                background: #6c829c;
+                color: #131b26;
+            }
+            .ctx-item.danger:hover {
+                background: #b84a4d;
+                color: #ffffff;
+            }
+            #rename-modal, #settings-modal, #context-modal {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 580px;
+                height: 580px;
+                background: rgba(10, 14, 26, 0.85);
+                z-index: 100000000;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                pointer-events: auto;
+                border-radius: 50%;
+            }
+            .modal-card {
+                background: rgba(19, 27, 38, 0.98);
+                border: 2px solid #6c829c;
+                border-radius: 8px;
+                padding: 16px;
+                width: 380px;
+                max-height: 85vh;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                align-items: center;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.9);
+            }
+            .modal-card::-webkit-scrollbar {
+                width: 6px;
+            }
+            .modal-card::-webkit-scrollbar-track {
+                background: rgba(19, 27, 38, 0.5);
+                border-radius: 4px;
+            }
+            .modal-card::-webkit-scrollbar-thumb {
+                background: #6c829c;
+                border-radius: 4px;
+            }
+            .modal-title {
+                font-size: 12px;
+                font-weight: bold;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: #cddbe8;
+            }
+            .rename-input {
+                width: 100%;
+                padding: 8px 10px;
+                background: #131b26;
+                border: 1px solid #6c829c;
+                border-radius: 4px;
+                color: #cddbe8;
+                font-size: 12px;
+                outline: none;
+                user-select: auto;
+            }
+            .rename-input:focus {
+                border-color: #cddbe8;
+                box-shadow: 0 0 8px rgba(108, 130, 156, 0.6);
+            }
+            .modal-buttons {
+                display: flex;
+                gap: 10px;
+                width: 100%;
+                justify-content: center;
+                margin-top: 4px;
+            }
+            .setting-row {
+                width: 100%;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                font-size: 11px;
+                color: #cddbe8;
+            }
+            .checkbox-group {
+                width: 100%;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                padding: 8px;
+                background: #131b26;
+                border: 1px solid #6c829c;
+                border-radius: 6px;
+            }
+            .checkbox-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-size: 11px;
+                font-weight: 600;
+                color: #cddbe8;
+                cursor: pointer;
+            }
+            .custom-chk {
+                width: 16px;
+                height: 16px;
+                accent-color: #6c829c;
+                cursor: pointer;
+            }
+            .star-rating {
+                display: flex;
+                gap: 6px;
+                cursor: pointer;
+            }
+            .star {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #384553;
+                transition: color 0.15s, transform 0.15s;
+            }
+            .star:hover {
+                transform: scale(1.15);
+            }
+            .star.active {
+                color: #fad165;
+                filter: drop-shadow(0 0 6px rgba(250, 209, 101, 0.6));
+            }
+            .keybind-btn {
+                background: #384553;
+                border: 1px solid #6c829c;
+                color: #cddbe8;
+                padding: 4px 10px;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: bold;
+                cursor: pointer;
+                transition: all 0.15s;
+            }
+            .keybind-btn:hover {
+                background: #6c829c;
+                color: #131b26;
+            }
+            .keybind-btn.listening {
+                background: #b84a4d;
+                color: #ffffff;
+                border-color: #ffffff;
+            }
+            .custom-dropdown {
+                position: relative;
+                background: #131b26;
+                border: 1px solid #6c829c;
+                color: #cddbe8;
+                padding: 4px 10px;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: bold;
+                cursor: pointer;
+                min-width: 80px;
+                text-align: center;
+                transition: all 0.15s ease;
+            }
+            .custom-dropdown:hover {
+                border-color: #cddbe8;
+                box-shadow: 0 0 6px rgba(108, 130, 156, 0.5);
+            }
+            .dropdown-list {
+                position: absolute;
+                top: 100%;
+                left: 0;
+                width: 100%;
+                margin-top: 3px;
+                background: rgba(19, 27, 38, 0.98);
+                border: 1px solid #6c829c;
+                border-radius: 4px;
+                box-shadow: 0 8px 20px rgba(0, 0, 0, 0.9);
+                z-index: 100000005;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+            }
+            .dropdown-item {
+                padding: 6px 10px;
+                color: #cddbe8;
+                font-size: 11px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s, color 0.15s;
+            }
+            .dropdown-item:hover {
+                background: #6c829c;
+                color: #131b26;
+            }
+            #save-toast {
+                position: fixed;
+                top: 40px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(19, 27, 38, 0.95);
+                border: 2px solid #6c829c;
+                color: #fad165;
+                padding: 8px 18px;
+                border-radius: 20px;
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                box-shadow: 0 5px 20px rgba(0,0,0,0.8);
+                z-index: 1000000000;
+                opacity: 0;
+                transition: opacity 0.2s ease, transform 0.2s ease;
+                pointer-events: none;
+            }
+            #save-toast.show {
+                opacity: 1;
+                transform: translateX(-50%) translateY(5px);
+            }
+        </style>
+    </head>
+    <body>
+    <div id="save-toast">Outfit Saved!</div>
+    <div id="ui-wrapper" onclick="handleWrapperClick(event)">
+        <div id="wheel-container">
+            <div id="filter-tabs-container">
+                <div class="filter-tab active" data-tag="ALL" onclick="setCategoryFilter('ALL', event)">All</div>
+                <div class="filter-tab" data-tag="City" onclick="setCategoryFilter('City', event)">City</div>
+                <div class="filter-tab" data-tag="Home" onclick="setCategoryFilter('Home', event)">Home</div>
+                <div class="filter-tab" data-tag="Combat" onclick="setCategoryFilter('Combat', event)">Combat</div>
+                <div class="filter-tab" data-tag="Swim" onclick="setCategoryFilter('Swim', event)">Swim</div>
+            </div>
+            <svg id="wheel-svg" viewBox="0 0 580 580"></svg>
+            <div id="labels-container"></div>
+            <div class="wheel-nav">
+                <div class="nav-btn prev" onclick="changeWheel(-1)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                </div>
+                <div class="nav-btn next" onclick="changeWheel(1)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                </div>
+            </div>
+            <div class="wheel-center" oncontextmenu="handleCenterRightClick(event)">
+                <div class="center-mode" id="mode-text">PLAY MODE</div>
+                <div class="center-title" id="wheel-name">Wheel 1</div>
+                <div class="center-actions" id="edit-actions" style="display: none;">
+                    <div class="action-btn" onclick="addSlot()">+ Slot</div>
+                    <div class="action-btn" onclick="addWheel()">+ Wheel</div>
+                </div>
+                <div class="center-actions" style="margin-top: 4px;">
+                    <div class="action-btn" onclick="openSettingsModal(event)">Settings</div>
+                    <div class="action-btn" onclick="closeWheel()">Close</div>
+                </div>
+            </div>
+            <div id="rename-modal" style="display: none;">
+                <div class="modal-card">
+                    <div class="modal-title" id="modal-title-text">Rename</div>
+                    <input type="text" id="rename-input" class="rename-input" placeholder="Enter new name..." maxlength="30" onkeydown="handleRenameKey(event)" onfocus="setTyping(true)" onblur="setTyping(false)">
+                    <div class="modal-buttons">
+                        <div class="action-btn" onclick="confirmRename()">Confirm</div>
+                        <div class="action-btn" onclick="hideRenameModal()">Cancel</div>
+                    </div>
+                </div>
+            </div>
+            <div id="context-modal" style="display: none;">
+                <div class="modal-card">
+                    <div class="modal-title">Set Context & Rating</div>
+                    <div class="checkbox-group">
+                        <label class="checkbox-row"><input type="checkbox" id="chk-city" class="custom-chk"> City / Town</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-home" class="custom-chk"> Player Home</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-combat" class="custom-chk"> Combat</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-swim" class="custom-chk"> Swimming</label>
+                    </div>
+                    <div class="setting-row" style="margin-top: 4px;">
+                        <span>Rating:</span>
+                        <div class="star-rating">
+                            <span class="star" onclick="setStarRating(1)">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                            </span>
+                            <span class="star" onclick="setStarRating(2)">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                            </span>
+                            <span class="star" onclick="setStarRating(3)">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                            </span>
+                            <span class="star" onclick="setStarRating(4)">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                            </span>
+                            <span class="star" onclick="setStarRating(5)">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                            </span>
+                        </div>
+                    </div>
+                    <div class="modal-buttons">
+                        <div class="action-btn" onclick="saveSlotContextAndRating()">Save</div>
+                        <div class="action-btn" onclick="hideContextModal()">Cancel</div>
+                    </div>
+                </div>
+            </div>
+            <div id="settings-modal" style="display: none;">
+                <div class="modal-card">
+                    <div class="modal-title">Settings</div>
+
+                    <div class="setting-row" onwheel="handleScaleScroll(event)">
+                        <span>Wheel Size:</span>
+                        <div class="step-control-group">
+                            <div class="step-btn" onclick="stepScale(-0.05)">&lt;</div>
+                            <input type="text" id="scale-input" class="number-input" value="100%" onfocus="setTyping(true)" onblur="onScaleInputBlur()" onchange="onScaleInputChange(this.value)">
+                            <div class="step-btn" onclick="stepScale(0.05)">&gt;</div>
+                        </div>
+                    </div>
+
+                    <div class="setting-row" onwheel="handleOffsetScroll(event)">
+                        <span>X Position:</span>
+                        <div class="step-control-group">
+                            <div class="step-btn" onclick="stepOffsetX(-10)">&lt;</div>
+                            <input type="text" id="offsetx-input" class="number-input" value="0px" onfocus="setTyping(true)" onblur="onOffsetXInputBlur()" onchange="onOffsetXInputChange(this.value)">
+                            <div class="step-btn" onclick="stepOffsetX(10)">&gt;</div>
+                        </div>
+                    </div>
+
+                    <div class="modal-title" style="margin-top: 6px;">Auto-System Toggles</div>
+                    <div class="checkbox-group">
+                        <label class="checkbox-row"><input type="checkbox" id="chk-auto-master" class="custom-chk"> Master Auto-System</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-auto-city" class="custom-chk"> Auto City / Town</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-auto-home" class="custom-chk"> Auto Player Home</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-auto-combat" class="custom-chk"> Auto Combat</label>
+                        <label class="checkbox-row"><input type="checkbox" id="chk-auto-swim" class="custom-chk"> Auto Swimming</label>
+                    </div>
+
+                    <div class="modal-title" style="margin-top: 6px;">Hotkeys & Controls</div>
+                    <div class="setting-row">
+                        <span>Edit Modifier:</span>
+                        <div class="custom-dropdown" onclick="toggleDropdown('edit', event)">
+                            <span id="dd-edit-text">None</span>
+                            <div class="dropdown-list" id="dd-edit-list" style="display: none;">
+                                <div class="dropdown-item" onclick="selectMod('edit', 0, 'None', event)">None</div>
+                                <div class="dropdown-item" onclick="selectMod('edit', 42, 'Shift', event)">Shift</div>
+                                <div class="dropdown-item" onclick="selectMod('edit', 29, 'Ctrl', event)">Ctrl</div>
+                                <div class="dropdown-item" onclick="selectMod('edit', 56, 'Alt', event)">Alt</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <span>Edit Key:</span>
+                        <button id="btn-edit-key" class="keybind-btn" onclick="startKeyListen('edit')">[N]</button>
+                    </div>
+                    <div class="setting-row">
+                        <span>Play Modifier:</span>
+                        <div class="custom-dropdown" onclick="toggleDropdown('play', event)">
+                            <span id="dd-play-text">None</span>
+                            <div class="dropdown-list" id="dd-play-list" style="display: none;">
+                                <div class="dropdown-item" onclick="selectMod('play', 0, 'None', event)">None</div>
+                                <div class="dropdown-item" onclick="selectMod('play', 42, 'Shift', event)">Shift</div>
+                                <div class="dropdown-item" onclick="selectMod('play', 29, 'Ctrl', event)">Ctrl</div>
+                                <div class="dropdown-item" onclick="selectMod('play', 56, 'Alt', event)">Alt</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <span>Play Key:</span>
+                        <button id="btn-play-key" class="keybind-btn" onclick="startKeyListen('play')">[V]</button>
+                    </div>
+                    <div class="modal-buttons">
+                        <div class="action-btn" onclick="saveSettings()">Save Settings</div>
+                        <div class="action-btn" onclick="hideSettingsModal()">Cancel</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="slot-context-menu" class="context-menu-popup" style="display: none;">
+        <div class="ctx-header" id="slot-ctx-title">Slot Options</div>
+        <div class="ctx-item" onclick="ctxSaveOutfit(event)">Save Outfit</div>
+        <div class="ctx-item" onclick="ctxRenameSlot(event)">Rename Slot</div>
+        <div class="ctx-item" onclick="openContextModal(event)">Set Context & Rating</div>
+        <div class="ctx-item" onclick="ctxClearSlot(event)">Clear Outfit Data</div>
+        <div class="ctx-item danger" onclick="ctxDeleteSlot(event)">Delete Slot</div>
+        <div class="ctx-item" onclick="hideAllMenus(event)">Cancel</div>
+    </div>
+
+    <div id="wheel-context-menu" class="context-menu-popup" style="display: none;">
+        <div class="ctx-header">Wheel Options</div>
+        <div class="ctx-item" onclick="openSettingsModal(event)">Settings</div>
+        <div class="ctx-item" onclick="ctxRenameWheel(event)">Rename Wheel</div>
+        <div class="ctx-item danger" onclick="ctxDeleteWheel(event)">Delete Wheel</div>
+        <div class="ctx-item" onclick="hideAllMenus(event)">Cancel</div>
+    </div>
+
+    <script>
+        const scanCodeMap = {
+            'Escape': 0x01, 'Digit1': 0x02, 'Digit2': 0x03, 'Digit3': 0x04, 'Digit4': 0x05,
+            'Digit5': 0x06, 'Digit6': 0x07, 'Digit7': 0x08, 'Digit8': 0x09, 'Digit9': 0x0A, 'Digit0': 0x0B,
+            'Minus': 0x0C, 'Equal': 0x0D, 'Backspace': 0x0E, 'Tab': 0x0F,
+            'KeyQ': 0x10, 'KeyW': 0x11, 'KeyE': 0x12, 'KeyR': 0x13, 'KeyT': 0x14, 'KeyY': 0x15,
+            'KeyU': 0x16, 'KeyI': 0x17, 'KeyO': 0x18, 'KeyP': 0x19, 'BracketLeft': 0x1A, 'BracketRight': 0x1B,
+            'Enter': 0x1C, 'ControlLeft': 0x1D,
+            'KeyA': 0x1E, 'KeyS': 0x1F, 'KeyD': 0x20, 'KeyF': 0x21, 'KeyG': 0x22, 'KeyH': 0x23,
+            'KeyJ': 0x24, 'KeyK': 0x25, 'KeyL': 0x26, 'Semicolon': 0x27, 'Quote': 0x28, 'Backquote': 0x29,
+            'ShiftLeft': 0x2A, 'Backslash': 0x2B,
+            'KeyZ': 0x2C, 'KeyX': 0x2D, 'KeyC': 0x2E, 'KeyV': 0x2F, 'KeyB': 0x30, 'KeyN': 0x31, 'KeyM': 0x32,
+            'Comma': 0x33, 'Period': 0x34, 'Slash': 0x35, 'ShiftRight': 0x36, 'NumpadMultiply': 0x37,
+            'AltLeft': 0x38, 'Space': 0x39, 'CapsLock': 0x3A,
+            'F1': 0x3B, 'F2': 0x3C, 'F3': 0x3D, 'F4': 0x3E, 'F5': 0x3F,
+            'F6': 0x40, 'F7': 0x41, 'F8': 0x42, 'F9': 0x43, 'F10': 0x44, 'F11': 0x57, 'F12': 0x58,
+            'NumLock': 0x45, 'ScrollLock': 0x46,
+            'Numpad7': 0x47, 'Numpad8': 0x48, 'Numpad9': 0x49, 'NumpadSubtract': 0x4A,
+            'Numpad4': 0x4B, 'Numpad5': 0x4C, 'Numpad6': 0x4D, 'NumpadAdd': 0x4E,
+            'Numpad1': 0x4F, 'Numpad2': 0x50, 'Numpad3': 0x51, 'Numpad0': 0x52, 'NumpadDecimal': 0x53,
+            'ControlRight': 0x9D, 'AltRight': 0xB8,
+            'Home': 0xC7, 'ArrowUp': 0xC8, 'PageUp': 0xC9, 'ArrowLeft': 0xCB,
+            'ArrowRight': 0xCD, 'End': 0xCF, 'ArrowDown': 0xD0, 'PageDown': 0xD1, 'Insert': 0xD2, 'Delete': 0xD3
+        };
+
+        let currentWheelData = {
+            editMode: false,
+            wheelIndex: 0,
+            wheelName: "Wheel 1",
+            wheelScale: 1.0,
+            wheelOffsetX: 0.0,
+            editKey: 0x31,
+            editModifierKey: 0,
+            playKey: 0x2F,
+            playModifierKey: 0,
+            autoSystemEnabled: true,
+            autoCityEnabled: true,
+            autoHomeEnabled: true,
+            autoCombatEnabled: true,
+            autoSwimEnabled: true,
+            slots: []
+        };
+
+        let activeCategoryFilter = 'ALL';
+        let lastEquippedSlotIndex = null;
+        let selectedSlotIndex = null;
+        let renameTargetMode = 'slot';
+        let isTyping = false;
+        let listeningKeyType = null;
+        let tempEditKey = 0x31;
+        let tempEditMod = 0;
+        let tempPlayKey = 0x2F;
+        let tempPlayMod = 0;
+        let tempScale = 1.0;
+        let tempOffsetX = 0.0;
+        let tempStars = 3;
+        let toastTimeout = null;
+        let lastMenuOpenTime = 0;
+
+        const modNameMap = { 0: 'None', 42: 'Shift', 29: 'Ctrl', 56: 'Alt' };
+
+        const svgOutfitIcon = `
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 2L2 5V10C2 15.52 6.48 20.74 12 22C17.52 20.74 22 15.52 22 10V5L17 2L12 5L7 2Z" fill="rgba(82, 165, 245, 0.15)" stroke="#79bac1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M12 5V22" stroke="#6c829c" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <path d="M7 8H17" stroke="#79bac1" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M8 12H16" stroke="#6c829c" stroke-width="1.2" stroke-linecap="round"/>
+            <circle cx="12" cy="8" r="1.5" fill="#fad165"/>
+        </svg>`;
+
+        const svgPlusIcon = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="9" stroke="#6c829c" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <path d="M12 8V16M8 12H16" stroke="#a3b8cc" stroke-width="2" stroke-linecap="round"/>
+        </svg>`;
+
+        function isEditModeActive() {
+            if (!currentWheelData) return false;
+            return (currentWheelData.editMode === true || currentWheelData.editMode === "true" || currentWheelData.editMode === 1);
+        }
+
+        function showSaveToast(text) {
+            const toast = document.getElementById('save-toast');
+            if (!toast) return;
+            toast.innerText = text || "Outfit Saved!";
+            toast.classList.add('show');
+            if (toastTimeout) clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 1500);
+        }
+
+        function setCategoryFilter(tag, e) {
+            if (e) e.stopPropagation();
+            activeCategoryFilter = tag;
+
+            const tabs = document.querySelectorAll('.filter-tab');
+            tabs.forEach(tab => {
+                if (tab.getAttribute('data-tag') === tag) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+
+            updateWheelUI();
+        }
+
+        window.openWheel = function(argument) {
+            try {
+                if (typeof argument === 'string') {
+                    currentWheelData = JSON.parse(argument);
+                } else if (typeof argument === 'object' && argument !== null) {
+                    currentWheelData = argument;
+                }
+            } catch (e) {}
+            hideAllMenus();
+            hideRenameModal();
+            hideContextModal();
+            hideSettingsModal();
+            updateWheelUI();
+        };
+
+        function toggleDropdown(type, e) {
+            if (e) e.stopPropagation();
+            const editList = document.getElementById('dd-edit-list');
+            const playList = document.getElementById('dd-play-list');
+
+            if (type === 'edit') {
+                if (editList) editList.style.display = editList.style.display === 'none' ? 'flex' : 'none';
+                if (playList) playList.style.display = 'none';
+            } else if (type === 'play') {
+                if (playList) playList.style.display = playList.style.display === 'none' ? 'flex' : 'none';
+                if (editList) editList.style.display = 'none';
+            }
+        }
+
+        function selectMod(type, val, text, e) {
+            if (e) e.stopPropagation();
+            if (type === 'edit') {
+                tempEditMod = val;
+                const el = document.getElementById('dd-edit-text');
+                if (el) el.innerText = text;
+                const editList = document.getElementById('dd-edit-list');
+                if (editList) editList.style.display = 'none';
+            } else if (type === 'play') {
+                tempPlayMod = val;
+                const el = document.getElementById('dd-play-text');
+                if (el) el.innerText = text;
+                const playList = document.getElementById('dd-play-list');
+                if (playList) playList.style.display = 'none';
+            }
+        }
+
+        function closeAllDropdowns() {
+            const editList = document.getElementById('dd-edit-list');
+            const playList = document.getElementById('dd-play-list');
+            if (editList) editList.style.display = 'none';
+            if (playList) playList.style.display = 'none';
+        }
+
+        function setTyping(state) {
+            isTyping = state;
+            if (typeof window.SetTypingMode === 'function') {
+                window.SetTypingMode(JSON.stringify({ typing: state }));
+            }
+        }
+
+        function getScanCode(e) {
+            if (e.code && scanCodeMap[e.code]) {
+                return scanCodeMap[e.code];
+            }
+
+            const code = e.keyCode || e.which;
+
+            if (code >= 112 && code <= 123) {
+                const fKeyMap = {
+                    112: 0x3B, 113: 0x3C, 114: 0x3D, 115: 0x3E, 116: 0x3F, 117: 0x40,
+                    118: 0x41, 119: 0x42, 120: 0x43, 121: 0x44, 122: 0x57, 123: 0x58
+                };
+                return fKeyMap[code] || 0x3B;
+            }
+
+            if (code >= 65 && code <= 90) {
+                const letterMap = {
+                    65: 0x1E, 66: 0x30, 67: 0x2E, 68: 0x20, 69: 0x12, 70: 0x21, 71: 0x22,
+                    72: 0x23, 73: 0x17, 74: 0x24, 75: 0x25, 76: 0x26, 77: 0x32, 78: 0x31,
+                    79: 0x18, 80: 0x19, 81: 0x10, 82: 0x13, 83: 0x1F, 84: 0x14, 85: 0x16,
+                    86: 0x2F, 87: 0x11, 88: 0x2D, 89: 0x15, 90: 0x2C
+                };
+                return letterMap[code] || 0x31;
+            }
+
+            if (code >= 48 && code <= 57) {
+                const digitMap = {
+                    48: 0x0B, 49: 0x02, 50: 0x03, 51: 0x04, 52: 0x05,
+                    53: 0x06, 54: 0x07, 55: 0x08, 56: 0x09, 57: 0x0A
+                };
+                return digitMap[code] || 0x02;
+            }
+
+            const specialMap = {
+                8: 0x0E, 9: 0x0F, 13: 0x1C, 16: 0x2A, 17: 0x1D, 18: 0x38, 20: 0x3A, 27: 0x01, 32: 0x39,
+                33: 0xC9, 34: 0xD1, 35: 0xCF, 36: 0xC7, 37: 0xC8, 39: 0xCD, 40: 0xD0,
+                45: 0xD2, 46: 0xD3, 186: 0x27, 187: 0x0D, 188: 0x33, 189: 0x0C, 190: 0x34,
+                191: 0x35, 192: 0x29, 219: 0x1A, 220: 0x2B, 221: 0x1B, 222: 0x28
+            };
+
+            return specialMap[code] || 0x31;
+        }
+
+        function getKeyName(dxCode) {
+            const customNames = {
+                0x01: 'Esc', 0x0E: 'Backspace', 0x0F: 'Tab', 0x1C: 'Enter', 0x1D: 'LCtrl',
+                0x2A: 'LShift', 0x38: 'LAlt', 0x39: 'Space', 0x3A: 'CapsLock', 0x36: 'RShift',
+                0x9D: 'RCtrl', 0xB8: 'RAlt', 0xC7: 'Home', 0xC8: 'Up', 0xC9: 'PgUp',
+                0xCB: 'Left', 0xCD: 'Right', 0xCF: 'End', 0xD0: 'Down', 0xD1: 'PgDn',
+                0xD2: 'Insert', 0xD3: 'Delete'
+            };
+            if (customNames[dxCode]) return customNames[dxCode];
+
+            for (let key in scanCodeMap) {
+                if (scanCodeMap[key] === dxCode) {
+                    return key.replace('Key', '').replace('Digit', '').replace('Arrow', '');
+                }
+            }
+            return `0x${dxCode.toString(16).toUpperCase()}`;
+        }
+
+        function describeArc(x, y, innerRadius, outerRadius, startAngle, endAngle) {
+            const x1_out = x + outerRadius * Math.cos(startAngle);
+            const y1_out = y + outerRadius * Math.sin(startAngle);
+            const x2_out = x + outerRadius * Math.cos(endAngle);
+            const y2_out = y + outerRadius * Math.sin(endAngle);
+
+            const x1_in = x + innerRadius * Math.cos(endAngle);
+            const y1_in = y + innerRadius * Math.sin(endAngle);
+            const x2_in = x + innerRadius * Math.cos(startAngle);
+            const y2_in = y + innerRadius * Math.sin(startAngle);
+
+            const largeArcFlag = (endAngle - startAngle) > Math.PI ? 1 : 0;
+
+            return [
+                `M ${x1_out} ${y1_out}`,
+                `A ${outerRadius} ${outerRadius} 0 ${largeArcFlag} 1 ${x2_out} ${y2_out}`,
+                `L ${x1_in} ${y1_in}`,
+                `A ${innerRadius} ${innerRadius} 0 ${largeArcFlag} 0 ${x2_in} ${y2_in}`,
+                `Z`
+            ].join(" ");
+        }
+
+        function updateWheelUI() {
+            window.requestAnimationFrame(() => {
+                const container = document.getElementById('wheel-container');
+                const svg = document.getElementById('wheel-svg');
+                const labelsContainer = document.getElementById('labels-container');
+                const modeText = document.getElementById('mode-text');
+                const wheelName = document.getElementById('wheel-name');
+                const editActions = document.getElementById('edit-actions');
+
+                if (!svg || !labelsContainer || !modeText || !wheelName || !container) return;
+
+                const scale = currentWheelData.wheelScale || 1.0;
+                const offsetX = currentWheelData.wheelOffsetX || 0.0;
+                container.style.transform = `translateX(${offsetX}px) scale(${scale})`;
+
+                const isEdit = isEditModeActive();
+                modeText.innerText = isEdit ? "EDIT MODE" : "PLAY MODE";
+                modeText.style.color = isEdit ? "#6c829c" : "#cddbe8";
+
+                if (activeCategoryFilter !== 'ALL') {
+                    wheelName.innerText = `${activeCategoryFilter} View`;
+                } else {
+                    wheelName.innerText = currentWheelData.wheelName || `Wheel ${currentWheelData.wheelIndex + 1}`;
+                }
+
+                if (editActions) {
+                    editActions.style.display = isEdit ? "flex" : "none";
+                }
+
+                svg.innerHTML = '';
+                labelsContainer.innerHTML = '';
+
+                const rawSlots = currentWheelData.slots || [];
+                let displaySlots = [];
+
+                if (activeCategoryFilter === 'ALL') {
+                    displaySlots = rawSlots.map((s, idx) => ({ ...s, realIndex: s.index !== undefined ? s.index : idx }));
+                } else {
+                    const filterTag = activeCategoryFilter.toLowerCase();
+                    rawSlots.forEach((s, idx) => {
+                        const realIdx = s.index !== undefined ? s.index : idx;
+                        if (s && s.hasOutfit && s.contextTag) {
+                            const tagLower = s.contextTag.toLowerCase();
+                            if (tagLower.includes(filterTag)) {
+                                displaySlots.push({ ...s, realIndex: realIdx });
+                            }
+                        }
+                    });
+                }
+
+                const total = displaySlots.length;
+                if (total === 0) {
+                    const emptyMsg = document.createElement('div');
+                    emptyMsg.style.cssText = "position:absolute; top:40%; left:50%; transform:translate(-50%,-50%); color:#6c829c; font-size:13px; font-weight:bold;";
+                    emptyMsg.innerText = `No outfits found for ${activeCategoryFilter}`;
+                    labelsContainer.appendChild(emptyMsg);
+                    return;
+                }
+
+                const cx = 290;
+                const cy = 290;
+                const rIn = 95;
+                const rOut = 245;
+                const rMid = (rIn + rOut) / 2;
+
+                const sliceAngle = (2 * Math.PI) / total;
+
+                const svgFragment = document.createDocumentFragment();
+                const labelFragment = document.createDocumentFragment();
+
+                displaySlots.forEach((slot, index) => {
+                    let startAngle, endAngle;
+                    if (total === 1) {
+                        startAngle = -Math.PI / 2;
+                        endAngle = startAngle + (2 * Math.PI) - 0.001;
+                    } else {
+                        const gapAngle = 0.02;
+                        startAngle = (index * sliceAngle) - (Math.PI / 2) + (gapAngle / 2);
+                        endAngle = ((index + 1) * sliceAngle) - (Math.PI / 2) - (gapAngle / 2);
+                    }
+
+                    const midAngle = (startAngle + endAngle) / 2;
+                    const hasOutfit = slot.hasOutfit;
+                    const realSlotIndex = slot.realIndex;
+
+                    const isEquipped = hasOutfit && (slot.isWorn === true || slot.isEquipped === true);
+
+                    const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    pathEl.setAttribute("d", describeArc(cx, cy, rIn, rOut, startAngle, endAngle));
+                    pathEl.setAttribute("data-slot-index", realSlotIndex);
+
+                    let defaultFill, defaultStroke, hoverFill, hoverStroke;
+
+                    if (isEquipped) {
+                        defaultFill = 'rgba(16, 60, 48, 0.92)';
+                        defaultStroke = '#34d399';
+                        hoverFill = 'rgba(20, 85, 65, 0.98)';
+                        hoverStroke = '#6ee7b7';
+                        pathEl.setAttribute("class", "slice-path equipped");
+                    } else if (hasOutfit) {
+                        defaultFill = 'rgba(19, 27, 38, 0.85)';
+                        defaultStroke = '#6c829c';
+                        hoverFill = 'rgba(108, 130, 156, 0.95)';
+                        hoverStroke = '#cddbe8';
+                        pathEl.setAttribute("class", "slice-path");
+                    } else {
+                        defaultFill = 'rgba(19, 27, 38, 0.55)';
+                        defaultStroke = '#384553';
+                        hoverFill = 'rgba(56, 69, 83, 0.85)';
+                        hoverStroke = '#6c829c';
+                        pathEl.setAttribute("class", "slice-path empty");
+                    }
+
+                    pathEl.style.fill = defaultFill;
+                    pathEl.style.stroke = defaultStroke;
+
+                    pathEl.onpointerenter = () => {
+                        pathEl.style.fill = hoverFill;
+                        pathEl.style.stroke = hoverStroke;
+                    };
+
+                    pathEl.onpointerleave = () => {
+                        pathEl.style.fill = defaultFill;
+                        pathEl.style.stroke = defaultStroke;
+                    };
+
+                    const handleLeftClickTrigger = (e) => {
+                        if (e) {
+                            e.stopPropagation();
+                            e.preventDefault();
+                        }
+                        if (isEditModeActive()) {
+                            saveOutfit(realSlotIndex);
+                        } else {
+                            equipOutfit(realSlotIndex);
+                        }
+                    };
+
+                    const handleRightClickTrigger = (e) => {
+                        if (e) {
+                            e.preventDefault();git remote -v
+                            e.stopPropagation();
+                        }
+                        if (isEditModeActive()) {
+                            const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : 200;
+                            const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : 200;
+                            showSlotContextMenu(clickX, clickY, realSlotIndex);
+                        }
+                    };
+
+                    pathEl.onclick = (e) => {
+                        if (e && e.button === 0) {
+                            handleLeftClickTrigger(e);
+                        }
+                    };
+
+                    pathEl.onmousedown = (e) => {
+                        if (e.button === 2 || e.which === 3) {
+                            handleRightClickTrigger(e);
+                        }
+                    };
+
+                    pathEl.oncontextmenu = (e) => {
+                        handleRightClickTrigger(e);
+                    };
+
+                    svgFragment.appendChild(pathEl);
+
+                    const lx = Math.cos(midAngle) * rMid;
+                    const ly = Math.sin(midAngle) * rMid;
+
+                    const labelEl = document.createElement('div');
+                    labelEl.className = 'wheel-slot-label';
+                    labelEl.style.left = `${cx + lx}px`;
+                    labelEl.style.top = `${cy + ly}px`;
+                    labelEl.setAttribute("data-slot-index", realSlotIndex);
+
+                    if (hasOutfit) {
+                        labelEl.innerHTML = `
+                            <div class="slot-icon">${svgOutfitIcon}</div>
+                            <div class="slot-title">${slot.name}</div>
+                            <div class="slot-subtitle">${slot.count} items</div>
+                            ${isEquipped ? '<div class="slot-equipped-badge">EQUIPPED</div>' : ''}
+                        `;
+                    } else {
+                        labelEl.innerHTML = `
+                            <div class="slot-icon">${svgPlusIcon}</div>
+                            <div class="slot-title">Empty</div>
+                        `;
+                    }
+
+                    labelFragment.appendChild(labelEl);
+                });
+
+                svg.appendChild(svgFragment);
+                labelsContainer.appendChild(labelFragment);
+            });
+        }
+
+        function showSlotContextMenu(x, y, slotIndex) {
+            if (!isEditModeActive()) return;
+            selectedSlotIndex = slotIndex;
+            hideAllMenus();
+
+            const menu = document.getElementById('slot-context-menu');
+            const title = document.getElementById('slot-ctx-title');
+            if (!menu || !title) return;
+
+            title.innerText = `Slot ${slotIndex + 1} Options`;
+
+            const menuWidth = 190;
+            const menuHeight = 220;
+
+            let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
+            let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
+
+            const winWidth = window.innerWidth || 1920;
+            const winHeight = window.innerHeight || 1080;
+
+            if (posX + menuWidth > winWidth) {
+                posX = winWidth - menuWidth - 10;
+            }
+            if (posY + menuHeight > winHeight) {
+                posY = winHeight - menuHeight - 10;
+            }
+            if (posX < 10) posX = 10;
+            if (posY < 10) posY = 10;
+
+            menu.style.left = `${posX}px`;
+            menu.style.top = `${posY}px`;
+            menu.style.display = 'flex';
+            lastMenuOpenTime = Date.now();
+        }
+
+        function showWheelContextMenu(x, y) {
+            if (!isEditModeActive()) return;
+            hideAllMenus();
+
+            const menu = document.getElementById('wheel-context-menu');
+            if (!menu) return;
+
+            let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
+            let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
+
+            const winWidth = window.innerWidth || 1920;
+            const winHeight = window.innerHeight || 1080;
+
+            posX = Math.min(posX, winWidth - 180);
+            posY = Math.min(posY, winHeight - 180);
+
+            menu.style.left = `${posX}px`;
+            menu.style.top = `${posY}px`;
+            menu.style.display = 'flex';
+
+            lastMenuOpenTime = Date.now();
+        }
+
+        function handleCenterRightClick(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            if (isEditModeActive()) {
+                showWheelContextMenu(e.clientX || e.pageX || 200, e.clientY || e.pageY || 200);
+            }
+        }
+
+        function hideAllMenus(e) {
+            if (e) e.stopPropagation();
+            const slotMenu = document.getElementById('slot-context-menu');
+            const wheelMenu = document.getElementById('wheel-context-menu');
+            if (slotMenu) slotMenu.style.display = 'none';
+            if (wheelMenu) wheelMenu.style.display = 'none';
+            closeAllDropdowns();
+        }
+
+        function handleWrapperClick(e) {
+            if (Date.now() - lastMenuOpenTime < 300) {
+                return;
+            }
+            if (e.button !== 0) return;
+            if (e.target.closest('.context-menu-popup') || e.target.closest('.modal-card') || e.target.closest('[data-slot-index]')) {
+                return;
+            }
+
+            closeAllDropdowns();
+            if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg') {
+                const slotCtx = document.getElementById('slot-context-menu');
+                const wheelCtx = document.getElementById('wheel-context-menu');
+                if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) {
+                    hideAllMenus();
+                    return;
+                }
+            }
+        }
+
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 2 || e.which === 3) {
+                if (!isEditModeActive()) return;
+
+                if (e.target.closest('.context-menu-popup') || e.target.closest('.modal-card')) {
+                    return;
+                }
+
+                const slotElem = e.target.closest('[data-slot-index]');
+                if (slotElem) {
+                    const idx = parseInt(slotElem.getAttribute('data-slot-index'));
+                    if (!isNaN(idx)) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const rect = slotElem.getBoundingClientRect();
+                        const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (rect.left + rect.width / 2);
+                        const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (rect.top + rect.height / 2);
+                        showSlotContextMenu(clickX, clickY, idx);
+                        return;
+                    }
+                }
+
+                if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || e.target.closest('.wheel-center')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
+                    const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
+                    showWheelContextMenu(clickX, clickY);
+                }
+            }
+        }, true);
+
+        function ctxSaveOutfit(e) {
+            if (e) e.stopPropagation();
+            if (selectedSlotIndex !== null) {
+                saveOutfit(selectedSlotIndex);
+            }
+            hideAllMenus();
+        }
+
+        function ctxRenameSlot(e) {
+            if (e) e.stopPropagation();
+            if (selectedSlotIndex === null) return;
+            renameTargetMode = 'slot';
+
+            const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
+            const currentName = (currentSlot && currentSlot.hasOutfit) ? currentSlot.name : `Outfit ${selectedSlotIndex + 1}`;
+
+            showRenameModal("Rename Slot", currentName);
+            hideAllMenus();
+        }
+
+        function openContextModal(e) {
+            if (e) e.stopPropagation();
+            if (selectedSlotIndex === null) return;
+
+            hideAllMenus();
+            hideRenameModal();
+
+            const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
+            const currentTag = (currentSlot && currentSlot.contextTag) ? currentSlot.contextTag.toLowerCase() : "";
+            const currentRating = (currentSlot && currentSlot.preferenceStars !== undefined) ? currentSlot.preferenceStars : 3;
+
+            const chkCity = document.getElementById('chk-city');
+            const chkHome = document.getElementById('chk-home');
+            const chkCombat = document.getElementById('chk-combat');
+            const chkSwim = document.getElementById('chk-swim');
+
+            if (chkCity) chkCity.checked = currentTag.includes("city") || currentTag.includes("town");
+            if (chkHome) chkHome.checked = currentTag.includes("home") || currentTag.includes("house");
+            if (chkCombat) chkCombat.checked = currentTag.includes("combat") || currentTag.includes("fight");
+            if (chkSwim) chkSwim.checked = currentTag.includes("swim") || currentTag.includes("water");
+
+            setStarRating(currentRating);
+
+            const modal = document.getElementById('context-modal');
+            if (modal) modal.style.display = 'flex';
+            setTyping(true);
+        }
+
+        function hideContextModal() {
+            const modal = document.getElementById('context-modal');
+            if (modal) modal.style.display = 'none';
+            setTyping(false);
+        }
+
+        function setStarRating(num) {
+            tempStars = num;
+            const stars = document.querySelectorAll('.star');
+            stars.forEach((s, idx) => {
+                if (idx < num) {
+                    s.classList.add('active');
+                } else {
+                    s.classList.remove('active');
+                }
+            });
+        }
+
+        function saveSlotContextAndRating() {
+            if (selectedSlotIndex === null) return;
+
+            const chkCity = document.getElementById('chk-city');
+            const chkHome = document.getElementById('chk-home');
+            const chkCombat = document.getElementById('chk-combat');
+            const chkSwim = document.getElementById('chk-swim');
+
+            let tags = [];
+            if (chkCity && chkCity.checked) tags.push("City");
+            if (chkHome && chkHome.checked) tags.push("Home");
+            if (chkCombat && chkCombat.checked) tags.push("Combat");
+            if (chkSwim && chkSwim.checked) tags.push("Swim");
+
+            const contextString = tags.length > 0 ? tags.join(", ") : "";
+
+            if (typeof window.SetSlotContext === 'function' && currentWheelData) {
+                window.SetSlotContext(JSON.stringify({
+                    wheelIndex: currentWheelData.wheelIndex,
+                    slotIndex: selectedSlotIndex,
+                    contextTag: contextString,
+                    editMode: currentWheelData.editMode
+                }));
+            }
+
+            if (typeof window.SetSlotRating === 'function' && currentWheelData) {
+                window.SetSlotRating(JSON.stringify({
+                    wheelIndex: currentWheelData.wheelIndex,
+                    slotIndex: selectedSlotIndex,
+                    ratingStars: tempStars,
+                    editMode: currentWheelData.editMode
+                }));
+            }
+
+            showSaveToast("Context & Rating Saved!");
+            hideContextModal();
+        }
+
+        function ctxClearSlot(e) {
+            if (e) e.stopPropagation();
+            if (selectedSlotIndex !== null && typeof window.ClearSlot === 'function' && currentWheelData) {
+                window.ClearSlot(JSON.stringify({
+                    wheelIndex: currentWheelData.wheelIndex,
+                    slotIndex: selectedSlotIndex,
+                    editMode: currentWheelData.editMode
+                }));
+            }
+            selectedSlotIndex = null;
+            hideAllMenus();
+        }
+
+        function ctxDeleteSlot(e) {
+            if (e) e.stopPropagation();
+            if (selectedSlotIndex !== null && typeof window.DeleteSlot === 'function' && currentWheelData) {
+                window.DeleteSlot(JSON.stringify({
+                    wheelIndex: currentWheelData.wheelIndex,
+                    slotIndex: selectedSlotIndex,
+                    editMode: currentWheelData.editMode
+                }));
+            }
+            selectedSlotIndex = null;
+            hideAllMenus();
+        }
+
+        function ctxRenameWheel(e) {
+            if (e) e.stopPropagation();
+            renameTargetMode = 'wheel';
+            const currentName = currentWheelData.wheelName || `Wheel ${currentWheelData.wheelIndex + 1}`;
+            showRenameModal("Rename Wheel", currentName);
+            hideAllMenus();
+        }
+
+        function ctxDeleteWheel(e) {
+            if (e) e.stopPropagation();
+            if (typeof window.DeleteWheel === 'function' && currentWheelData) {
+                window.DeleteWheel(JSON.stringify({
+                    editMode: currentWheelData.editMode
+                }));
+            }
+            hideAllMenus();
+        }
+
+        function showRenameModal(titleText, initialValue) {
+            const modal = document.getElementById('rename-modal');
+            const title = document.getElementById('modal-title-text');
+            const input = document.getElementById('rename-input');
+            if (modal && title && input) {
+                title.innerText = titleText;
+                input.value = initialValue;
+                modal.style.display = 'flex';
+                setTimeout(() => {
+                    input.focus();
+                    input.select();
+                }, 50);
+            }
+        }
+
+        function hideRenameModal() {
+            const modal = document.getElementById('rename-modal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+            setTyping(false);
+        }
+
+        function confirmRename() {
+            const input = document.getElementById('rename-input');
+            if (!input) return;
+
+            const val = input.value.trim();
+            if (!val) {
+                hideRenameModal();
+                return;
+            }
+
+            if (renameTargetMode === 'slot' && selectedSlotIndex !== null) {
+                if (typeof window.RenameSlot === 'function' && currentWheelData) {
+                    window.RenameSlot(JSON.stringify({
+                        wheelIndex: currentWheelData.wheelIndex,
+                        slotIndex: selectedSlotIndex,
+                        newName: val,
+                        editMode: currentWheelData.editMode
+                    }));
+                }
+            } else if (renameTargetMode === 'wheel') {
+                if (typeof window.RenameWheel === 'function' && currentWheelData) {
+                    window.RenameWheel(JSON.stringify({
+                        wheelIndex: currentWheelData.wheelIndex,
+                        newName: val,
+                        editMode: currentWheelData.editMode
+                    }));
+                }
+            }
+            hideRenameModal();
+        }
+
+        function handleRenameKey(e) {
+            if (e.key === 'Enter') {
+                confirmRename();
+            } else if (e.key === 'Escape') {
+                hideRenameModal();
+            }
+        }
+
+        function openSettingsModal(e) {
+            if (e) e.stopPropagation();
+            hideAllMenus();
+            hideRenameModal();
+            hideContextModal();
+            const modal = document.getElementById('settings-modal');
+            const scaleInput = document.getElementById('scale-input');
+            const offsetInput = document.getElementById('offsetx-input');
+            const editBtn = document.getElementById('btn-edit-key');
+            const playBtn = document.getElementById('btn-play-key');
+            const editModText = document.getElementById('dd-edit-text');
+            const playModText = document.getElementById('dd-play-text');
+
+            const chkMaster = document.getElementById('chk-auto-master');
+            const chkCity = document.getElementById('chk-auto-city');
+            const chkHome = document.getElementById('chk-auto-home');
+            const chkCombat = document.getElementById('chk-auto-combat');
+            const chkSwim = document.getElementById('chk-auto-swim');
+
+            if (chkMaster) chkMaster.checked = currentWheelData.autoSystemEnabled !== false;
+            if (chkCity) chkCity.checked = currentWheelData.autoCityEnabled !== false;
+            if (chkHome) chkHome.checked = currentWheelData.autoHomeEnabled !== false;
+            if (chkCombat) chkCombat.checked = currentWheelData.autoCombatEnabled !== false;
+            if (chkSwim) chkSwim.checked = currentWheelData.autoSwimEnabled !== false;
+
+            tempScale = currentWheelData.wheelScale || 1.0;
+            tempOffsetX = currentWheelData.wheelOffsetX || 0.0;
+            tempEditKey = currentWheelData.editKey || 0x31;
+            tempEditMod = currentWheelData.editModifierKey || 0;
+            tempPlayKey = currentWheelData.playKey || 0x2F;
+            tempPlayMod = currentWheelData.playModifierKey || 0;
+
+            if (scaleInput) scaleInput.value = `${Math.round(tempScale * 100)}%`;
+            if (offsetInput) offsetInput.value = `${Math.round(tempOffsetX)}px`;
+            if (editBtn) editBtn.innerText = `[${getKeyName(tempEditKey)}]`;
+            if (playBtn) playBtn.innerText = `[${getKeyName(tempPlayKey)}]`;
+            if (editModText) editModText.innerText = modNameMap[tempEditMod] || 'None';
+            if (playModText) playModText.innerText = modNameMap[tempPlayMod] || 'None';
+
+            if (modal) modal.style.display = 'flex';
+            setTyping(true);
+        }
+
+        function hideSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.style.display = 'none';
+            listeningKeyType = null;
+            closeAllDropdowns();
+            setTyping(false);
+        }
+
+        function applyTransform() {
+            const container = document.getElementById('wheel-container');
+            if (container) {
+                container.style.transform = `translateX(${tempOffsetX}px) scale(${tempScale})`;
+            }
+        }
+
+        function stepScale(delta) {
+            tempScale = Math.max(0.1, tempScale + delta);
+            const scaleInput = document.getElementById('scale-input');
+            if (scaleInput) scaleInput.value = `${Math.round(tempScale * 100)}%`;
+            applyTransform();
+        }
+
+        function stepOffsetX(delta) {
+            tempOffsetX += delta;
+            const offsetInput = document.getElementById('offsetx-input');
+            if (offsetInput) offsetInput.value = `${Math.round(tempOffsetX)}px`;
+            applyTransform();
+        }
+
+        function onScaleInputChange(val) {
+            let clean = String(val).replace('%', '').trim();
+            let num = parseFloat(clean);
+            if (!isNaN(num)) {
+                if (num > 10) num /= 100.0;
+                tempScale = Math.max(0.1, num);
+            }
+            const scaleInput = document.getElementById('scale-input');
+            if (scaleInput) scaleInput.value = `${Math.round(tempScale * 100)}%`;
+            applyTransform();
+        }
+
+        function onScaleInputBlur() {
+            setTyping(false);
+            const scaleInput = document.getElementById('scale-input');
+            if (scaleInput) {
+                onScaleInputChange(scaleInput.value);
+            }
+        }
+
+        function onOffsetXInputChange(val) {
+            let clean = String(val).replace('px', '').trim();
+            let num = parseFloat(clean);
+            if (!isNaN(num)) {
+                tempOffsetX = num;
+            }
+            const offsetInput = document.getElementById('offsetx-input');
+            if (offsetInput) offsetInput.value = `${Math.round(tempOffsetX)}px`;
+            applyTransform();
+        }
+
+        function onOffsetXInputBlur() {
+            setTyping(false);
+            const offsetInput = document.getElementById('offsetx-input');
+            if (offsetInput) {
+                onOffsetXInputChange(offsetInput.value);
+            }
+        }
+
+        function handleScaleScroll(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const delta = e.deltaY < 0 ? 0.05 : -0.05;
+                stepScale(delta);
+            }
+        }
+
+        function handleOffsetScroll(e) {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const delta = e.deltaY < 0 ? 10 : -10;
+                stepOffsetX(delta);
+            }
+        }
+
+        function startKeyListen(type) {
+            listeningKeyType = type;
+            const btn = document.getElementById(type === 'edit' ? 'btn-edit-key' : 'btn-play-key');
+            if (btn) {
+                btn.innerText = "Press key...";
+                btn.classList.add('listening');
+                btn.blur();
+            }
+        }
+
+        function saveSettings() {
+            currentWheelData.wheelScale = tempScale;
+            currentWheelData.wheelOffsetX = tempOffsetX;
+            currentWheelData.editKey = tempEditKey;
+            currentWheelData.editModifierKey = tempEditMod;
+            currentWheelData.playKey = tempPlayKey;
+            currentWheelData.playModifierKey = tempPlayMod;
+
+            const chkMaster = document.getElementById('chk-auto-master');
+            const chkCity = document.getElementById('chk-auto-city');
+            const chkHome = document.getElementById('chk-auto-home');
+            const chkCombat = document.getElementById('chk-auto-combat');
+            const chkSwim = document.getElementById('chk-auto-swim');
+
+            const masterVal = chkMaster ? chkMaster.checked : true;
+            const cityVal = chkCity ? chkCity.checked : true;
+            const homeVal = chkHome ? chkHome.checked : true;
+            const combatVal = chkCombat ? chkCombat.checked : true;
+            const swimVal = chkSwim ? chkSwim.checked : true;
+
+            currentWheelData.autoSystemEnabled = masterVal;
+            currentWheelData.autoCityEnabled = cityVal;
+            currentWheelData.autoHomeEnabled = homeVal;
+            currentWheelData.autoCombatEnabled = combatVal;
+            currentWheelData.autoSwimEnabled = swimVal;
+
+            if (typeof window.SaveSettings === 'function') {
+                window.SaveSettings(JSON.stringify({
+                    wheelScale: tempScale,
+                    wheelOffsetX: tempOffsetX,
+                    editKey: tempEditKey,
+                    editModifierKey: tempEditMod,
+                    playKey: tempPlayKey,
+                    playModifierKey: tempPlayMod,
+                    autoSystemEnabled: masterVal,
+                    autoCityEnabled: cityVal,
+                    autoHomeEnabled: homeVal,
+                    autoCombatEnabled: combatVal,
+                    autoSwimEnabled: swimVal
+                }));
+            }
+            hideSettingsModal();
+        }
+
+        function saveOutfit(slotIndex) {
+            showSaveToast("Outfit Saved!");
+            if (typeof window.SaveOutfitToSlot === 'function' && currentWheelData) {
+                window.SaveOutfitToSlot(JSON.stringify({
+                    wheelIndex: currentWheelData.wheelIndex,
+                    slotIndex: slotIndex
+                }));
+            }
+        }
+
+        function equipOutfit(slotIndex) {
+            lastEquippedSlotIndex = slotIndex;
+            updateWheelUI();
+            if (typeof window.EquipSlot === 'function' && currentWheelData) {
+                window.EquipSlot(JSON.stringify({
+                    wheelIndex: currentWheelData.wheelIndex,
+                    slotIndex: slotIndex
+                }));
+            }
+        }
+
+        function changeWheel(delta) {
+            if (typeof window.ChangeWheel === 'function' && currentWheelData) {
+                window.ChangeWheel(JSON.stringify({
+                    delta: delta,
+                    editMode: currentWheelData.editMode
+                }));
+            }
+        }
+
+        function addWheel() {
+            if (typeof window.AddWheel === 'function' && currentWheelData) {
+                window.AddWheel(JSON.stringify({ editMode: currentWheelData.editMode }));
+            }
+        }
+
+        function addSlot() {
+            if (typeof window.AddSlot === 'function' && currentWheelData) {
+                window.AddSlot(JSON.stringify({ editMode: currentWheelData.editMode }));
+            }
+        }
+
+        function closeWheel() {
+            hideAllMenus();
+            hideRenameModal();
+            hideContextModal();
+            hideSettingsModal();
+            if (typeof window.OnCloseWheel === 'function') {
+                window.OnCloseWheel("");
+            }
+        }
+
+        function handleEscClose(e) {
+            if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
+                if (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+
+                if (document.getElementById('rename-modal').style.display === 'flex') {
+                    hideRenameModal();
+                    return true;
+                }
+                if (document.getElementById('context-modal').style.display === 'flex') {
+                    hideContextModal();
+                    return true;
+                }
+                if (document.getElementById('settings-modal').style.display === 'flex') {
+                    hideSettingsModal();
+                    return true;
+                }
+                const slotCtx = document.getElementById('slot-context-menu');
+                const wheelCtx = document.getElementById('wheel-context-menu');
+                if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) {
+                    hideAllMenus();
+                    return true;
+                }
+                closeWheel();
+                return true;
+            }
+            return false;
+        }
+
+        window.addEventListener('keydown', handleEscClose, true);
+        window.addEventListener('keyup', handleEscClose, true);
+
+        document.addEventListener('wheel', (e) => {
+            if (e.target.closest('#settings-modal') || e.target.closest('.modal-card')) {
+                return;
+            }
+            if (currentWheelData) {
+                const delta = e.deltaY < 0 ? -1 : 1;
+                changeWheel(delta);
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (listeningKeyType) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const code = getScanCode(e);
+                if (code) {
+                    if (listeningKeyType === 'edit') tempEditKey = code;
+                    else if (listeningKeyType === 'play') tempPlayKey = code;
+
+                    const btn = document.getElementById(listeningKeyType === 'edit' ? 'btn-edit-key' : 'btn-play-key');
+                    if (btn) {
+                        btn.innerText = `[${getKeyName(code)}]`;
+                        btn.classList.remove('listening');
+                    }
+                }
+                listeningKeyType = null;
+                return;
+            }
+
+            if (isTyping) return;
+
+            const pressedScanCode = getScanCode(e);
+            const editKey = currentWheelData.editKey || 0x31;
+            const editMod = currentWheelData.editModifierKey || 0;
+            const playKey = currentWheelData.playKey || 0x2F;
+            const playMod = currentWheelData.playModifierKey || 0;
+
+            const shiftHold = e.shiftKey;
+            const ctrlHold = e.ctrlKey;
+            const altHold = e.altKey;
+
+            const editModMatch = (editMod === 0) || (editMod === 42 && shiftHold) || (editMod === 29 && ctrlHold) || (editMod === 56 && altHold);
+            const playModMatch = (playMod === 0) || (playMod === 42 && shiftHold) || (playMod === 29 && ctrlHold) || (playMod === 56 && altHold);
+
+            let matchEdit = (pressedScanCode === editKey && editModMatch);
+            let matchPlay = (pressedScanCode === playKey && playModMatch);
+
+            if (matchEdit || matchPlay) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeWheel();
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateWheelUI();
+        });
+    </script>
+    </body>
+    </html>
