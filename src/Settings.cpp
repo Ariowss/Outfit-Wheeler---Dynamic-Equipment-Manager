@@ -7,6 +7,13 @@ uint32_t g_editKey = 0x31;
 uint32_t g_editModifierKey = 0x00;
 uint32_t g_playKey = 0x2F;
 uint32_t g_playModifierKey = 0x00;
+
+uint32_t g_gamepadPlayKey = 0x0008;      // D-Pad Right
+uint32_t g_gamepadPlayModifier = 0x0100; // LB (Left Shoulder)
+uint32_t g_gamepadEditKey = 0x0004;      // D-Pad Left
+uint32_t g_gamepadEditModifier = 0x0100; // LB (Left Shoulder)
+float g_thumbstickDeadzone = 0.25f;
+
 float g_wheelScale = 1.0f;
 float g_wheelOffsetX = 0.0f;
 
@@ -31,6 +38,11 @@ void LoadINI() {
         g_playKey = GetPrivateProfileIntA("Hotkeys", "kPlayModeKey", 0x2F, targetPath.c_str());
         g_playModifierKey = GetPrivateProfileIntA("Hotkeys", "kPlayModeModifier", 0x00, targetPath.c_str());
 
+        g_gamepadPlayKey = GetPrivateProfileIntA("Gamepad", "kGamepadPlayKey", 0x0008, targetPath.c_str());
+        g_gamepadPlayModifier = GetPrivateProfileIntA("Gamepad", "kGamepadPlayModifier", 0x0100, targetPath.c_str());
+        g_gamepadEditKey = GetPrivateProfileIntA("Gamepad", "kGamepadEditKey", 0x0004, targetPath.c_str());
+        g_gamepadEditModifier = GetPrivateProfileIntA("Gamepad", "kGamepadEditModifier", 0x0100, targetPath.c_str());
+
         g_autoSystemEnabled = GetPrivateProfileIntA("AutoSystem", "bMasterAutoSystem", 1, targetPath.c_str()) != 0;
         g_autoCityEnabled = GetPrivateProfileIntA("AutoSystem", "bAutoCity", 1, targetPath.c_str()) != 0;
         g_autoHomeEnabled = GetPrivateProfileIntA("AutoSystem", "bAutoHome", 1, targetPath.c_str()) != 0;
@@ -39,18 +51,10 @@ void LoadINI() {
 
         char buffer[32];
         if (GetPrivateProfileStringA("General", "fWheelScale", "1.0", buffer, sizeof(buffer), targetPath.c_str())) {
-            try {
-                g_wheelScale = std::stof(buffer);
-            } catch (...) {
-                g_wheelScale = 1.0f;
-            }
+            try { g_wheelScale = std::stof(buffer); } catch (...) { g_wheelScale = 1.0f; }
         }
         if (GetPrivateProfileStringA("General", "fWheelOffsetX", "0.0", buffer, sizeof(buffer), targetPath.c_str())) {
-            try {
-                g_wheelOffsetX = std::stof(buffer);
-            } catch (...) {
-                g_wheelOffsetX = 0.0f;
-            }
+            try { g_wheelOffsetX = std::stof(buffer); } catch (...) { g_wheelOffsetX = 0.0f; }
         }
     } else {
         SaveINI();
@@ -63,6 +67,12 @@ void SaveINI() {
     WritePrivateProfileStringA("Hotkeys", "kEditModeModifier", std::to_string(g_editModifierKey).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("Hotkeys", "kPlayModeKey", std::to_string(g_playKey).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("Hotkeys", "kPlayModeModifier", std::to_string(g_playModifierKey).c_str(), g_mcmIniPath.c_str());
+
+    WritePrivateProfileStringA("Gamepad", "kGamepadPlayKey", std::to_string(g_gamepadPlayKey).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("Gamepad", "kGamepadPlayModifier", std::to_string(g_gamepadPlayModifier).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("Gamepad", "kGamepadEditKey", std::to_string(g_gamepadEditKey).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("Gamepad", "kGamepadEditModifier", std::to_string(g_gamepadEditModifier).c_str(), g_mcmIniPath.c_str());
+
     WritePrivateProfileStringA("General", "fWheelScale", std::to_string(g_wheelScale).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("General", "fWheelOffsetX", std::to_string(g_wheelOffsetX).c_str(), g_mcmIniPath.c_str());
 
