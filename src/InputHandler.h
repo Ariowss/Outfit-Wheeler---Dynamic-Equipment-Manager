@@ -9,6 +9,7 @@ extern std::atomic<bool> g_isTyping;
 extern bool g_inputRegistered;
 
 void ShowWheel(bool isEditMode);
+void HideWheel();
 
 class WheelInputHandler : public RE::BSTEventSink<RE::InputEvent*> {
 public:

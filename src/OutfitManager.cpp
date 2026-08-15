@@ -12,6 +12,8 @@
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
 #include "Settings.h"
+#include <windows.h>
+#include <xinput.h>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -25,6 +27,8 @@ OutfitManager g_manager;
 std::mutex g_dataMutex;
 
 static const std::string g_savePath = "Data/SKSE/Plugins/PrismaOutfitWheel.json";
+static const std::string g_fallbackSavePath1 = "Data/SKSE/Plugins/OutfitWheeler.json";
+static const std::string g_fallbackSavePath2 = "Data/SKSE/Plugins/Wheeler.json";
 
 static std::string ToLowerString(std::string str) {
     std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
@@ -56,6 +60,10 @@ static ContextFlags ParseContextTagToFlags(const std::string& tag) {
 OutfitManager::OutfitManager() {
     Wheel defaultWheel;
     defaultWheel.name = "Wheel 1";
+    for (size_t i = 0; i < 4; ++i) {
+        Slot s;
+        defaultWheel.slots.push_back(s);
+    }
     wheels.push_back(defaultWheel);
 }
 
@@ -95,7 +103,7 @@ void SyncWheelOutfitsToAdaptiveWardrobe() {
 
 static json SerializeFormID(RE::FormID formID) {
     auto* form = RE::TESForm::LookupByID(formID);
-    if (form) {
+    if (form && IsPureApparel(form)) {
         auto* file = form->GetFile(0);
         if (file) {
             std::string modName = file->fileName;
@@ -120,7 +128,10 @@ static json SerializeFormID(RE::FormID formID) {
 
 static RE::FormID DeserializeFormID(const json& jItem) {
     if (jItem.is_number_integer() || jItem.is_number_unsigned()) {
-        return jItem.get<RE::FormID>();
+        RE::FormID raw = jItem.get<RE::FormID>();
+        auto* f = RE::TESForm::LookupByID(raw);
+        if (f && IsPureApparel(f)) return raw;
+        return 0;
     }
     if (jItem.is_object()) {
         std::string plugin = jItem.value("plugin", "");
@@ -146,14 +157,16 @@ static RE::FormID DeserializeFormID(const json& jItem) {
             auto* dataHandler = RE::TESDataHandler::GetSingleton();
             if (dataHandler) {
                 auto* boundObj = dataHandler->LookupForm<RE::TESBoundObject>(localID, plugin);
-                if (boundObj) {
+                if (boundObj && IsPureApparel(boundObj)) {
                     return boundObj->GetFormID();
                 }
             }
         }
 
         if (jItem.contains("rawID")) {
-            return jItem.value("rawID", static_cast<RE::FormID>(0));
+            RE::FormID rID = jItem.value("rawID", static_cast<RE::FormID>(0));
+            auto* f = RE::TESForm::LookupByID(rID);
+            if (f && IsPureApparel(f)) return rID;
         }
     }
     return 0;
@@ -163,6 +176,7 @@ void SaveDataInternal() {
     try {
         json root;
         root["activeWheel"] = g_manager.activeWheelIndex;
+        root["wardrobeContainerFormID"] = 0;
         json wheelsJson = json::array();
         for (const auto& wheel : g_manager.wheels) {
             json wJson;
@@ -181,7 +195,10 @@ void SaveDataInternal() {
 
                     json itemsArray = json::array();
                     for (auto fID : slot.outfit->itemIDs) {
-                        itemsArray.push_back(SerializeFormID(fID));
+                        auto* f = RE::TESForm::LookupByID(fID);
+                        if (f && IsPureApparel(f)) {
+                            itemsArray.push_back(SerializeFormID(fID));
+                        }
                     }
                     sJson["items"] = itemsArray;
                 } else {
@@ -222,13 +239,21 @@ void SaveDataInternal() {
 
 void LoadData() {
     std::lock_guard<std::mutex> lock(g_dataMutex);
-    if (!std::filesystem::exists(g_savePath)) {
-        SKSE::log::info("No save file found at {}", g_savePath);
-        return;
+    std::string targetPath = g_savePath;
+    if (!std::filesystem::exists(targetPath)) {
+        if (std::filesystem::exists(g_fallbackSavePath1)) {
+            targetPath = g_fallbackSavePath1;
+        } else if (std::filesystem::exists(g_fallbackSavePath2)) {
+            targetPath = g_fallbackSavePath2;
+        } else {
+            SKSE::log::info("No save file found at {} or fallback paths", g_savePath);
+            return;
+        }
     }
-    std::ifstream file(g_savePath);
+
+    std::ifstream file(targetPath);
     if (!file.is_open()) {
-        SKSE::log::error("Failed to open save file for reading at {}", g_savePath);
+        SKSE::log::error("Failed to open save file for reading at {}", targetPath);
         return;
     }
 
@@ -237,6 +262,8 @@ void LoadData() {
         if (root.contains("activeWheel") && root["activeWheel"].is_number()) {
             g_manager.activeWheelIndex = root["activeWheel"].get<size_t>();
         }
+        g_manager.wardrobeContainerFormID = 0;
+
         if (root.contains("wheels") && root["wheels"].is_array()) {
             g_manager.wheels.clear();
             for (const auto& wJson : root["wheels"]) {
@@ -261,12 +288,21 @@ void LoadData() {
                                 for (const auto& jItem : sJson["items"]) {
                                     RE::FormID resolvedID = DeserializeFormID(jItem);
                                     if (resolvedID != 0) {
-                                        o.itemIDs.push_back(resolvedID);
+                                        auto* form = RE::TESForm::LookupByID(resolvedID);
+                                        if (form && IsPureApparel(form)) {
+                                            o.itemIDs.push_back(resolvedID);
+                                        }
                                     }
                                 }
                             }
                             s.outfit = o;
                         }
+                        w.slots.push_back(s);
+                    }
+                }
+                if (w.slots.empty()) {
+                    for (size_t i = 0; i < 4; ++i) {
+                        Slot s;
                         w.slots.push_back(s);
                     }
                 }
@@ -276,12 +312,16 @@ void LoadData() {
         if (g_manager.wheels.empty()) {
             Wheel defaultWheel;
             defaultWheel.name = "Wheel 1";
+            for (size_t i = 0; i < 4; ++i) {
+                Slot s;
+                defaultWheel.slots.push_back(s);
+            }
             g_manager.wheels.push_back(defaultWheel);
         }
         if (g_manager.activeWheelIndex >= g_manager.wheels.size()) {
             g_manager.activeWheelIndex = 0;
         }
-        SKSE::log::info("Successfully loaded data from disk");
+        SKSE::log::info("Successfully loaded data from disk: {}", targetPath);
 
         SyncWheelOutfitsToAdaptiveWardrobe();
     } catch (const std::exception& e) {
@@ -293,6 +333,10 @@ std::string GetWheelJsonInternal(bool isEditMode) {
     if (g_manager.wheels.empty()) {
         Wheel defaultWheel;
         defaultWheel.name = "Wheel 1";
+        for (size_t i = 0; i < 4; ++i) {
+            Slot s;
+            defaultWheel.slots.push_back(s);
+        }
         g_manager.wheels.push_back(defaultWheel);
         g_manager.activeWheelIndex = 0;
     }
@@ -303,7 +347,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
     std::set<RE::FormID> currentlyWornSet;
     auto equippedEntries = GetEquippedInventoryEntries();
     for (const auto& entry : equippedEntries) {
-        if (entry.object) {
+        if (entry.object && IsPureApparel(entry.object)) {
             currentlyWornSet.insert(entry.object->GetFormID());
         }
     }
@@ -334,6 +378,14 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         idx++;
     }
 
+    bool isGpConnected = false;
+    try {
+        XINPUT_STATE xState{};
+        isGpConnected = (XInputGetState(0, &xState) == ERROR_SUCCESS);
+    } catch (...) {
+        isGpConnected = false;
+    }
+
     json data;
     data["editMode"] = isEditMode;
     data["wheelIndex"] = g_manager.activeWheelIndex;
@@ -346,6 +398,12 @@ std::string GetWheelJsonInternal(bool isEditMode) {
     data["playKey"] = g_playKey;
     data["playModifierKey"] = g_playModifierKey;
 
+    data["gamepadPlayKey"] = g_gamepadPlayKey;
+    data["gamepadPlayModifier"] = g_gamepadPlayModifier;
+    data["thumbstickDeadzone"] = g_thumbstickDeadzone;
+    data["gamepadConnected"] = isGpConnected;
+
+    data["autoStashEnabled"] = g_autoStashEnabled;
     data["autoSystemEnabled"] = g_autoSystemEnabled;
     data["autoCityEnabled"] = g_autoCityEnabled;
     data["autoHomeEnabled"] = g_autoHomeEnabled;
@@ -367,6 +425,22 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         bool isWorn = (slotIdx == bestMatchingSlotIndex && bestMatchRatio >= 0.5f);
         sJson["isWorn"] = isWorn;
         sJson["isEquipped"] = isWorn;
+
+        bool inWardrobe = false;
+        if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
+            size_t ghostCount = 0;
+            for (RE::FormID fID : slot.outfit->itemIDs) {
+                auto* form = RE::TESForm::LookupByID(fID);
+                auto* bound = form ? form->As<RE::TESBoundObject>() : nullptr;
+                if (bound && IsPureApparel(bound) && ((bound->formFlags & 0x00000004) != 0)) {
+                    ghostCount++;
+                }
+            }
+            if (ghostCount > 0) {
+                inWardrobe = true;
+            }
+        }
+        sJson["isInWardrobe"] = inWardrobe;
 
         slotsJson.push_back(sJson);
         slotIdx++;

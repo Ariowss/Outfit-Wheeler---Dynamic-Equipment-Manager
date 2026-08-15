@@ -1,6 +1,7 @@
 #include "Settings.h"
 #include <windows.h>
 #include <filesystem>
+#include <string>
 #include <SKSE/SKSE.h>
 
 uint32_t g_editKey = 0x31;
@@ -8,15 +9,14 @@ uint32_t g_editModifierKey = 0x00;
 uint32_t g_playKey = 0x2F;
 uint32_t g_playModifierKey = 0x00;
 
-uint32_t g_gamepadPlayKey = 0x0008;      // D-Pad Right
-uint32_t g_gamepadPlayModifier = 0x0100; // LB (Left Shoulder)
-uint32_t g_gamepadEditKey = 0x0004;      // D-Pad Left
-uint32_t g_gamepadEditModifier = 0x0100; // LB (Left Shoulder)
+uint32_t g_gamepadPlayKey = 0x0008;
+uint32_t g_gamepadPlayModifier = 0x0100;
 float g_thumbstickDeadzone = 0.25f;
 
 float g_wheelScale = 1.0f;
 float g_wheelOffsetX = 0.0f;
 
+bool g_autoStashEnabled = false;
 bool g_autoSystemEnabled = true;
 bool g_autoCityEnabled = true;
 bool g_autoHomeEnabled = true;
@@ -40,9 +40,8 @@ void LoadINI() {
 
         g_gamepadPlayKey = GetPrivateProfileIntA("Gamepad", "kGamepadPlayKey", 0x0008, targetPath.c_str());
         g_gamepadPlayModifier = GetPrivateProfileIntA("Gamepad", "kGamepadPlayModifier", 0x0100, targetPath.c_str());
-        g_gamepadEditKey = GetPrivateProfileIntA("Gamepad", "kGamepadEditKey", 0x0004, targetPath.c_str());
-        g_gamepadEditModifier = GetPrivateProfileIntA("Gamepad", "kGamepadEditModifier", 0x0100, targetPath.c_str());
 
+        g_autoStashEnabled = GetPrivateProfileIntA("General", "bAutoStashInactive", 0, targetPath.c_str()) != 0;
         g_autoSystemEnabled = GetPrivateProfileIntA("AutoSystem", "bMasterAutoSystem", 1, targetPath.c_str()) != 0;
         g_autoCityEnabled = GetPrivateProfileIntA("AutoSystem", "bAutoCity", 1, targetPath.c_str()) != 0;
         g_autoHomeEnabled = GetPrivateProfileIntA("AutoSystem", "bAutoHome", 1, targetPath.c_str()) != 0;
@@ -70,11 +69,10 @@ void SaveINI() {
 
     WritePrivateProfileStringA("Gamepad", "kGamepadPlayKey", std::to_string(g_gamepadPlayKey).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("Gamepad", "kGamepadPlayModifier", std::to_string(g_gamepadPlayModifier).c_str(), g_mcmIniPath.c_str());
-    WritePrivateProfileStringA("Gamepad", "kGamepadEditKey", std::to_string(g_gamepadEditKey).c_str(), g_mcmIniPath.c_str());
-    WritePrivateProfileStringA("Gamepad", "kGamepadEditModifier", std::to_string(g_gamepadEditModifier).c_str(), g_mcmIniPath.c_str());
 
     WritePrivateProfileStringA("General", "fWheelScale", std::to_string(g_wheelScale).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("General", "fWheelOffsetX", std::to_string(g_wheelOffsetX).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("General", "bAutoStashInactive", g_autoStashEnabled ? "1" : "0", g_mcmIniPath.c_str());
 
     WritePrivateProfileStringA("AutoSystem", "bMasterAutoSystem", g_autoSystemEnabled ? "1" : "0", g_mcmIniPath.c_str());
     WritePrivateProfileStringA("AutoSystem", "bAutoCity", g_autoCityEnabled ? "1" : "0", g_mcmIniPath.c_str());

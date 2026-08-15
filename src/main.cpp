@@ -70,6 +70,12 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             PrismaUI->RegisterJSListener(view, "DeleteWheel", DeleteWheelListener);
             PrismaUI->RegisterJSListener(view, "SetSlotContext", SetSlotContextListener);
             PrismaUI->RegisterJSListener(view, "SetSlotRating", SetSlotRatingListener);
+            PrismaUI->RegisterJSListener(view, "RetrieveAllOutfits", RetrieveAllOutfitsListener);
+            PrismaUI->RegisterJSListener(view, "StashAllOutfits", StashAllOutfitsListener);
+            PrismaUI->RegisterJSListener(view, "StashSlotOutfit", StashSlotOutfitListener);
+            PrismaUI->RegisterJSListener(view, "RetrieveSlotOutfit", RetrieveSlotOutfitListener);
+            PrismaUI->RegisterJSListener(view, "StashWheelOutfits", StashWheelOutfitsListener);
+            PrismaUI->RegisterJSListener(view, "RetrieveWheelOutfits", RetrieveWheelOutfitsListener);
             SKSE::log::info("Registered all JS listeners");
         }
 

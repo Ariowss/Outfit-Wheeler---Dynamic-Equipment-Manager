@@ -20,5 +20,11 @@ void AddSlotListener(const char* data);
 void DeleteWheelListener(const char* data);
 void SetSlotContextListener(const char* data);
 void SetSlotRatingListener(const char* data);
+void RetrieveAllOutfitsListener(const char* data);
+void StashAllOutfitsListener(const char* data);
+void StashSlotOutfitListener(const char* data);
+void RetrieveSlotOutfitListener(const char* data);
+void StashWheelOutfitsListener(const char* data);
+void RetrieveWheelOutfitsListener(const char* data);
 
 #endif

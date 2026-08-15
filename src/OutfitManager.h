@@ -33,6 +33,7 @@ struct Wheel {
 struct OutfitManager {
     std::vector<Wheel> wheels;
     size_t activeWheelIndex = 0;
+    uint32_t wardrobeContainerFormID = 0;
 
     OutfitManager();
 };
