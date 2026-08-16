@@ -112,6 +112,7 @@ function updateWheelUI() {
             const hasOutfit = slot.hasOutfit;
             const realSlotIndex = slot.realIndex;
             const isEquipped = hasOutfit && (slot.isWorn === true || slot.isEquipped === true);
+            const inCloud = (slot.isInWardrobe === true || slot.isInWardrobe === "true" || slot.isInWardrobe === 1);
 
             const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
             pathEl.setAttribute("d", describeArc(cx, cy, rIn, rOut, startAngle, endAngle));
@@ -205,7 +206,7 @@ function updateWheelUI() {
             if (hasOutfit) {
                 labelEl.innerHTML = '<div class="slot-icon">' + svgOutfitIcon + '</div>' +
                     '<div class="slot-title">' + slot.name + '</div>' +
-                    '<div class="slot-subtitle">' + slot.count + ' items</div>' +
+                    '<div class="slot-subtitle">' + (inCloud ? 'Cloud Stored' : (slot.count + ' items')) + '</div>' +
                     (isEquipped ? '<div class="slot-equipped-badge">EQUIPPED</div>' : '');
             } else {
                 labelEl.innerHTML = '<div class="slot-icon">' + svgPlusIcon + '</div>' +

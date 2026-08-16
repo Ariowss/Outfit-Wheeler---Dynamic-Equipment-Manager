@@ -46,11 +46,11 @@ function showSlotContextMenu(x, y, slotIndex) {
             wardrobeBtn.style.display = 'none';
         } else if (currentSlot.isInWardrobe) {
             wardrobeBtn.style.display = 'block';
-            wardrobeBtn.innerText = 'Retrieve to Inventory';
+            wardrobeBtn.innerText = 'Transfer to Inventory';
             wardrobeBtn.setAttribute('data-action', 'retrieve');
         } else {
             wardrobeBtn.style.display = 'block';
-            wardrobeBtn.innerText = 'Store in Cloud';
+            wardrobeBtn.innerText = 'Transfer to Cloud';
             wardrobeBtn.setAttribute('data-action', 'store');
         }
     }
@@ -108,25 +108,21 @@ function showWheelContextMenu(x, y) {
     lastMenuOpenTime = Date.now();
 }
 
-function ctxStashWheelOutfits(e) {
+function ctxStashAllOutfits(e) {
     if (e) e.stopPropagation();
-    if (typeof window.StashWheelOutfits === 'function' && currentWheelData) {
-        window.StashWheelOutfits(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex
-        }));
+    if (typeof window.StashAllOutfits === 'function') {
+        window.StashAllOutfits("");
     }
-    showSaveToast("Wheel Outfits Stored in Cloud!");
+    showSaveToast("Inactive Outfits Stored in Cloud!");
     hideAllMenus();
 }
 
-function ctxRetrieveWheelOutfits(e) {
+function ctxRetrieveAllOutfits(e) {
     if (e) e.stopPropagation();
-    if (typeof window.RetrieveWheelOutfits === 'function' && currentWheelData) {
-        window.RetrieveWheelOutfits(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex
-        }));
+    if (typeof window.RetrieveAllOutfits === 'function') {
+        window.RetrieveAllOutfits("");
     }
-    showSaveToast("Wheel Outfits Retrieved to Inventory!");
+    showSaveToast("All Outfits Retrieved!");
     hideAllMenus();
 }
 
@@ -295,22 +291,6 @@ function saveSettings() {
         }));
     }
     hideSettingsModal();
-}
-
-function retrieveAllOutfits(e) {
-    if (e) e.stopPropagation();
-    if (typeof window.RetrieveAllOutfits === 'function') {
-        window.RetrieveAllOutfits("");
-    }
-    showSaveToast("All Outfits Retrieved!");
-}
-
-function stashAllOutfits(e) {
-    if (e) e.stopPropagation();
-    if (typeof window.StashAllOutfits === 'function') {
-        window.StashAllOutfits("");
-    }
-    showSaveToast("Inactive Outfits Stored in Cloud!");
 }
 
 function openContextModal(e) {

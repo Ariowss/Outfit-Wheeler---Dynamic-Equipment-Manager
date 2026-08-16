@@ -2,7 +2,6 @@
 #define ADAPTIVE_WARDROBE_MANAGER_H
 
 #include "AdaptiveWardrobeTypes.h"
-#include <chrono>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -21,7 +20,6 @@ private:
     std::vector<AdaptiveOutfit> wardrobe;
     std::string currentOutfitID;
     std::deque<std::string> recentHistory;
-    std::chrono::steady_clock::time_point manualPauseUntil{};
     mutable std::mutex wardrobeMutex;
     std::mt19937 randomEngine;
 
@@ -40,9 +38,6 @@ public:
     std::optional<SelectionResult> SelectOptimalOutfit(ContextFlags activeContext, bool isEmergency);
 
     void RecordOutfitEquipped(const std::string& outfitID, uint32_t currentTimestamp);
-    void PauseAutoSystem(uint32_t durationSeconds);
-    void ClearPause();
-    bool IsPaused() const;
 
     void SetCurrentOutfitID(const std::string& id);
     std::string GetCurrentOutfitID();

@@ -121,14 +121,6 @@
                 <div class="action-btn" style="width: 100%; text-align: center; padding: 7px 10px; font-weight: bold; font-size: 11px; margin-top: 4px;" onclick="openGamepadModal(event)">
                     Gamepad Controls
                 </div>
-
-                <div class="action-btn" style="width: 100%; text-align: center; padding: 7px 10px; font-weight: bold; font-size: 11px; margin-top: 8px; background: #233e54; border-color: #52a5f5; color: #ffffff;" onclick="stashAllOutfits(event)">
-                    Store Inactive Outfits in Cloud
-                </div>
-                <div class="action-btn" style="width: 100%; text-align: center; padding: 7px 10px; font-weight: bold; font-size: 11px; margin-top: 4px; background: #2a5242; border-color: #34d399; color: #ffffff;" onclick="retrieveAllOutfits(event)">
-                    Retrieve All Outfits to Inventory
-                </div>
-
                 <div class="modal-buttons" style="margin-top: 8px;">
                     <div class="action-btn" onclick="saveSettings()">Save Settings</div>
                     <div class="action-btn" onclick="hideSettingsModal()">Cancel</div>
@@ -210,7 +202,7 @@
 <div id="slot-context-menu" class="context-menu-popup" style="display: none;">
     <div class="ctx-header" id="slot-ctx-title">Slot Options</div>
     <div class="ctx-item" onclick="ctxSaveOutfit(event)">Save Outfit</div>
-    <div class="ctx-item" id="ctx-slot-wardrobe-toggle" onclick="ctxToggleSlotWardrobe(event)">Store in Cloud</div>
+    <div class="ctx-item" id="ctx-slot-wardrobe-toggle" onclick="ctxToggleSlotWardrobe(event)">Transfer to Cloud</div>
     <div class="ctx-item" onclick="ctxRenameSlot(event)">Rename Slot</div>
     <div class="ctx-item" onclick="openContextModal(event)">Set Context & Rating</div>
     <div class="ctx-item" onclick="ctxClearSlot(event)">Clear Outfit Data</div>
@@ -221,8 +213,8 @@
 <div id="wheel-context-menu" class="context-menu-popup" style="display: none;">
     <div class="ctx-header">Wheel Options</div>
     <div class="ctx-item" onclick="openSettingsModal(event)">Settings</div>
-    <div class="ctx-item" onclick="ctxStashWheelOutfits(event)">Store Inactive Wheel Outfits in Cloud</div>
-    <div class="ctx-item" onclick="ctxRetrieveWheelOutfits(event)">Retrieve Wheel Outfits to Inventory</div>
+    <div class="ctx-item" onclick="ctxStashAllOutfits(event)">Transfer All to Cloud</div>
+    <div class="ctx-item" onclick="ctxRetrieveAllOutfits(event)">Transfer All to Inventory</div>
     <div class="ctx-item" onclick="ctxRenameWheel(event)">Rename Wheel</div>
     <div class="ctx-item danger" onclick="ctxDeleteWheel(event)">Delete Wheel</div>
     <div class="ctx-item" onclick="hideAllMenus(event)">Cancel</div>

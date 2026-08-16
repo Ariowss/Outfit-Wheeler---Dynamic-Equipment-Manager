@@ -66,22 +66,6 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     ContextFlags targetContext = ResolveContextHierarchy(activeContext);
     if (targetContext == ContextFlags::None) return std::nullopt;
 
-    if (!currentOutfitID.empty()) {
-        for (const auto& outfit : wardrobe) {
-            if (outfit.id == currentOutfitID && outfit.controlState != ControlState::Excluded) {
-                for (const auto& rule : outfit.suitabilities) {
-                    if (HasContext(rule.contextMask, targetContext)) {
-                        SelectionResult res;
-                        res.selectedOutfit = outfit;
-                        res.reasonCode = "Context Stability Maintained";
-                        res.calculatedWeight = 100.0f;
-                        return res;
-                    }
-                }
-            }
-        }
-    }
-
     std::vector<const AdaptiveOutfit*> candidates;
     candidates.reserve(wardrobe.size());
 
@@ -159,21 +143,6 @@ void AdaptiveWardrobeManager::RecordOutfitEquipped(const std::string& outfitID, 
     if (recentHistory.size() > 5) {
         recentHistory.pop_back();
     }
-}
-
-void AdaptiveWardrobeManager::PauseAutoSystem(uint32_t durationSeconds) {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    manualPauseUntil = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
-}
-
-void AdaptiveWardrobeManager::ClearPause() {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    manualPauseUntil = std::chrono::steady_clock::time_point{};
-}
-
-bool AdaptiveWardrobeManager::IsPaused() const {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    return std::chrono::steady_clock::now() < manualPauseUntil;
 }
 
 void AdaptiveWardrobeManager::SetCurrentOutfitID(const std::string& id) {

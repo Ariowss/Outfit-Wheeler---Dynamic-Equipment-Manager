@@ -29,6 +29,7 @@ void SaveSettingsListener(const char* data) {
         if (req.contains("gamepadPlayKey")) g_gamepadPlayKey = req.value("gamepadPlayKey", 0x0008);
         if (req.contains("gamepadPlayModifier")) g_gamepadPlayModifier = req.value("gamepadPlayModifier", 0x0100);
 
+        if (req.contains("autoStashEnabled")) g_autoStashEnabled = req.value("autoStashEnabled", false);
         if (req.contains("autoSystemEnabled")) g_autoSystemEnabled = req.value("autoSystemEnabled", true);
         if (req.contains("autoCityEnabled")) g_autoCityEnabled = req.value("autoCityEnabled", true);
         if (req.contains("autoHomeEnabled")) g_autoHomeEnabled = req.value("autoHomeEnabled", true);

@@ -11,6 +11,7 @@
 #include "ExecutionQueue.h"
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "Settings.h"
 #include <SKSE/SKSE.h>
 
 std::atomic<bool> g_gameFullyLoaded{ false };
@@ -54,6 +55,10 @@ void ExecutionQueue::RegisterEvents() {
     });
 }
 
+void ExecutionQueue::ResetEnvironmentState() {
+    lastEnvironmentContext = ContextFlags::None;
+}
+
 ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, RE::TESObjectCELL* cell) {
     if (location) {
         if (location->HasKeywordString("LocTypePlayerHouse") || (location->parentLoc && location->parentLoc->HasKeywordString("LocTypePlayerHouse"))) {
@@ -84,6 +89,8 @@ ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, R
 }
 
 ContextFlags ExecutionQueue::GatherCurrentContext() {
+    if (!g_autoSystemEnabled) return ContextFlags::None;
+
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) return ContextFlags::None;
 
@@ -91,16 +98,22 @@ ContextFlags ExecutionQueue::GatherCurrentContext() {
     auto parentCell = player->GetParentCell();
     auto loc = player->GetCurrentLocation();
 
-    flags |= ResolveLocationContext(loc, parentCell);
+    ContextFlags locFlags = ResolveLocationContext(loc, parentCell);
+    if (HasContext(locFlags, ContextFlags::PlayerHome) && g_autoHomeEnabled) {
+        flags |= ContextFlags::PlayerHome;
+    }
+    if (HasContext(locFlags, ContextFlags::CityTown) && g_autoCityEnabled) {
+        flags |= ContextFlags::CityTown;
+    }
 
-    if (player->IsInCombat()) {
+    if (player->IsInCombat() && g_autoCombatEnabled) {
         flags |= ContextFlags::Combat;
     }
 
     auto actorState = player->AsActorState();
     float waterHeight = player->GetWaterHeight();
     float playerZ = player->GetPositionZ();
-    if ((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 20.0f)) {
+    if (((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 20.0f)) && g_autoSwimEnabled) {
         flags |= ContextFlags::Swim;
     }
 
@@ -112,15 +125,17 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* 
         return RE::BSEventNotifyControl::kContinue;
     }
     SKSE::log::info("ProcessEvent: TESCombatEvent fired");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
-    EvaluateAndQueueChange(a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat);
+    if (a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat) {
+        EvaluateAndQueueChange(true);
+    } else {
+        EvaluateAndQueueChange(false);
+    }
     return RE::BSEventNotifyControl::kContinue;
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
     SKSE::log::info("ProcessEvent: BGSActorCellEvent fired");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -130,15 +145,13 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESActorLocation
         return RE::BSEventNotifyControl::kContinue;
     }
     SKSE::log::info("ProcessEvent: TESActorLocationChangeEvent fired");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCellFullyLoadedEvent* a_event, RE::BSTEventSource<RE::TESCellFullyLoadedEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
-    SKSE::log::info("ProcessEvent: TESCellFullyLoadedEvent fired - cell fully ready");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
+    SKSE::log::info("ProcessEvent: TESCellFullyLoadedEvent fired");
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -148,21 +161,23 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::MenuOpenCloseEve
 
     if (!a_event->opening && (a_event->menuName == RE::LoadingMenu::MENU_NAME || a_event->menuName == RE::FaderMenu::MENU_NAME)) {
         SKSE::log::info("ProcessEvent: MenuOpenCloseEvent - '{}' CLOSED", a_event->menuName.c_str());
-        AdaptiveWardrobeManager::GetSingleton()->ClearPause();
         EvaluateAndQueueChange(false);
     }
     return RE::BSEventNotifyControl::kContinue;
 }
 
 void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
+    if (!g_autoSystemEnabled) return;
+
     if (g_skipInitialLoadEval.exchange(false, std::memory_order_acq_rel)) {
         SKSE::log::info("EvaluateAndQueueChange: Skipped - Initial game load");
+        lastEnvironmentContext = GatherCurrentContext();
         return;
     }
 
     uint32_t currentTick = GetTickCount();
     uint32_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
-    if (!isEmergency && (currentTick - lastTick < 1500)) {
+    if (!isEmergency && (currentTick - lastTick < 1000)) {
         SKSE::log::info("EvaluateAndQueueChange: Coalesced duplicate cell/location event");
         return;
     }
@@ -185,14 +200,18 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
         return;
     }
 
-    auto manager = AdaptiveWardrobeManager::GetSingleton();
-    if (manager->IsPaused()) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - System is paused");
+    ContextFlags currentContext = GatherCurrentContext();
+    if (currentContext == ContextFlags::None) {
         return;
     }
 
-    ContextFlags currentContext = GatherCurrentContext();
-    SKSE::log::info("EvaluateAndQueueChange: Context resolved to {:08X}", static_cast<uint32_t>(currentContext));
+    if (!isEmergency && currentContext == lastEnvironmentContext) {
+        return;
+    }
+    lastEnvironmentContext = currentContext;
+
+    auto manager = AdaptiveWardrobeManager::GetSingleton();
+    SKSE::log::info("EvaluateAndQueueChange: State changed to context {:08X}", static_cast<uint32_t>(currentContext));
 
     auto selectionOpt = manager->SelectOptimalOutfit(currentContext, isEmergency);
     if (!selectionOpt.has_value()) {

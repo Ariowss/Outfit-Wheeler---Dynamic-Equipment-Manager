@@ -19,7 +19,7 @@ class ExecutionQueue : public RE::BSTEventSink<RE::TESCombatEvent>,
                        public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>,
                        public RE::BSTEventSink<RE::MenuOpenCloseEvent> {
 private:
-    uint32_t lastEquipTimestamp = 0;
+    ContextFlags lastEnvironmentContext = ContextFlags::None;
     ExecutionQueue() = default;
 
     void RegisterEventsInternal();
@@ -30,6 +30,7 @@ public:
     ContextFlags GatherCurrentContext();
 
     void RegisterEvents();
+    void ResetEnvironmentState();
     void EvaluateAndQueueChange(bool isEmergency);
 
     RE::BSEventNotifyControl ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) override;

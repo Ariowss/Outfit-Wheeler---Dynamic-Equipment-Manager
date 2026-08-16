@@ -11,6 +11,7 @@
 #include "EquipmentManager.h"
 #include "OutfitManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "ExecutionQueue.h"
 #include "Settings.h"
 #include <windows.h>
 #include <SKSE/SKSE.h>
@@ -272,7 +273,6 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
             }
         }
         AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID("");
-        AdaptiveWardrobeManager::GetSingleton()->PauseAutoSystem(60);
         RE::DebugNotification(("Unequipped " + targetOutfit.name).c_str());
         return;
     }
@@ -281,7 +281,6 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
 
     std::string adaptiveOutfitID = std::to_string(wheelIdx) + "_" + std::to_string(slotIdx);
     AdaptiveWardrobeManager::GetSingleton()->RecordOutfitEquipped(adaptiveOutfitID, 0);
-    AdaptiveWardrobeManager::GetSingleton()->PauseAutoSystem(10);
 
     RE::DebugNotification(("Equipped " + targetOutfit.name).c_str());
 }
