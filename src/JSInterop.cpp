@@ -19,6 +19,7 @@ void OnConsoleMessageCallbackFunc(PrismaView v, PRISMA_UI_API::ConsoleMessageLev
 void SaveSettingsListener(const char* data) {
     try {
         json req = json::parse(data);
+        bool editMode = req.value("editMode", false);
         if (req.contains("wheelScale")) g_wheelScale = req.value("wheelScale", 1.0f);
         if (req.contains("wheelOffsetX")) g_wheelOffsetX = req.value("wheelOffsetX", 0.0f);
         if (req.contains("editKey")) g_editKey = req.value("editKey", 0x31);
@@ -38,8 +39,8 @@ void SaveSettingsListener(const char* data) {
 
         SaveINI();
 
-        SKSE::GetTaskInterface()->AddTask([]() {
-            std::string jsCmd = GetWheelJson(false);
+        SKSE::GetTaskInterface()->AddTask([editMode]() {
+            std::string jsCmd = GetWheelJson(editMode);
             PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             RE::DebugNotification("Settings Saved!");
         });
@@ -83,7 +84,7 @@ void RenameSlotListener(const char* data) {
         std::string newName = req.value("newName", "");
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, newName]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value() && !newName.empty()) {
                     g_manager.wheels[wheelIdx].slots[slotIdx].outfit->name = newName;
@@ -106,7 +107,7 @@ void RenameWheelListener(const char* data) {
         std::string newName = req.value("newName", "");
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, newName]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && !newName.empty()) {
                 g_manager.wheels[wheelIdx].name = newName;
                 SaveDataInternal();
@@ -127,7 +128,7 @@ void ClearSlotListener(const char* data) {
         size_t slotIdx = req.value("slotIndex", 0);
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 g_manager.wheels[wheelIdx].slots[slotIdx].outfit.reset();
                 SaveDataInternal();
@@ -149,9 +150,13 @@ void DeleteSlotListener(const char* data) {
         size_t slotIdx = req.value("slotIndex", 0);
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
-                g_manager.wheels[wheelIdx].slots.erase(g_manager.wheels[wheelIdx].slots.begin() + slotIdx);
+                if (g_manager.wheels[wheelIdx].slots.size() > 1) {
+                    g_manager.wheels[wheelIdx].slots.erase(g_manager.wheels[wheelIdx].slots.begin() + slotIdx);
+                } else {
+                    g_manager.wheels[wheelIdx].slots[0].outfit.reset();
+                }
                 SaveDataInternal();
                 RE::DebugNotification("Deleted slot!");
 
@@ -192,9 +197,10 @@ void ChangeWheelListener(const char* data) {
     try {
         json req = json::parse(data);
         int delta = req.value("delta", 0);
+        bool editMode = req.value("editMode", false);
 
-        SKSE::GetTaskInterface()->AddTask([delta]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([delta, editMode]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (g_manager.wheels.empty()) return;
             int current = static_cast<int>(g_manager.activeWheelIndex);
             int total = static_cast<int>(g_manager.wheels.size());
@@ -203,7 +209,7 @@ void ChangeWheelListener(const char* data) {
             g_manager.activeWheelIndex = static_cast<size_t>(current);
             SaveDataInternal();
 
-            std::string jsCmd = GetWheelJsonInternal(false);
+            std::string jsCmd = GetWheelJsonInternal(editMode);
             PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
         });
     } catch (const std::exception& e) {
@@ -211,30 +217,50 @@ void ChangeWheelListener(const char* data) {
     }
 }
 
-void AddWheelListener(const char*) {
-    SKSE::GetTaskInterface()->AddTask([]() {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+void AddWheelListener(const char* data) {
+    bool editMode = true;
+    try {
+        if (data && data[0] != '\0') {
+            json req = json::parse(data);
+            editMode = req.value("editMode", true);
+        }
+    } catch (...) {}
+
+    SKSE::GetTaskInterface()->AddTask([editMode]() {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         Wheel w;
         w.name = "Wheel " + std::to_string(g_manager.wheels.size() + 1);
+        for (size_t i = 0; i < 4; ++i) {
+            Slot s;
+            w.slots.push_back(s);
+        }
         g_manager.wheels.push_back(w);
         g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
         SaveDataInternal();
 
-        std::string jsCmd = GetWheelJsonInternal(true);
+        std::string jsCmd = GetWheelJsonInternal(editMode);
         PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
         RE::DebugNotification("Created new wheel!");
     });
 }
 
-void AddSlotListener(const char*) {
-    SKSE::GetTaskInterface()->AddTask([]() {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+void AddSlotListener(const char* data) {
+    bool editMode = true;
+    try {
+        if (data && data[0] != '\0') {
+            json req = json::parse(data);
+            editMode = req.value("editMode", true);
+        }
+    } catch (...) {}
+
+    SKSE::GetTaskInterface()->AddTask([editMode]() {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (!g_manager.wheels.empty() && g_manager.activeWheelIndex < g_manager.wheels.size()) {
             Slot s;
             g_manager.wheels[g_manager.activeWheelIndex].slots.push_back(s);
             SaveDataInternal();
 
-            std::string jsCmd = GetWheelJsonInternal(true);
+            std::string jsCmd = GetWheelJsonInternal(editMode);
             PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             RE::DebugNotification("Added slot!");
         }
@@ -243,7 +269,7 @@ void AddSlotListener(const char*) {
 
 void DeleteWheelListener(const char*) {
     SKSE::GetTaskInterface()->AddTask([]() {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (g_manager.wheels.size() > 1) {
             g_manager.wheels.erase(g_manager.wheels.begin() + g_manager.activeWheelIndex);
             if (g_manager.activeWheelIndex >= g_manager.wheels.size()) {
@@ -268,7 +294,7 @@ void SetSlotContextListener(const char* data) {
         std::string tag = req.value("contextTag", "");
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, tag]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                     g_manager.wheels[wheelIdx].slots[slotIdx].outfit->contextTag = tag;
@@ -292,7 +318,7 @@ void SetSlotRatingListener(const char* data) {
         uint8_t stars = req.value("ratingStars", static_cast<uint8_t>(3));
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, stars]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                     g_manager.wheels[wheelIdx].slots[slotIdx].outfit->preferenceStars = stars;

@@ -9,7 +9,7 @@ struct InventoryWornEntry {
     RE::ExtraDataList* extraList{ nullptr };
 };
 
-bool IsPureApparel(RE::TESForm* a_form);
+bool IsPureApparel(RE::TESForm* a_form) noexcept;
 std::vector<InventoryWornEntry> GetEquippedInventoryEntries();
 RE::TESObjectREFR* GetWardrobeContainer();
 void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs);

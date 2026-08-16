@@ -10,6 +10,7 @@
 
 #include "AdaptiveWardrobeManager.h"
 #include <SKSE/SKSE.h>
+#include <array>
 
 AdaptiveWardrobeManager::AdaptiveWardrobeManager() {
     std::random_device rd;
@@ -31,7 +32,7 @@ std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe() {
     return wardrobe;
 }
 
-ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const {
+ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const noexcept {
     if (HasContext(activeContext, ContextFlags::Combat)) return ContextFlags::Combat;
     if (HasContext(activeContext, ContextFlags::Swim)) return ContextFlags::Swim;
     if (HasContext(activeContext, ContextFlags::PlayerHome)) return ContextFlags::PlayerHome;
@@ -39,13 +40,13 @@ ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activ
     return ContextFlags::None;
 }
 
-float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const {
+float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const noexcept {
     static constexpr float kWeightTable[] = { 4.0f, 1.0f, 2.0f, 4.0f, 7.0f, 11.0f };
     if (stars <= 5) return kWeightTable[stars];
     return 4.0f;
 }
 
-float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::string& id) const {
+float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::string& id) const noexcept {
     size_t count = 0;
     for (const auto& historyID : recentHistory) {
         if (historyID == id) {
@@ -73,7 +74,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
                     if (HasContext(rule.contextMask, targetContext)) {
                         SelectionResult res;
                         res.selectedOutfit = outfit;
-                        res.reasonCode = "Context Stability Maintained";
+                        res.reasonCode = "Current Outfit Already Suitable";
                         res.calculatedWeight = 100.0f;
                         return res;
                     }
@@ -82,42 +83,44 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
         }
     }
 
-    std::vector<const AdaptiveOutfit*> candidates;
-    candidates.reserve(wardrobe.size());
+    std::array<const AdaptiveOutfit*, 64> candidatesBuffer;
+    size_t candidateCount = 0;
 
     for (const auto& outfit : wardrobe) {
         if (outfit.controlState == ControlState::Excluded) continue;
         for (const auto& rule : outfit.suitabilities) {
             if (HasContext(rule.contextMask, targetContext)) {
-                candidates.push_back(&outfit);
+                if (candidateCount < candidatesBuffer.size()) {
+                    candidatesBuffer[candidateCount++] = &outfit;
+                }
                 break;
             }
         }
     }
 
-    if (candidates.empty()) return std::nullopt;
+    if (candidateCount == 0) return std::nullopt;
 
-    for (const auto* candidate : candidates) {
-        if (candidate->controlState == ControlState::Forced) {
+    for (size_t i = 0; i < candidateCount; ++i) {
+        if (candidatesBuffer[i]->controlState == ControlState::Forced) {
             SelectionResult res;
-            res.selectedOutfit = *candidate;
+            res.selectedOutfit = *candidatesBuffer[i];
             res.reasonCode = "Forced Control State Priority";
             res.calculatedWeight = 99999.0f;
             return res;
         }
     }
 
-    std::vector<float> weights;
-    weights.reserve(candidates.size());
+    std::array<float, 64> weightsBuffer;
     float totalWeight = 0.0f;
 
-    for (const auto* candidate : candidates) {
+    for (size_t i = 0; i < candidateCount; ++i) {
+        const auto* candidate = candidatesBuffer[i];
         float prefWeight = CalculatePreferenceWeight(candidate->preferenceStars);
         float repPenalty = CalculateRepetitionPenalty(candidate->id);
         float ctrlMultiplier = (candidate->controlState == ControlState::Favorite) ? 1.5f : 1.0f;
 
         float weight = prefWeight * repPenalty * ctrlMultiplier;
-        weights.push_back(weight);
+        weightsBuffer[i] = weight;
         totalWeight += weight;
 
         SKSE::log::info("SelectOptimalOutfit: Candidate '{}' ({}) | Stars: {} | RepPenalty: {:.2f} | FinalWeight: {:.2f}",
@@ -131,8 +134,8 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     float currentSum = 0.0f;
     size_t selectedIndex = 0;
 
-    for (size_t i = 0; i < candidates.size(); ++i) {
-        currentSum += weights[i];
+    for (size_t i = 0; i < candidateCount; ++i) {
+        currentSum += weightsBuffer[i];
         if (roll <= currentSum) {
             selectedIndex = i;
             break;
@@ -140,9 +143,9 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     }
 
     SelectionResult result;
-    result.selectedOutfit = *candidates[selectedIndex];
+    result.selectedOutfit = *candidatesBuffer[selectedIndex];
     result.reasonCode = "Weighted Random Selection";
-    result.calculatedWeight = weights[selectedIndex];
+    result.calculatedWeight = weightsBuffer[selectedIndex];
 
     SKSE::log::info("SelectOptimalOutfit: WINNER Selected '{}' ({}) | Weight: {:.2f} / Total: {:.2f} (Prob: {:.1f}%)",
                     result.selectedOutfit.name, result.selectedOutfit.id, result.calculatedWeight, totalWeight,
@@ -159,21 +162,6 @@ void AdaptiveWardrobeManager::RecordOutfitEquipped(const std::string& outfitID, 
     if (recentHistory.size() > 5) {
         recentHistory.pop_back();
     }
-}
-
-void AdaptiveWardrobeManager::PauseAutoSystem(uint32_t durationSeconds) {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    manualPauseUntil = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
-}
-
-void AdaptiveWardrobeManager::ClearPause() {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    manualPauseUntil = std::chrono::steady_clock::time_point{};
-}
-
-bool AdaptiveWardrobeManager::IsPaused() const {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    return std::chrono::steady_clock::now() < manualPauseUntil;
 }
 
 void AdaptiveWardrobeManager::SetCurrentOutfitID(const std::string& id) {
@@ -197,8 +185,60 @@ std::string AdaptiveWardrobeManager::GetCurrentOutfitID() {
 #include "EquipmentManager.h"
 #include "OutfitManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "ExecutionQueue.h"
+#include "Settings.h"
+#include <windows.h>
 #include <SKSE/SKSE.h>
-#include <set>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
+#include <mutex>
+
+static std::mutex g_weightMutex;
+static std::unordered_map<RE::FormID, float> g_originalWeights;
+static uint64_t g_lastEquipTimestamp = 0;
+
+bool IsPureApparel(RE::TESForm* a_form) noexcept {
+    if (!a_form) return false;
+    if (a_form->GetFormType() != RE::FormType::Armor) {
+        return false;
+    }
+    auto* armor = a_form->As<RE::TESObjectARMO>();
+    if (!armor) return false;
+
+    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kShield)) {
+        return false;
+    }
+    return true;
+}
+
+static inline void StashItemToGhost(RE::TESBoundObject* a_obj) {
+    if (!a_obj || !IsPureApparel(a_obj)) return;
+    constexpr uint32_t kNonPlayable = 0x00000004;
+    a_obj->formFlags |= kNonPlayable;
+    auto* weightForm = a_obj->As<RE::TESWeightForm>();
+    if (weightForm) {
+        std::lock_guard<std::mutex> lock(g_weightMutex);
+        if (g_originalWeights.find(a_obj->GetFormID()) == g_originalWeights.end() && weightForm->weight > 0.0f) {
+            g_originalWeights[a_obj->GetFormID()] = weightForm->weight;
+        }
+        weightForm->weight = 0.0f;
+    }
+}
+
+static inline void RetrieveItemFromGhost(RE::TESBoundObject* a_obj) {
+    if (!a_obj) return;
+    constexpr uint32_t kNonPlayable = 0x00000004;
+    a_obj->formFlags &= ~kNonPlayable;
+    auto* weightForm = a_obj->As<RE::TESWeightForm>();
+    if (weightForm) {
+        std::lock_guard<std::mutex> lock(g_weightMutex);
+        auto it = g_originalWeights.find(a_obj->GetFormID());
+        if (it != g_originalWeights.end()) {
+            weightForm->weight = it->second;
+        }
+    }
+}
 
 std::vector<InventoryWornEntry> GetEquippedInventoryEntries() {
     std::vector<InventoryWornEntry> equipped;
@@ -206,19 +246,19 @@ std::vector<InventoryWornEntry> GetEquippedInventoryEntries() {
     if (!player) return equipped;
 
     auto inventory = player->GetInventory();
-    for (const auto& [item, data] : inventory) {
-        if (item && item->IsArmor() && data.second && data.second->extraLists) {
-            auto* armor = item->As<RE::TESObjectARMO>();
-            if (armor && armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kShield)) {
-                continue;
-            }
+    equipped.reserve(16);
 
-            for (auto* extraList : *data.second->extraLists) {
-                if (extraList && (extraList->HasType(RE::ExtraDataType::kWorn) || extraList->HasType(RE::ExtraDataType::kWornLeft))) {
-                    InventoryWornEntry entry;
-                    entry.object = item;
-                    entry.extraList = extraList;
-                    equipped.push_back(entry);
+    for (const auto& [item, data] : inventory) {
+        if (item && data.first > 0 && IsPureApparel(item) && data.second) {
+            auto* entryData = data.second.get();
+            if (entryData && entryData->extraLists) {
+                for (auto* extraList : *entryData->extraLists) {
+                    if (extraList && (extraList->HasType(RE::ExtraDataType::kWorn) || extraList->HasType(RE::ExtraDataType::kWornLeft))) {
+                        InventoryWornEntry entry;
+                        entry.object = item;
+                        entry.extraList = extraList;
+                        equipped.push_back(entry);
+                    }
                 }
             }
         }
@@ -226,46 +266,72 @@ std::vector<InventoryWornEntry> GetEquippedInventoryEntries() {
     return equipped;
 }
 
-void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs) {
-    if (!player || !equipManager) return;
+RE::TESObjectREFR* GetWardrobeContainer() {
+    return nullptr;
+}
 
-    std::set<RE::FormID> targetSet(targetItemIDs.begin(), targetItemIDs.end());
+void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs) {
+    if (!player || !equipManager || !player->Is3DLoaded()) return;
+
+    auto actorState = player->AsActorState();
+    if (actorState && (actorState->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal || player->IsInKillMove())) {
+        return;
+    }
+
+    std::vector<RE::FormID> targetList;
+    targetList.reserve(targetItemIDs.size());
+    for (RE::FormID fID : targetItemIDs) {
+        auto* form = RE::TESForm::LookupByID(fID);
+        if (form && IsPureApparel(form)) {
+            targetList.push_back(fID);
+        }
+    }
+
     auto currentlyWornEntries = GetEquippedInventoryEntries();
-    std::set<RE::FormID> currentlyWornSet;
+    std::vector<RE::FormID> currentlyWornList;
+    currentlyWornList.reserve(currentlyWornEntries.size());
+
     for (const auto& entry : currentlyWornEntries) {
-        if (entry.object) {
-            currentlyWornSet.insert(entry.object->GetFormID());
+        if (entry.object && IsPureApparel(entry.object)) {
+            currentlyWornList.push_back(entry.object->GetFormID());
         }
     }
 
     for (const auto& entry : currentlyWornEntries) {
-        if (entry.object && entry.object->IsArmor()) {
+        if (entry.object && IsPureApparel(entry.object)) {
             RE::FormID formID = entry.object->GetFormID();
-            if (targetSet.find(formID) == targetSet.end()) {
+            if (std::find(targetList.begin(), targetList.end(), formID) == targetList.end()) {
                 equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
+                if (g_autoStashEnabled) {
+                    StashItemToGhost(entry.object);
+                }
+            }
+        }
+    }
+
+    for (RE::FormID formID : targetList) {
+        auto* form = RE::TESForm::LookupByID(formID);
+        if (form && IsPureApparel(form)) {
+            auto* boundObj = form->As<RE::TESBoundObject>();
+            if (boundObj) {
+                RetrieveItemFromGhost(boundObj);
             }
         }
     }
 
     auto freshInventory = player->GetInventory();
-    for (RE::FormID formID : targetItemIDs) {
-        if (currentlyWornSet.find(formID) == currentlyWornSet.end()) {
+    for (RE::FormID formID : targetList) {
+        if (std::find(currentlyWornList.begin(), currentlyWornList.end(), formID) == currentlyWornList.end()) {
             auto* form = RE::TESForm::LookupByID(formID);
-            auto* boundObj = form ? form->As<RE::TESBoundObject>() : nullptr;
-            if (!boundObj || !boundObj->IsArmor()) {
-                continue;
-            }
-            auto it = freshInventory.find(boundObj);
-            bool playerOwnsItem = (it != freshInventory.end()) && (it->second.first > 0);
-            if (!playerOwnsItem) {
-                continue;
-            }
+            if (!form || !IsPureApparel(form)) continue;
 
-            RE::ExtraDataList* targetExtra = nullptr;
-            if (it->second.second && it->second.second->extraLists && !it->second.second->extraLists->empty()) {
-                targetExtra = it->second.second->extraLists->front();
+            auto* boundObj = form->As<RE::TESBoundObject>();
+            if (!boundObj) continue;
+
+            auto it = freshInventory.find(boundObj);
+            if (it != freshInventory.end() && it->second.first > 0) {
+                equipManager->EquipObject(player, boundObj, nullptr, 1, nullptr, false, false, false, true);
             }
-            equipManager->EquipObject(player, boundObj, targetExtra, 1, nullptr, false, false, false, true);
         }
     }
 }
@@ -277,16 +343,15 @@ void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(g_dataMutex);
-    if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
+    std::string savedName = "Outfit";
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (wheelIdx >= g_manager.wheels.size()) return;
+        if (slotIdx >= g_manager.wheels[wheelIdx].slots.size()) return;
+
         Outfit outfit;
         if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
-            outfit.name = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->name;
-            outfit.contextTag = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->contextTag;
-            outfit.preferenceStars = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->preferenceStars;
-            outfit.controlState = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->controlState;
-            outfit.usageCount = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->usageCount;
-            outfit.lastWornTimestamp = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->lastWornTimestamp;
+            outfit = *g_manager.wheels[wheelIdx].slots[slotIdx].outfit;
         } else {
             outfit.name = "Outfit " + std::to_string(slotIdx + 1);
             outfit.contextTag = "";
@@ -295,22 +360,37 @@ void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
             outfit.usageCount = 0;
             outfit.lastWornTimestamp = 0;
         }
+
+        outfit.itemIDs.clear();
+        outfit.itemIDs.reserve(equipped.size());
         for (const auto& entry : equipped) {
-            if (entry.object && entry.object->IsArmor()) {
+            if (entry.object && IsPureApparel(entry.object)) {
                 outfit.itemIDs.push_back(entry.object->GetFormID());
             }
         }
         g_manager.wheels[wheelIdx].slots[slotIdx].outfit = outfit;
+        savedName = outfit.name;
         SaveDataInternal();
-        RE::DebugNotification(("Saved " + outfit.name).c_str());
     }
+
+    if (g_autoStashEnabled) {
+        StashAllOutfitsToWardrobe();
+    }
+
+    RE::DebugNotification(("Saved " + savedName).c_str());
 }
 
 void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
+    uint64_t now = GetTickCount64();
+    if (now - g_lastEquipTimestamp < 350) {
+        return;
+    }
+    g_lastEquipTimestamp = now;
+
     Outfit targetOutfit;
     bool found = false;
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
             if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                 targetOutfit = *g_manager.wheels[wheelIdx].slots[slotIdx].outfit;
@@ -325,13 +405,273 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
     auto equipManager = RE::ActorEquipManager::GetSingleton();
     if (!player || !equipManager) return;
 
-    PerformOutfitSwap(player, equipManager, targetOutfit.itemIDs);
+    std::vector<RE::FormID> sanitizedTargetIDs;
+    sanitizedTargetIDs.reserve(targetOutfit.itemIDs.size());
+    for (RE::FormID fID : targetOutfit.itemIDs) {
+        auto* form = RE::TESForm::LookupByID(fID);
+        if (form && IsPureApparel(form)) {
+            sanitizedTargetIDs.push_back(fID);
+        }
+    }
+
+    auto currentlyWornEntries = GetEquippedInventoryEntries();
+    size_t matchCount = 0;
+
+    for (const auto& entry : currentlyWornEntries) {
+        if (entry.object && IsPureApparel(entry.object)) {
+            RE::FormID formID = entry.object->GetFormID();
+            if (std::find(sanitizedTargetIDs.begin(), sanitizedTargetIDs.end(), formID) != sanitizedTargetIDs.end()) {
+                matchCount++;
+            }
+        }
+    }
+
+    bool isAlreadyWorn = false;
+    if (!sanitizedTargetIDs.empty()) {
+        float ratio = static_cast<float>(matchCount) / static_cast<float>(sanitizedTargetIDs.size());
+        if (ratio >= 0.5f || matchCount == sanitizedTargetIDs.size()) {
+            isAlreadyWorn = true;
+        }
+    }
+
+    if (isAlreadyWorn) {
+        for (const auto& entry : currentlyWornEntries) {
+            if (entry.object && IsPureApparel(entry.object)) {
+                RE::FormID formID = entry.object->GetFormID();
+                if (std::find(sanitizedTargetIDs.begin(), sanitizedTargetIDs.end(), formID) != sanitizedTargetIDs.end()) {
+                    equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
+                    if (g_autoStashEnabled) {
+                        StashItemToGhost(entry.object);
+                    }
+                }
+            }
+        }
+        AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID("");
+        RE::DebugNotification(("Unequipped " + targetOutfit.name).c_str());
+        return;
+    }
+
+    PerformOutfitSwap(player, equipManager, sanitizedTargetIDs);
 
     std::string adaptiveOutfitID = std::to_string(wheelIdx) + "_" + std::to_string(slotIdx);
     AdaptiveWardrobeManager::GetSingleton()->RecordOutfitEquipped(adaptiveOutfitID, 0);
-    AdaptiveWardrobeManager::GetSingleton()->PauseAutoSystem(10);
 
     RE::DebugNotification(("Equipped " + targetOutfit.name).c_str());
+}
+
+void RetrieveAllOutfitsToPlayer() {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    if (!player) return;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        for (const auto& wheel : g_manager.wheels) {
+            for (const auto& slot : wheel.slots) {
+                if (slot.outfit.has_value()) {
+                    for (RE::FormID fID : slot.outfit->itemIDs) {
+                        auto* form = RE::TESForm::LookupByID(fID);
+                        if (form && IsPureApparel(form)) {
+                            auto* boundObj = form->As<RE::TESBoundObject>();
+                            if (boundObj) {
+                                RetrieveItemFromGhost(boundObj);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    RE::DebugNotification("All outfits visible in inventory with normal weight!");
+}
+
+void StashAllOutfitsToWardrobe() {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    if (!player) return;
+
+    std::vector<RE::FormID> allRegisteredIDs;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        for (const auto& wheel : g_manager.wheels) {
+            for (const auto& slot : wheel.slots) {
+                if (slot.outfit.has_value()) {
+                    for (RE::FormID fID : slot.outfit->itemIDs) {
+                        allRegisteredIDs.push_back(fID);
+                    }
+                }
+            }
+        }
+    }
+
+    auto currentlyWorn = GetEquippedInventoryEntries();
+    std::vector<RE::FormID> currentlyWornIDs;
+    currentlyWornIDs.reserve(currentlyWorn.size());
+    for (const auto& entry : currentlyWorn) {
+        if (entry.object) {
+            currentlyWornIDs.push_back(entry.object->GetFormID());
+        }
+    }
+
+    for (RE::FormID fID : allRegisteredIDs) {
+        if (std::find(currentlyWornIDs.begin(), currentlyWornIDs.end(), fID) == currentlyWornIDs.end()) {
+            auto* form = RE::TESForm::LookupByID(fID);
+            if (form && IsPureApparel(form)) {
+                auto* boundObj = form->As<RE::TESBoundObject>();
+                if (boundObj) {
+                    StashItemToGhost(boundObj);
+                }
+            }
+        }
+    }
+
+    RE::DebugNotification("All inactive outfits hidden and weight set to 0!");
+}
+
+void StashSlotOutfit(size_t wheelIdx, size_t slotIdx) {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    auto equipManager = RE::ActorEquipManager::GetSingleton();
+    if (!player || !equipManager) return;
+
+    std::vector<RE::FormID> slotItems;
+    std::string outfitName = "Outfit";
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
+            if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                slotItems = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->itemIDs;
+                outfitName = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->name;
+            }
+        }
+    }
+    if (slotItems.empty()) return;
+
+    auto currentlyWorn = GetEquippedInventoryEntries();
+    for (const auto& entry : currentlyWorn) {
+        if (entry.object && IsPureApparel(entry.object)) {
+            RE::FormID formID = entry.object->GetFormID();
+            if (std::find(slotItems.begin(), slotItems.end(), formID) != slotItems.end()) {
+                equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
+            }
+        }
+    }
+
+    for (RE::FormID fID : slotItems) {
+        auto* form = RE::TESForm::LookupByID(fID);
+        if (form && IsPureApparel(form)) {
+            auto* bound = form->As<RE::TESBoundObject>();
+            if (bound) {
+                StashItemToGhost(bound);
+            }
+        }
+    }
+
+    RE::DebugNotification(("Stored " + outfitName + " in wardrobe (Hidden & Weightless)!").c_str());
+}
+
+void RetrieveSlotOutfit(size_t wheelIdx, size_t slotIdx) {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    if (!player) return;
+
+    std::vector<RE::FormID> slotItems;
+    std::string outfitName = "Outfit";
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
+            if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                slotItems = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->itemIDs;
+                outfitName = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->name;
+            }
+        }
+    }
+    if (slotItems.empty()) return;
+
+    for (RE::FormID fID : slotItems) {
+        auto* form = RE::TESForm::LookupByID(fID);
+        if (form && IsPureApparel(form)) {
+            auto* bound = form->As<RE::TESBoundObject>();
+            if (bound) {
+                RetrieveItemFromGhost(bound);
+            }
+        }
+    }
+
+    RE::DebugNotification(("Retrieved " + outfitName + " to inventory!").c_str());
+}
+
+void StashWheelOutfits(size_t wheelIdx) {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    auto equipManager = RE::ActorEquipManager::GetSingleton();
+    if (!player || !equipManager) return;
+
+    std::vector<RE::FormID> wheelItemIDs;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (wheelIdx < g_manager.wheels.size()) {
+            for (const auto& slot : g_manager.wheels[wheelIdx].slots) {
+                if (slot.outfit.has_value()) {
+                    for (RE::FormID fID : slot.outfit->itemIDs) {
+                        wheelItemIDs.push_back(fID);
+                    }
+                }
+            }
+        }
+    }
+    if (wheelItemIDs.empty()) return;
+
+    auto currentlyWorn = GetEquippedInventoryEntries();
+    std::vector<RE::FormID> currentlyWornIDs;
+    currentlyWornIDs.reserve(currentlyWorn.size());
+    for (const auto& entry : currentlyWorn) {
+        if (entry.object && IsPureApparel(entry.object)) {
+            currentlyWornIDs.push_back(entry.object->GetFormID());
+        }
+    }
+
+    for (RE::FormID fID : wheelItemIDs) {
+        if (std::find(currentlyWornIDs.begin(), currentlyWornIDs.end(), fID) == currentlyWornIDs.end()) {
+            auto* form = RE::TESForm::LookupByID(fID);
+            if (form && IsPureApparel(form)) {
+                auto* boundObj = form->As<RE::TESBoundObject>();
+                if (boundObj) {
+                    StashItemToGhost(boundObj);
+                }
+            }
+        }
+    }
+
+    RE::DebugNotification("Wheel outfits stored in wardrobe (Hidden & Weightless)!");
+}
+
+void RetrieveWheelOutfits(size_t wheelIdx) {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    if (!player) return;
+
+    std::vector<RE::FormID> wheelItemIDs;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (wheelIdx < g_manager.wheels.size()) {
+            for (const auto& slot : g_manager.wheels[wheelIdx].slots) {
+                if (slot.outfit.has_value()) {
+                    for (RE::FormID fID : slot.outfit->itemIDs) {
+                        wheelItemIDs.push_back(fID);
+                    }
+                }
+            }
+        }
+    }
+    if (wheelItemIDs.empty()) return;
+
+    for (RE::FormID fID : wheelItemIDs) {
+        auto* form = RE::TESForm::LookupByID(fID);
+        if (form && IsPureApparel(form)) {
+            auto* bound = form->As<RE::TESBoundObject>();
+            if (bound) {
+                RetrieveItemFromGhost(bound);
+            }
+        }
+    }
+
+    RE::DebugNotification("Retrieved wheel outfits to inventory!");
 }#include "pch.h"
 
 #ifdef max
@@ -345,6 +685,7 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
 #include "ExecutionQueue.h"
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "Settings.h"
 #include <SKSE/SKSE.h>
 
 std::atomic<bool> g_gameFullyLoaded{ false };
@@ -352,7 +693,23 @@ std::atomic<uint64_t> g_gameSessionGeneration{ 0 };
 std::atomic<uint64_t> g_outfitTaskGeneration{ 0 };
 static std::atomic<bool> g_eventsRegistered{ false };
 static std::atomic<bool> g_skipInitialLoadEval{ true };
-static std::atomic<uint32_t> g_lastEvalTick{ 0 };
+static std::atomic<uint64_t> g_lastEvalTick{ 0 };
+
+static RE::BGSKeyword* g_locTypePlayerHouse = nullptr;
+static RE::BGSKeyword* g_locTypeCity = nullptr;
+static RE::BGSKeyword* g_locTypeTown = nullptr;
+
+static void CacheLocationKeywords() {
+    if (!g_locTypePlayerHouse) {
+        g_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
+    }
+    if (!g_locTypeCity) {
+        g_locTypeCity = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeCity");
+    }
+    if (!g_locTypeTown) {
+        g_locTypeTown = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTown");
+    }
+}
 
 ExecutionQueue* ExecutionQueue::GetSingleton() {
     static ExecutionQueue instance;
@@ -367,6 +724,8 @@ void ExecutionQueue::RegisterEventsInternal() {
     auto ui = RE::UI::GetSingleton();
 
     if (!scriptSource || !player || !ui) return;
+
+    CacheLocationKeywords();
 
     scriptSource->AddEventSink<RE::TESCombatEvent>(this);
     scriptSource->AddEventSink<RE::TESActorLocationChangeEvent>(this);
@@ -388,13 +747,19 @@ void ExecutionQueue::RegisterEvents() {
     });
 }
 
+void ExecutionQueue::ResetEnvironmentState() {
+    lastEnvironmentContext = ContextFlags::None;
+}
+
 ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, RE::TESObjectCELL* cell) {
+    CacheLocationKeywords();
+
     if (location) {
-        if (location->HasKeywordString("LocTypePlayerHouse") || (location->parentLoc && location->parentLoc->HasKeywordString("LocTypePlayerHouse"))) {
+        if (g_locTypePlayerHouse && (location->HasKeyword(g_locTypePlayerHouse) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypePlayerHouse)))) {
             return ContextFlags::PlayerHome;
         }
-        if (location->HasKeywordString("LocTypeCity") || location->HasKeywordString("LocTypeTown") ||
-            (location->parentLoc && (location->parentLoc->HasKeywordString("LocTypeCity") || location->parentLoc->HasKeywordString("LocTypeTown")))) {
+        if ((g_locTypeCity && (location->HasKeyword(g_locTypeCity) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypeCity)))) ||
+            (g_locTypeTown && (location->HasKeyword(g_locTypeTown) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypeTown))))) {
             return ContextFlags::CityTown;
         }
     }
@@ -418,6 +783,8 @@ ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, R
 }
 
 ContextFlags ExecutionQueue::GatherCurrentContext() {
+    if (!g_autoSystemEnabled) return ContextFlags::None;
+
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) return ContextFlags::None;
 
@@ -425,16 +792,22 @@ ContextFlags ExecutionQueue::GatherCurrentContext() {
     auto parentCell = player->GetParentCell();
     auto loc = player->GetCurrentLocation();
 
-    flags |= ResolveLocationContext(loc, parentCell);
+    ContextFlags locFlags = ResolveLocationContext(loc, parentCell);
+    if (HasContext(locFlags, ContextFlags::PlayerHome) && g_autoHomeEnabled) {
+        flags |= ContextFlags::PlayerHome;
+    }
+    if (HasContext(locFlags, ContextFlags::CityTown) && g_autoCityEnabled) {
+        flags |= ContextFlags::CityTown;
+    }
 
-    if (player->IsInCombat()) {
+    if (player->IsInCombat() && g_autoCombatEnabled) {
         flags |= ContextFlags::Combat;
     }
 
     auto actorState = player->AsActorState();
     float waterHeight = player->GetWaterHeight();
     float playerZ = player->GetPositionZ();
-    if ((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 20.0f)) {
+    if (((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 20.0f)) && g_autoSwimEnabled) {
         flags |= ContextFlags::Swim;
     }
 
@@ -446,15 +819,17 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* 
         return RE::BSEventNotifyControl::kContinue;
     }
     SKSE::log::info("ProcessEvent: TESCombatEvent fired");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
-    EvaluateAndQueueChange(a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat);
+    if (a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat) {
+        EvaluateAndQueueChange(true);
+    } else {
+        EvaluateAndQueueChange(false);
+    }
     return RE::BSEventNotifyControl::kContinue;
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
     SKSE::log::info("ProcessEvent: BGSActorCellEvent fired");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -464,15 +839,13 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESActorLocation
         return RE::BSEventNotifyControl::kContinue;
     }
     SKSE::log::info("ProcessEvent: TESActorLocationChangeEvent fired");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCellFullyLoadedEvent* a_event, RE::BSTEventSource<RE::TESCellFullyLoadedEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
-    SKSE::log::info("ProcessEvent: TESCellFullyLoadedEvent fired - cell fully ready");
-    AdaptiveWardrobeManager::GetSingleton()->ClearPause();
+    SKSE::log::info("ProcessEvent: TESCellFullyLoadedEvent fired");
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -482,21 +855,23 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::MenuOpenCloseEve
 
     if (!a_event->opening && (a_event->menuName == RE::LoadingMenu::MENU_NAME || a_event->menuName == RE::FaderMenu::MENU_NAME)) {
         SKSE::log::info("ProcessEvent: MenuOpenCloseEvent - '{}' CLOSED", a_event->menuName.c_str());
-        AdaptiveWardrobeManager::GetSingleton()->ClearPause();
         EvaluateAndQueueChange(false);
     }
     return RE::BSEventNotifyControl::kContinue;
 }
 
 void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
+    if (!g_autoSystemEnabled) return;
+
     if (g_skipInitialLoadEval.exchange(false, std::memory_order_acq_rel)) {
         SKSE::log::info("EvaluateAndQueueChange: Skipped - Initial game load");
+        lastEnvironmentContext = GatherCurrentContext();
         return;
     }
 
-    uint32_t currentTick = GetTickCount();
-    uint32_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
-    if (!isEmergency && (currentTick - lastTick < 1500)) {
+    uint64_t currentTick = GetTickCount64();
+    uint64_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
+    if (!isEmergency && (currentTick - lastTick < 1000)) {
         SKSE::log::info("EvaluateAndQueueChange: Coalesced duplicate cell/location event");
         return;
     }
@@ -519,14 +894,18 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
         return;
     }
 
-    auto manager = AdaptiveWardrobeManager::GetSingleton();
-    if (manager->IsPaused()) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - System is paused");
+    ContextFlags currentContext = GatherCurrentContext();
+    if (currentContext == ContextFlags::None) {
         return;
     }
 
-    ContextFlags currentContext = GatherCurrentContext();
-    SKSE::log::info("EvaluateAndQueueChange: Context resolved to {:08X}", static_cast<uint32_t>(currentContext));
+    if (!isEmergency && currentContext == lastEnvironmentContext) {
+        return;
+    }
+    lastEnvironmentContext = currentContext;
+
+    auto manager = AdaptiveWardrobeManager::GetSingleton();
+    SKSE::log::info("EvaluateAndQueueChange: State changed to context {:08X}", static_cast<uint32_t>(currentContext));
 
     auto selectionOpt = manager->SelectOptimalOutfit(currentContext, isEmergency);
     if (!selectionOpt.has_value()) {
@@ -573,8 +952,13 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
 #include "PrismaUI_API.h"
 #include <SKSE/SKSE.h>
 #include <windows.h>
+#include <Xinput.h>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <string>
+
+#pragma comment(lib, "Xinput.lib")
 
 extern PRISMA_UI_API::IVPrismaUI2* PrismaUI;
 extern PrismaView view;
@@ -584,6 +968,10 @@ std::atomic<bool> g_isTyping{ false };
 bool g_inputRegistered = false;
 
 static std::chrono::steady_clock::time_point g_lastToggleTime{};
+static std::chrono::steady_clock::time_point g_lastFilterTime{};
+static std::chrono::steady_clock::time_point g_lastWheelTime{};
+static uint32_t g_currentGamepadMask = 0;
+static float g_lastSentAngle = -999.0f;
 
 static const RE::BSFixedString MENU_CONSOLE("Console");
 static const RE::BSFixedString MENU_RACEMENU("RaceMenu");
@@ -608,29 +996,26 @@ static inline bool IsModifierMatch(uint32_t modKey, bool shift, bool ctrl, bool 
 }
 
 void ShowWheel(bool isEditMode) {
-    if (!PrismaUI || view == 0) {
-        SKSE::log::error("ShowWheel failed: PrismaUI API or View is null");
-        return;
-    }
-
+    if (!PrismaUI || view == 0) return;
     std::string wheelDataJson = GetWheelJson(isEditMode);
-
-    SKSE::log::info("ShowWheel: Showing view");
     PrismaUI->Show(view);
-
-    SKSE::log::info("ShowWheel: Focusing view");
     PrismaUI->Focus(view, true, false);
-
-    SKSE::log::info("ShowWheel: Calling InteropCall openWheel");
     PrismaUI->InteropCall(view, "openWheel", wheelDataJson.c_str());
+
+    auto now = std::chrono::steady_clock::now();
+    g_lastWheelTime = now + std::chrono::milliseconds(400);
+    g_lastFilterTime = now + std::chrono::milliseconds(400);
+    g_lastSentAngle = -999.0f;
 
     isMenuOpen.store(true, std::memory_order_release);
 }
 
 void HideWheel() {
     if (PrismaUI && view != 0) {
+        PrismaUI->Unfocus(view);
         PrismaUI->Hide(view);
     }
+    g_lastSentAngle = -999.0f;
     isMenuOpen.store(false, std::memory_order_release);
 }
 
@@ -645,9 +1030,6 @@ void WheelInputHandler::Register() {
     if (inputDevice) {
         inputDevice->AddEventSink(GetSingleton());
         g_inputRegistered = true;
-        SKSE::log::info("WheelInputHandler event sink registered successfully");
-    } else {
-        SKSE::log::warn("BSInputDeviceManager not ready yet");
     }
 }
 
@@ -655,59 +1037,53 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     if (!a_event || !*a_event) return RE::BSEventNotifyControl::kContinue;
 
     auto player = RE::PlayerCharacter::GetSingleton();
-    if (!player || !player->Is3DLoaded()) {
-        return RE::BSEventNotifyControl::kContinue;
-    }
+    if (!player || !player->Is3DLoaded()) return RE::BSEventNotifyControl::kContinue;
 
     auto ui = RE::UI::GetSingleton();
     if (!ui) return RE::BSEventNotifyControl::kContinue;
 
     bool currentlyOpen = isMenuOpen.load(std::memory_order_acquire);
+    bool isTypingActive = g_isTyping.load(std::memory_order_acquire);
 
-    for (auto event = *a_event; event; event = event->next) {
-        if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {
-            auto buttonEvent = event->AsButtonEvent();
-            if (buttonEvent && buttonEvent->IsPressed()) {
-                auto device = buttonEvent->GetDevice();
-                uint32_t keyCode = buttonEvent->GetIDCode();
+    if (!currentlyOpen) {
+        if (isTypingActive) return RE::BSEventNotifyControl::kContinue;
 
-                if (device == RE::INPUT_DEVICE::kKeyboard && keyCode == 0x01 && currentlyOpen) {
-                    SKSE::GetTaskInterface()->AddTask([]() {
-                        HideWheel();
+        bool isInventoryOpen = ui->IsMenuOpen(MENU_INVENTORY);
+        bool hasBlockingMenu = ui->IsMenuOpen(MENU_CONSOLE) || ui->IsMenuOpen(MENU_RACEMENU) ||
+                              ui->IsMenuOpen(MENU_MAGIC) || ui->IsMenuOpen(MENU_CONTAINER) ||
+                              ui->IsMenuOpen(MENU_BARTER) || ui->IsMenuOpen(MENU_BOOK) ||
+                              ui->IsMenuOpen(MENU_JOURNAL) || ui->IsMenuOpen(MENU_MAP) ||
+                              ui->IsMenuOpen(MENU_LOCKPICKING) || ui->IsMenuOpen(MENU_CRAFTING) ||
+                              ui->IsMenuOpen(MENU_DIALOGUE) || ui->IsMenuOpen(MENU_FADER);
+
+        if (hasBlockingMenu || (ui->GameIsPaused() && !isInventoryOpen)) {
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    } else {
+        XINPUT_STATE xState;
+        ZeroMemory(&xState, sizeof(XINPUT_STATE));
+        if (XInputGetState(0, &xState) == ERROR_SUCCESS) {
+            float lx = static_cast<float>(xState.Gamepad.sThumbLX);
+            float ly = static_cast<float>(xState.Gamepad.sThumbLY);
+
+            float normX = lx / 32767.0f;
+            float normY = ly / 32767.0f;
+            float mag = std::sqrt(normX * normX + normY * normY);
+
+            if (mag >= g_thumbstickDeadzone) {
+                float phi = std::atan2(normX, normY);
+                if (phi < 0.0f) phi += 6.2831853f;
+
+                if (std::abs(phi - g_lastSentAngle) > 0.05f) {
+                    g_lastSentAngle = phi;
+                    SKSE::GetTaskInterface()->AddTask([phi]() {
+                        if (PrismaUI && view != 0) {
+                            PrismaUI->InteropCall(view, "setGamepadAngle", std::to_string(phi).c_str());
+                        }
                     });
-                    return RE::BSEventNotifyControl::kContinue;
                 }
             }
         }
-    }
-
-    if (g_isTyping.load(std::memory_order_acquire)) {
-        return RE::BSEventNotifyControl::kContinue;
-    }
-
-    bool isInventoryOpen = ui->IsMenuOpen(MENU_INVENTORY);
-
-    bool hasBlockingMenu = ui->IsMenuOpen(MENU_CONSOLE) ||
-                          ui->IsMenuOpen(MENU_RACEMENU) ||
-                          ui->IsMenuOpen(MENU_MAGIC) ||
-                          ui->IsMenuOpen(MENU_CONTAINER) ||
-                          ui->IsMenuOpen(MENU_BARTER) ||
-                          ui->IsMenuOpen(MENU_BOOK) ||
-                          ui->IsMenuOpen(MENU_JOURNAL) ||
-                          ui->IsMenuOpen(MENU_MAP) ||
-                          ui->IsMenuOpen(MENU_LOCKPICKING) ||
-                          ui->IsMenuOpen(MENU_CRAFTING) ||
-                          ui->IsMenuOpen(MENU_DIALOGUE) ||
-                          ui->IsMenuOpen(MENU_FADER) ||
-                          ui->IsApplicationMenuOpen() ||
-                          ui->IsModalMenuOpen();
-
-    if (hasBlockingMenu) {
-        return RE::BSEventNotifyControl::kContinue;
-    }
-
-    if (ui->GameIsPaused() && !currentlyOpen && !isInventoryOpen) {
-        return RE::BSEventNotifyControl::kContinue;
     }
 
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0 || (GetKeyState(VK_LSHIFT) & 0x8000) != 0 || (GetKeyState(VK_RSHIFT) & 0x8000) != 0;
@@ -717,51 +1093,97 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     for (auto event = *a_event; event; event = event->next) {
         if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {
             auto buttonEvent = event->AsButtonEvent();
-            if (buttonEvent && buttonEvent->IsPressed()) {
-                auto device = buttonEvent->GetDevice();
-                if (device != RE::INPUT_DEVICE::kKeyboard) {
-                    continue;
+            if (!buttonEvent) continue;
+
+            auto device = buttonEvent->GetDevice();
+            uint32_t keyCode = buttonEvent->GetIDCode();
+
+            if (device == RE::INPUT_DEVICE::kKeyboard && buttonEvent->IsPressed()) {
+                if (keyCode == 0x01 && currentlyOpen) {
+                    SKSE::GetTaskInterface()->AddTask([]() { HideWheel(); });
+                    return RE::BSEventNotifyControl::kContinue;
                 }
 
-                uint32_t keyCode = buttonEvent->GetIDCode();
+                if (!isTypingActive) {
+                    bool editModMatch = IsModifierMatch(g_editModifierKey, shift, ctrl, alt);
+                    bool playModMatch = IsModifierMatch(g_playModifierKey, shift, ctrl, alt);
 
-                bool editRequiresMod = (g_editModifierKey != 0);
-                bool playRequiresMod = (g_playModifierKey != 0);
+                    bool triggerEdit = (keyCode == g_editKey && editModMatch);
+                    bool triggerPlay = (keyCode == g_playKey && playModMatch);
 
-                bool editModMatch = IsModifierMatch(g_editModifierKey, shift, ctrl, alt);
-                bool playModMatch = IsModifierMatch(g_playModifierKey, shift, ctrl, alt);
-
-                bool triggerEdit = false;
-                bool triggerPlay = false;
-
-                if (keyCode == g_editKey && editModMatch && editRequiresMod) {
-                    triggerEdit = true;
-                } else if (keyCode == g_playKey && playModMatch && playRequiresMod) {
-                    triggerPlay = true;
-                } else if (keyCode == g_editKey && editModMatch && !editRequiresMod) {
-                    triggerEdit = true;
-                } else if (keyCode == g_playKey && playModMatch && !playRequiresMod) {
-                    triggerPlay = true;
-                }
-
-                if (triggerEdit || triggerPlay) {
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastToggleTime).count();
-
-                    if (elapsedMs < 200) {
-                        return RE::BSEventNotifyControl::kContinue;
-                    }
-
-                    g_lastToggleTime = now;
-                    bool targetMode = triggerEdit;
-
-                    SKSE::GetTaskInterface()->AddTask([targetMode]() {
-                        if (!isMenuOpen.load(std::memory_order_acquire)) {
-                            ShowWheel(targetMode);
-                        } else {
-                            HideWheel();
+                    if (triggerEdit || triggerPlay) {
+                        auto now = std::chrono::steady_clock::now();
+                        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastToggleTime).count() < 200) {
+                            return RE::BSEventNotifyControl::kContinue;
                         }
-                    });
+                        g_lastToggleTime = now;
+
+                        bool targetMode = triggerEdit;
+                        SKSE::GetTaskInterface()->AddTask([targetMode]() {
+                            if (!isMenuOpen.load(std::memory_order_acquire)) ShowWheel(targetMode);
+                            else HideWheel();
+                        });
+                    }
+                }
+            } else if (device == RE::INPUT_DEVICE::kGamepad) {
+                if (buttonEvent->IsDown()) g_currentGamepadMask |= keyCode;
+                else if (buttonEvent->IsUp()) g_currentGamepadMask &= ~keyCode;
+
+                if (buttonEvent->IsPressed()) {
+                    auto now = std::chrono::steady_clock::now();
+
+                    if (currentlyOpen) {
+                        SKSE::GetTaskInterface()->AddTask([keyCode]() {
+                            if (PrismaUI && view != 0) {
+                                PrismaUI->InteropCall(view, "onGamepadButtonPress", std::to_string(keyCode).c_str());
+                            }
+                        });
+
+                        if (keyCode == 0x2000 || keyCode == 0x0020 || keyCode == 0x0010) {
+                            SKSE::GetTaskInterface()->AddTask([]() { HideWheel(); });
+                            return RE::BSEventNotifyControl::kContinue;
+                        }
+                        if (keyCode == 0x1000) {
+                            SKSE::GetTaskInterface()->AddTask([]() {
+                                if (PrismaUI && view != 0) PrismaUI->InteropCall(view, "gamepadConfirm", "");
+                            });
+                            return RE::BSEventNotifyControl::kContinue;
+                        }
+                        if (keyCode == 0x0100 || keyCode == 0x0200) {
+                            if (now >= g_lastWheelTime) {
+                                g_lastWheelTime = now + std::chrono::milliseconds(250);
+                                int dir = (keyCode == 0x0100) ? -1 : 1;
+                                SKSE::GetTaskInterface()->AddTask([dir]() {
+                                    if (PrismaUI && view != 0) PrismaUI->InteropCall(view, "gamepadCycleWheel", std::to_string(dir).c_str());
+                                });
+                            }
+                            return RE::BSEventNotifyControl::kContinue;
+                        }
+                        if (keyCode == 0x0009 || keyCode == 0x000A) {
+                            if (now >= g_lastFilterTime) {
+                                g_lastFilterTime = now + std::chrono::milliseconds(250);
+                                int dir = (keyCode == 0x0009) ? -1 : 1;
+                                SKSE::GetTaskInterface()->AddTask([dir]() {
+                                    if (PrismaUI && view != 0) PrismaUI->InteropCall(view, "gamepadCycleFilter", std::to_string(dir).c_str());
+                                });
+                            }
+                            return RE::BSEventNotifyControl::kContinue;
+                        }
+                    } else {
+                        if (!isTypingActive) {
+                            bool gpPlayModMatch = (g_gamepadPlayModifier == 0) || ((g_currentGamepadMask & g_gamepadPlayModifier) != 0);
+                            bool gpTriggerPlay = (keyCode == g_gamepadPlayKey && gpPlayModMatch);
+
+                            if (gpTriggerPlay) {
+                                if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastToggleTime).count() < 200) {
+                                    return RE::BSEventNotifyControl::kContinue;
+                                }
+                                g_lastToggleTime = now;
+
+                                SKSE::GetTaskInterface()->AddTask([]() { ShowWheel(false); });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -786,9 +1208,9 @@ void OnConsoleMessageCallbackFunc(PrismaView v, PRISMA_UI_API::ConsoleMessageLev
 }
 
 void SaveSettingsListener(const char* data) {
-    SKSE::log::info("SaveSettings listener triggered: {}", data ? data : "null");
     try {
         json req = json::parse(data);
+        bool editMode = req.value("editMode", false);
         if (req.contains("wheelScale")) g_wheelScale = req.value("wheelScale", 1.0f);
         if (req.contains("wheelOffsetX")) g_wheelOffsetX = req.value("wheelOffsetX", 0.0f);
         if (req.contains("editKey")) g_editKey = req.value("editKey", 0x31);
@@ -796,6 +1218,10 @@ void SaveSettingsListener(const char* data) {
         if (req.contains("playKey")) g_playKey = req.value("playKey", 0x2F);
         if (req.contains("playModifierKey")) g_playModifierKey = req.value("playModifierKey", 0x00);
 
+        if (req.contains("gamepadPlayKey")) g_gamepadPlayKey = req.value("gamepadPlayKey", 0x0008);
+        if (req.contains("gamepadPlayModifier")) g_gamepadPlayModifier = req.value("gamepadPlayModifier", 0x0100);
+
+        if (req.contains("autoStashEnabled")) g_autoStashEnabled = req.value("autoStashEnabled", false);
         if (req.contains("autoSystemEnabled")) g_autoSystemEnabled = req.value("autoSystemEnabled", true);
         if (req.contains("autoCityEnabled")) g_autoCityEnabled = req.value("autoCityEnabled", true);
         if (req.contains("autoHomeEnabled")) g_autoHomeEnabled = req.value("autoHomeEnabled", true);
@@ -804,8 +1230,8 @@ void SaveSettingsListener(const char* data) {
 
         SaveINI();
 
-        SKSE::GetTaskInterface()->AddTask([]() {
-            std::string jsCmd = GetWheelJson(true);
+        SKSE::GetTaskInterface()->AddTask([editMode]() {
+            std::string jsCmd = GetWheelJson(editMode);
             PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             RE::DebugNotification("Settings Saved!");
         });
@@ -818,14 +1244,12 @@ void SetTypingModeListener(const char* data) {
     try {
         json req = json::parse(data);
         g_isTyping.store(req.value("typing", false), std::memory_order_release);
-        SKSE::log::info("SetTypingMode updated: {}", g_isTyping.load());
     } catch (const std::exception& e) {
         SKSE::log::error("Exception in SetTypingMode listener: {}", e.what());
     }
 }
 
 void SaveOutfitListener(const char* data) {
-    SKSE::log::info("SaveOutfitToSlot listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
@@ -844,23 +1268,21 @@ void SaveOutfitListener(const char* data) {
 }
 
 void RenameSlotListener(const char* data) {
-    SKSE::log::info("RenameSlot listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
         size_t slotIdx = req.value("slotIndex", 0);
         std::string newName = req.value("newName", "");
-        bool editMode = req.value("editMode", true);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, newName, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, newName]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value() && !newName.empty()) {
                     g_manager.wheels[wheelIdx].slots[slotIdx].outfit->name = newName;
                     SaveDataInternal();
                     RE::DebugNotification(("Renamed outfit to " + newName).c_str());
                 }
-                std::string jsCmd = GetWheelJsonInternal(editMode);
+                std::string jsCmd = GetWheelJsonInternal(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
@@ -870,20 +1292,18 @@ void RenameSlotListener(const char* data) {
 }
 
 void RenameWheelListener(const char* data) {
-    SKSE::log::info("RenameWheel listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
         std::string newName = req.value("newName", "");
-        bool editMode = req.value("editMode", true);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, newName, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, newName]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && !newName.empty()) {
                 g_manager.wheels[wheelIdx].name = newName;
                 SaveDataInternal();
                 RE::DebugNotification(("Renamed wheel to " + newName).c_str());
-                std::string jsCmd = GetWheelJsonInternal(editMode);
+                std::string jsCmd = GetWheelJsonInternal(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
@@ -893,21 +1313,19 @@ void RenameWheelListener(const char* data) {
 }
 
 void ClearSlotListener(const char* data) {
-    SKSE::log::info("ClearSlot listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
         size_t slotIdx = req.value("slotIndex", 0);
-        bool editMode = req.value("editMode", true);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 g_manager.wheels[wheelIdx].slots[slotIdx].outfit.reset();
                 SaveDataInternal();
                 RE::DebugNotification("Cleared outfit data from slot");
 
-                std::string jsCmd = GetWheelJsonInternal(editMode);
+                std::string jsCmd = GetWheelJsonInternal(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
@@ -917,21 +1335,23 @@ void ClearSlotListener(const char* data) {
 }
 
 void DeleteSlotListener(const char* data) {
-    SKSE::log::info("DeleteSlot listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
         size_t slotIdx = req.value("slotIndex", 0);
-        bool editMode = req.value("editMode", true);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
-                g_manager.wheels[wheelIdx].slots.erase(g_manager.wheels[wheelIdx].slots.begin() + slotIdx);
+                if (g_manager.wheels[wheelIdx].slots.size() > 1) {
+                    g_manager.wheels[wheelIdx].slots.erase(g_manager.wheels[wheelIdx].slots.begin() + slotIdx);
+                } else {
+                    g_manager.wheels[wheelIdx].slots[0].outfit.reset();
+                }
                 SaveDataInternal();
                 RE::DebugNotification("Deleted slot!");
 
-                std::string jsCmd = GetWheelJsonInternal(editMode);
+                std::string jsCmd = GetWheelJsonInternal(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
@@ -941,7 +1361,6 @@ void DeleteSlotListener(const char* data) {
 }
 
 void EquipSlotListener(const char* data) {
-    SKSE::log::info("EquipSlot listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
@@ -960,24 +1379,19 @@ void EquipSlotListener(const char* data) {
 }
 
 void OnCloseWheelListener(const char*) {
-    SKSE::log::info("OnCloseWheel listener triggered");
     SKSE::GetTaskInterface()->AddTask([]() {
-        if (PrismaUI) {
-            PrismaUI->Hide(view);
-            isMenuOpen.store(false, std::memory_order_release);
-        }
+        HideWheel();
     });
 }
 
 void ChangeWheelListener(const char* data) {
-    SKSE::log::info("ChangeWheel listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         int delta = req.value("delta", 0);
         bool editMode = req.value("editMode", false);
 
         SKSE::GetTaskInterface()->AddTask([delta, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (g_manager.wheels.empty()) return;
             int current = static_cast<int>(g_manager.activeWheelIndex);
             int total = static_cast<int>(g_manager.wheels.size());
@@ -995,96 +1409,90 @@ void ChangeWheelListener(const char* data) {
 }
 
 void AddWheelListener(const char* data) {
-    SKSE::log::info("AddWheel listener triggered");
+    bool editMode = true;
     try {
-        json req = json::parse(data);
-        bool editMode = req.value("editMode", true);
+        if (data && data[0] != '\0') {
+            json req = json::parse(data);
+            editMode = req.value("editMode", true);
+        }
+    } catch (...) {}
 
-        SKSE::GetTaskInterface()->AddTask([editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
-            Wheel w;
-            w.name = "Wheel " + std::to_string(g_manager.wheels.size() + 1);
-            g_manager.wheels.push_back(w);
-            g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
+    SKSE::GetTaskInterface()->AddTask([editMode]() {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        Wheel w;
+        w.name = "Wheel " + std::to_string(g_manager.wheels.size() + 1);
+        for (size_t i = 0; i < 4; ++i) {
+            Slot s;
+            w.slots.push_back(s);
+        }
+        g_manager.wheels.push_back(w);
+        g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
+        SaveDataInternal();
+
+        std::string jsCmd = GetWheelJsonInternal(editMode);
+        PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+        RE::DebugNotification("Created new wheel!");
+    });
+}
+
+void AddSlotListener(const char* data) {
+    bool editMode = true;
+    try {
+        if (data && data[0] != '\0') {
+            json req = json::parse(data);
+            editMode = req.value("editMode", true);
+        }
+    } catch (...) {}
+
+    SKSE::GetTaskInterface()->AddTask([editMode]() {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (!g_manager.wheels.empty() && g_manager.activeWheelIndex < g_manager.wheels.size()) {
+            Slot s;
+            g_manager.wheels[g_manager.activeWheelIndex].slots.push_back(s);
             SaveDataInternal();
 
             std::string jsCmd = GetWheelJsonInternal(editMode);
             PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-            RE::DebugNotification("Created new wheel!");
-        });
-    } catch (const std::exception& e) {
-        SKSE::log::error("Exception in AddWheel listener: {}", e.what());
-    }
+            RE::DebugNotification("Added slot!");
+        }
+    });
 }
 
-void AddSlotListener(const char* data) {
-    SKSE::log::info("AddSlot listener triggered");
-    try {
-        json req = json::parse(data);
-        bool editMode = req.value("editMode", true);
-
-        SKSE::GetTaskInterface()->AddTask([editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
-            if (!g_manager.wheels.empty() && g_manager.activeWheelIndex < g_manager.wheels.size()) {
-                Slot s;
-                g_manager.wheels[g_manager.activeWheelIndex].slots.push_back(s);
-                SaveDataInternal();
-
-                std::string jsCmd = GetWheelJsonInternal(editMode);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-                RE::DebugNotification("Added slot!");
+void DeleteWheelListener(const char*) {
+    SKSE::GetTaskInterface()->AddTask([]() {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (g_manager.wheels.size() > 1) {
+            g_manager.wheels.erase(g_manager.wheels.begin() + g_manager.activeWheelIndex);
+            if (g_manager.activeWheelIndex >= g_manager.wheels.size()) {
+                g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
             }
-        });
-    } catch (const std::exception& e) {
-        SKSE::log::error("Exception in AddSlot listener: {}", e.what());
-    }
-}
+            SaveDataInternal();
 
-void DeleteWheelListener(const char* data) {
-    SKSE::log::info("DeleteWheel listener triggered");
-    try {
-        json req = json::parse(data);
-        bool editMode = req.value("editMode", true);
-
-        SKSE::GetTaskInterface()->AddTask([editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
-            if (g_manager.wheels.size() > 1) {
-                g_manager.wheels.erase(g_manager.wheels.begin() + g_manager.activeWheelIndex);
-                if (g_manager.activeWheelIndex >= g_manager.wheels.size()) {
-                    g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
-                }
-                SaveDataInternal();
-
-                std::string jsCmd = GetWheelJsonInternal(editMode);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-                RE::DebugNotification("Deleted wheel");
-            } else {
-                RE::DebugNotification("Cannot delete the only wheel!");
-            }
-        });
-    } catch (const std::exception& e) {
-        SKSE::log::error("Exception in DeleteWheel listener: {}", e.what());
-    }
+            std::string jsCmd = GetWheelJsonInternal(true);
+            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            RE::DebugNotification("Deleted wheel");
+        } else {
+            RE::DebugNotification("Cannot delete the only wheel!");
+        }
+    });
 }
 
 void SetSlotContextListener(const char* data) {
-    SKSE::log::info("SetSlotContext listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
         size_t slotIdx = req.value("slotIndex", 0);
         std::string tag = req.value("contextTag", "");
-        bool editMode = req.value("editMode", true);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, tag, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, tag]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                     g_manager.wheels[wheelIdx].slots[slotIdx].outfit->contextTag = tag;
                     SaveDataInternal();
                     RE::DebugNotification(("Context Tag set to: " + (tag.empty() ? "None" : tag)).c_str());
                 }
-                std::string jsCmd = GetWheelJsonInternal(editMode);
+                std::string jsCmd = GetWheelJsonInternal(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
@@ -1094,28 +1502,108 @@ void SetSlotContextListener(const char* data) {
 }
 
 void SetSlotRatingListener(const char* data) {
-    SKSE::log::info("SetSlotRating listener triggered with payload: {}", data ? data : "null");
     try {
         json req = json::parse(data);
         size_t wheelIdx = req.value("wheelIndex", 0);
         size_t slotIdx = req.value("slotIndex", 0);
         uint8_t stars = req.value("ratingStars", static_cast<uint8_t>(3));
-        bool editMode = req.value("editMode", true);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, stars, editMode]() {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, stars]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                     g_manager.wheels[wheelIdx].slots[slotIdx].outfit->preferenceStars = stars;
                     SaveDataInternal();
                     RE::DebugNotification(("Rating set to " + std::to_string(stars) + " Stars").c_str());
                 }
-                std::string jsCmd = GetWheelJsonInternal(editMode);
+                std::string jsCmd = GetWheelJsonInternal(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
     } catch (const std::exception& e) {
         SKSE::log::error("Exception in SetSlotRating listener: {}", e.what());
+    }
+}
+
+void RetrieveAllOutfitsListener(const char*) {
+    SKSE::GetTaskInterface()->AddTask([]() {
+        RetrieveAllOutfitsToPlayer();
+    });
+}
+
+void StashAllOutfitsListener(const char*) {
+    SKSE::GetTaskInterface()->AddTask([]() {
+        StashAllOutfitsToWardrobe();
+    });
+}
+
+void StashSlotOutfitListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+        size_t slotIdx = req.value("slotIndex", 0);
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
+            StashSlotOutfit(wheelIdx, slotIdx);
+            if (PrismaUI) {
+                std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (const std::exception& e) {
+        SKSE::log::error("Exception in StashSlotOutfit listener: {}", e.what());
+    }
+}
+
+void RetrieveSlotOutfitListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+        size_t slotIdx = req.value("slotIndex", 0);
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
+            RetrieveSlotOutfit(wheelIdx, slotIdx);
+            if (PrismaUI) {
+                std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (const std::exception& e) {
+        SKSE::log::error("Exception in RetrieveSlotOutfit listener: {}", e.what());
+    }
+}
+
+void StashWheelOutfitsListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx]() {
+            StashWheelOutfits(wheelIdx);
+            if (PrismaUI) {
+                std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (const std::exception& e) {
+        SKSE::log::error("Exception in StashWheelOutfits listener: {}", e.what());
+    }
+}
+
+void RetrieveWheelOutfitsListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx]() {
+            RetrieveWheelOutfits(wheelIdx);
+            if (PrismaUI) {
+                std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (const std::exception& e) {
+        SKSE::log::error("Exception in RetrieveWheelOutfits listener: {}", e.what());
     }
 }﻿#include "pch.h"
 #include "PrismaUI_API.h"
@@ -1176,6 +1664,7 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             PrismaUI->RegisterConsoleCallback(view, OnConsoleMessageCallbackFunc);
             PrismaUI->RegisterJSListener(view, "SaveSettings", SaveSettingsListener);
             PrismaUI->RegisterJSListener(view, "SetTypingMode", SetTypingModeListener);
+            PrismaUI->RegisterJSListener(view, "SaveOutfit", SaveOutfitListener);
             PrismaUI->RegisterJSListener(view, "SaveOutfitToSlot", SaveOutfitListener);
             PrismaUI->RegisterJSListener(view, "RenameSlot", RenameSlotListener);
             PrismaUI->RegisterJSListener(view, "RenameWheel", RenameWheelListener);
@@ -1189,6 +1678,12 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             PrismaUI->RegisterJSListener(view, "DeleteWheel", DeleteWheelListener);
             PrismaUI->RegisterJSListener(view, "SetSlotContext", SetSlotContextListener);
             PrismaUI->RegisterJSListener(view, "SetSlotRating", SetSlotRatingListener);
+            PrismaUI->RegisterJSListener(view, "RetrieveAllOutfits", RetrieveAllOutfitsListener);
+            PrismaUI->RegisterJSListener(view, "StashAllOutfits", StashAllOutfitsListener);
+            PrismaUI->RegisterJSListener(view, "StashSlotOutfit", StashSlotOutfitListener);
+            PrismaUI->RegisterJSListener(view, "RetrieveSlotOutfit", RetrieveSlotOutfitListener);
+            PrismaUI->RegisterJSListener(view, "StashWheelOutfits", StashWheelOutfitsListener);
+            PrismaUI->RegisterJSListener(view, "RetrieveWheelOutfits", RetrieveWheelOutfitsListener);
             SKSE::log::info("Registered all JS listeners");
         }
 
@@ -1236,6 +1731,8 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
 #include "Settings.h"
+#include <windows.h>
+#include <xinput.h>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -1246,9 +1743,11 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #include <SKSE/SKSE.h>
 
 OutfitManager g_manager;
-std::mutex g_dataMutex;
+std::recursive_mutex g_dataMutex;
 
 static const std::string g_savePath = "Data/SKSE/Plugins/PrismaOutfitWheel.json";
+static const std::string g_fallbackSavePath1 = "Data/SKSE/Plugins/OutfitWheeler.json";
+static const std::string g_fallbackSavePath2 = "Data/SKSE/Plugins/Wheeler.json";
 
 static std::string ToLowerString(std::string str) {
     std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
@@ -1280,6 +1779,10 @@ static ContextFlags ParseContextTagToFlags(const std::string& tag) {
 OutfitManager::OutfitManager() {
     Wheel defaultWheel;
     defaultWheel.name = "Wheel 1";
+    for (size_t i = 0; i < 4; ++i) {
+        Slot s;
+        defaultWheel.slots.push_back(s);
+    }
     wheels.push_back(defaultWheel);
 }
 
@@ -1319,18 +1822,20 @@ void SyncWheelOutfitsToAdaptiveWardrobe() {
 
 static json SerializeFormID(RE::FormID formID) {
     auto* form = RE::TESForm::LookupByID(formID);
-    if (form) {
+    if (form && IsPureApparel(form)) {
         auto* file = form->GetFile(0);
-        if (file) {
+        if (file && file->fileName && file->fileName[0] != '\0') {
             std::string modName = file->fileName;
-            uint32_t localID = file->IsLight() ? (formID & 0x00000FFF) : (formID & 0x00FFFFFF);
-            std::stringstream ss;
-            ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << localID;
-            return json{
-                {"plugin", modName},
-                {"localID", ss.str()},
-                {"rawID", static_cast<uint32_t>(formID)}
-            };
+            if (!modName.empty()) {
+                uint32_t localID = file->IsLight() ? (formID & 0x00000FFF) : (formID & 0x00FFFFFF);
+                std::stringstream ss;
+                ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << localID;
+                return json{
+                    {"plugin", modName},
+                    {"localID", ss.str()},
+                    {"rawID", static_cast<uint32_t>(formID)}
+                };
+            }
         }
     }
     std::stringstream ss;
@@ -1344,7 +1849,10 @@ static json SerializeFormID(RE::FormID formID) {
 
 static RE::FormID DeserializeFormID(const json& jItem) {
     if (jItem.is_number_integer() || jItem.is_number_unsigned()) {
-        return jItem.get<RE::FormID>();
+        RE::FormID raw = jItem.get<RE::FormID>();
+        auto* f = RE::TESForm::LookupByID(raw);
+        if (f && IsPureApparel(f)) return raw;
+        return 0;
     }
     if (jItem.is_object()) {
         std::string plugin = jItem.value("plugin", "");
@@ -1370,14 +1878,16 @@ static RE::FormID DeserializeFormID(const json& jItem) {
             auto* dataHandler = RE::TESDataHandler::GetSingleton();
             if (dataHandler) {
                 auto* boundObj = dataHandler->LookupForm<RE::TESBoundObject>(localID, plugin);
-                if (boundObj) {
+                if (boundObj && IsPureApparel(boundObj)) {
                     return boundObj->GetFormID();
                 }
             }
         }
 
         if (jItem.contains("rawID")) {
-            return jItem.value("rawID", static_cast<RE::FormID>(0));
+            RE::FormID rID = jItem.value("rawID", static_cast<RE::FormID>(0));
+            auto* f = RE::TESForm::LookupByID(rID);
+            if (f && IsPureApparel(f)) return rID;
         }
     }
     return 0;
@@ -1387,6 +1897,7 @@ void SaveDataInternal() {
     try {
         json root;
         root["activeWheel"] = g_manager.activeWheelIndex;
+        root["wardrobeContainerFormID"] = 0;
         json wheelsJson = json::array();
         for (const auto& wheel : g_manager.wheels) {
             json wJson;
@@ -1405,7 +1916,10 @@ void SaveDataInternal() {
 
                     json itemsArray = json::array();
                     for (auto fID : slot.outfit->itemIDs) {
-                        itemsArray.push_back(SerializeFormID(fID));
+                        auto* f = RE::TESForm::LookupByID(fID);
+                        if (f && IsPureApparel(f)) {
+                            itemsArray.push_back(SerializeFormID(fID));
+                        }
                     }
                     sJson["items"] = itemsArray;
                 } else {
@@ -1433,7 +1947,7 @@ void SaveDataInternal() {
                 SKSE::log::error("Failed to open temporary save file at {}", tmpPath);
                 return;
             }
-            file << root.dump(4);
+            file << root.dump();
         }
         std::filesystem::rename(tmpPath, g_savePath);
         SKSE::log::info("Data successfully saved to {}", g_savePath);
@@ -1445,14 +1959,22 @@ void SaveDataInternal() {
 }
 
 void LoadData() {
-    std::lock_guard<std::mutex> lock(g_dataMutex);
-    if (!std::filesystem::exists(g_savePath)) {
-        SKSE::log::info("No save file found at {}", g_savePath);
-        return;
+    std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+    std::string targetPath = g_savePath;
+    if (!std::filesystem::exists(targetPath)) {
+        if (std::filesystem::exists(g_fallbackSavePath1)) {
+            targetPath = g_fallbackSavePath1;
+        } else if (std::filesystem::exists(g_fallbackSavePath2)) {
+            targetPath = g_fallbackSavePath2;
+        } else {
+            SKSE::log::info("No save file found at {} or fallback paths", g_savePath);
+            return;
+        }
     }
-    std::ifstream file(g_savePath);
+
+    std::ifstream file(targetPath);
     if (!file.is_open()) {
-        SKSE::log::error("Failed to open save file for reading at {}", g_savePath);
+        SKSE::log::error("Failed to open save file for reading at {}", targetPath);
         return;
     }
 
@@ -1461,6 +1983,8 @@ void LoadData() {
         if (root.contains("activeWheel") && root["activeWheel"].is_number()) {
             g_manager.activeWheelIndex = root["activeWheel"].get<size_t>();
         }
+        g_manager.wardrobeContainerFormID = 0;
+
         if (root.contains("wheels") && root["wheels"].is_array()) {
             g_manager.wheels.clear();
             for (const auto& wJson : root["wheels"]) {
@@ -1485,12 +2009,21 @@ void LoadData() {
                                 for (const auto& jItem : sJson["items"]) {
                                     RE::FormID resolvedID = DeserializeFormID(jItem);
                                     if (resolvedID != 0) {
-                                        o.itemIDs.push_back(resolvedID);
+                                        auto* form = RE::TESForm::LookupByID(resolvedID);
+                                        if (form && IsPureApparel(form)) {
+                                            o.itemIDs.push_back(resolvedID);
+                                        }
                                     }
                                 }
                             }
                             s.outfit = o;
                         }
+                        w.slots.push_back(s);
+                    }
+                }
+                if (w.slots.empty()) {
+                    for (size_t i = 0; i < 4; ++i) {
+                        Slot s;
                         w.slots.push_back(s);
                     }
                 }
@@ -1500,12 +2033,16 @@ void LoadData() {
         if (g_manager.wheels.empty()) {
             Wheel defaultWheel;
             defaultWheel.name = "Wheel 1";
+            for (size_t i = 0; i < 4; ++i) {
+                Slot s;
+                defaultWheel.slots.push_back(s);
+            }
             g_manager.wheels.push_back(defaultWheel);
         }
         if (g_manager.activeWheelIndex >= g_manager.wheels.size()) {
             g_manager.activeWheelIndex = 0;
         }
-        SKSE::log::info("Successfully loaded data from disk");
+        SKSE::log::info("Successfully loaded data from disk: {}", targetPath);
 
         SyncWheelOutfitsToAdaptiveWardrobe();
     } catch (const std::exception& e) {
@@ -1517,6 +2054,10 @@ std::string GetWheelJsonInternal(bool isEditMode) {
     if (g_manager.wheels.empty()) {
         Wheel defaultWheel;
         defaultWheel.name = "Wheel 1";
+        for (size_t i = 0; i < 4; ++i) {
+            Slot s;
+            defaultWheel.slots.push_back(s);
+        }
         g_manager.wheels.push_back(defaultWheel);
         g_manager.activeWheelIndex = 0;
     }
@@ -1524,11 +2065,12 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         g_manager.activeWheelIndex = 0;
     }
 
-    std::set<RE::FormID> currentlyWornSet;
+    std::vector<RE::FormID> currentlyWornList;
     auto equippedEntries = GetEquippedInventoryEntries();
+    currentlyWornList.reserve(equippedEntries.size());
     for (const auto& entry : equippedEntries) {
-        if (entry.object) {
-            currentlyWornSet.insert(entry.object->GetFormID());
+        if (entry.object && IsPureApparel(entry.object)) {
+            currentlyWornList.push_back(entry.object->GetFormID());
         }
     }
 
@@ -1542,7 +2084,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
             size_t matches = 0;
             for (RE::FormID fID : slot.outfit->itemIDs) {
-                if (currentlyWornSet.find(fID) != currentlyWornSet.end()) {
+                if (std::find(currentlyWornList.begin(), currentlyWornList.end(), fID) != currentlyWornList.end()) {
                     matches++;
                 }
             }
@@ -1558,6 +2100,14 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         idx++;
     }
 
+    bool isGpConnected = false;
+    try {
+        XINPUT_STATE xState{};
+        isGpConnected = (XInputGetState(0, &xState) == ERROR_SUCCESS);
+    } catch (...) {
+        isGpConnected = false;
+    }
+
     json data;
     data["editMode"] = isEditMode;
     data["wheelIndex"] = g_manager.activeWheelIndex;
@@ -1570,6 +2120,12 @@ std::string GetWheelJsonInternal(bool isEditMode) {
     data["playKey"] = g_playKey;
     data["playModifierKey"] = g_playModifierKey;
 
+    data["gamepadPlayKey"] = g_gamepadPlayKey;
+    data["gamepadPlayModifier"] = g_gamepadPlayModifier;
+    data["thumbstickDeadzone"] = g_thumbstickDeadzone;
+    data["gamepadConnected"] = isGpConnected;
+
+    data["autoStashEnabled"] = g_autoStashEnabled;
     data["autoSystemEnabled"] = g_autoSystemEnabled;
     data["autoCityEnabled"] = g_autoCityEnabled;
     data["autoHomeEnabled"] = g_autoHomeEnabled;
@@ -1592,6 +2148,22 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         sJson["isWorn"] = isWorn;
         sJson["isEquipped"] = isWorn;
 
+        bool inWardrobe = false;
+        if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
+            size_t ghostCount = 0;
+            for (RE::FormID fID : slot.outfit->itemIDs) {
+                auto* form = RE::TESForm::LookupByID(fID);
+                auto* bound = form ? form->As<RE::TESBoundObject>() : nullptr;
+                if (bound && IsPureApparel(bound) && ((bound->formFlags & 0x00000004) != 0)) {
+                    ghostCount++;
+                }
+            }
+            if (ghostCount > 0) {
+                inWardrobe = true;
+            }
+        }
+        sJson["isInWardrobe"] = inWardrobe;
+
         slotsJson.push_back(sJson);
         slotIdx++;
     }
@@ -1600,20 +2172,27 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 }
 
 std::string GetWheelJson(bool isEditMode) {
-    std::lock_guard<std::mutex> lock(g_dataMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
     return GetWheelJsonInternal(isEditMode);
 }#include "Settings.h"
 #include <windows.h>
 #include <filesystem>
+#include <string>
 #include <SKSE/SKSE.h>
 
 uint32_t g_editKey = 0x31;
 uint32_t g_editModifierKey = 0x00;
 uint32_t g_playKey = 0x2F;
 uint32_t g_playModifierKey = 0x00;
+
+uint32_t g_gamepadPlayKey = 0x0008;
+uint32_t g_gamepadPlayModifier = 0x0100;
+float g_thumbstickDeadzone = 0.25f;
+
 float g_wheelScale = 1.0f;
 float g_wheelOffsetX = 0.0f;
 
+bool g_autoStashEnabled = false;
 bool g_autoSystemEnabled = true;
 bool g_autoCityEnabled = true;
 bool g_autoHomeEnabled = true;
@@ -1635,6 +2214,10 @@ void LoadINI() {
         g_playKey = GetPrivateProfileIntA("Hotkeys", "kPlayModeKey", 0x2F, targetPath.c_str());
         g_playModifierKey = GetPrivateProfileIntA("Hotkeys", "kPlayModeModifier", 0x00, targetPath.c_str());
 
+        g_gamepadPlayKey = GetPrivateProfileIntA("Gamepad", "kGamepadPlayKey", 0x0008, targetPath.c_str());
+        g_gamepadPlayModifier = GetPrivateProfileIntA("Gamepad", "kGamepadPlayModifier", 0x0100, targetPath.c_str());
+
+        g_autoStashEnabled = GetPrivateProfileIntA("General", "bAutoStashInactive", 0, targetPath.c_str()) != 0;
         g_autoSystemEnabled = GetPrivateProfileIntA("AutoSystem", "bMasterAutoSystem", 1, targetPath.c_str()) != 0;
         g_autoCityEnabled = GetPrivateProfileIntA("AutoSystem", "bAutoCity", 1, targetPath.c_str()) != 0;
         g_autoHomeEnabled = GetPrivateProfileIntA("AutoSystem", "bAutoHome", 1, targetPath.c_str()) != 0;
@@ -1643,18 +2226,10 @@ void LoadINI() {
 
         char buffer[32];
         if (GetPrivateProfileStringA("General", "fWheelScale", "1.0", buffer, sizeof(buffer), targetPath.c_str())) {
-            try {
-                g_wheelScale = std::stof(buffer);
-            } catch (...) {
-                g_wheelScale = 1.0f;
-            }
+            try { g_wheelScale = std::stof(buffer); } catch (...) { g_wheelScale = 1.0f; }
         }
         if (GetPrivateProfileStringA("General", "fWheelOffsetX", "0.0", buffer, sizeof(buffer), targetPath.c_str())) {
-            try {
-                g_wheelOffsetX = std::stof(buffer);
-            } catch (...) {
-                g_wheelOffsetX = 0.0f;
-            }
+            try { g_wheelOffsetX = std::stof(buffer); } catch (...) { g_wheelOffsetX = 0.0f; }
         }
     } else {
         SaveINI();
@@ -1667,8 +2242,13 @@ void SaveINI() {
     WritePrivateProfileStringA("Hotkeys", "kEditModeModifier", std::to_string(g_editModifierKey).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("Hotkeys", "kPlayModeKey", std::to_string(g_playKey).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("Hotkeys", "kPlayModeModifier", std::to_string(g_playModifierKey).c_str(), g_mcmIniPath.c_str());
+
+    WritePrivateProfileStringA("Gamepad", "kGamepadPlayKey", std::to_string(g_gamepadPlayKey).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("Gamepad", "kGamepadPlayModifier", std::to_string(g_gamepadPlayModifier).c_str(), g_mcmIniPath.c_str());
+
     WritePrivateProfileStringA("General", "fWheelScale", std::to_string(g_wheelScale).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("General", "fWheelOffsetX", std::to_string(g_wheelOffsetX).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("General", "bAutoStashInactive", g_autoStashEnabled ? "1" : "0", g_mcmIniPath.c_str());
 
     WritePrivateProfileStringA("AutoSystem", "bMasterAutoSystem", g_autoSystemEnabled ? "1" : "0", g_mcmIniPath.c_str());
     WritePrivateProfileStringA("AutoSystem", "bAutoCity", g_autoCityEnabled ? "1" : "0", g_mcmIniPath.c_str());
@@ -1679,7 +2259,6 @@ void SaveINI() {
 #define ADAPTIVE_WARDROBE_MANAGER_H
 
 #include "AdaptiveWardrobeTypes.h"
-#include <chrono>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -1698,14 +2277,13 @@ private:
     std::vector<AdaptiveOutfit> wardrobe;
     std::string currentOutfitID;
     std::deque<std::string> recentHistory;
-    std::chrono::steady_clock::time_point manualPauseUntil{};
     mutable std::mutex wardrobeMutex;
     std::mt19937 randomEngine;
 
     AdaptiveWardrobeManager();
 
-    float CalculatePreferenceWeight(uint8_t stars) const;
-    float CalculateRepetitionPenalty(const std::string& id) const;
+    float CalculatePreferenceWeight(uint8_t stars) const noexcept;
+    float CalculateRepetitionPenalty(const std::string& id) const noexcept;
 
 public:
     static AdaptiveWardrobeManager* GetSingleton();
@@ -1713,13 +2291,10 @@ public:
     void LoadWardrobe(const std::vector<AdaptiveOutfit>& outfits);
     std::vector<AdaptiveOutfit> GetWardrobe();
 
-    ContextFlags ResolveContextHierarchy(ContextFlags activeContext) const;
+    ContextFlags ResolveContextHierarchy(ContextFlags activeContext) const noexcept;
     std::optional<SelectionResult> SelectOptimalOutfit(ContextFlags activeContext, bool isEmergency);
 
     void RecordOutfitEquipped(const std::string& outfitID, uint32_t currentTimestamp);
-    void PauseAutoSystem(uint32_t durationSeconds);
-    void ClearPause();
-    bool IsPaused() const;
 
     void SetCurrentOutfitID(const std::string& id);
     std::string GetCurrentOutfitID();
@@ -1825,18 +2400,27 @@ inline void from_json(const json& j, AdaptiveOutfit& o) {
 #endif#ifndef EQUIPMENT_MANAGER_H
 #define EQUIPMENT_MANAGER_H
 
-#include <RE/Skyrim.h>
 #include <vector>
+#include <cstdint>
 
 struct InventoryWornEntry {
-    RE::TESBoundObject* object = nullptr;
-    RE::ExtraDataList* extraList = nullptr;
+    RE::TESBoundObject* object{ nullptr };
+    RE::ExtraDataList* extraList{ nullptr };
 };
 
+bool IsPureApparel(RE::TESForm* a_form) noexcept;
 std::vector<InventoryWornEntry> GetEquippedInventoryEntries();
+RE::TESObjectREFR* GetWardrobeContainer();
 void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs);
 void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx);
 void EquipSlotImpl(size_t wheelIdx, size_t slotIdx);
+
+void RetrieveAllOutfitsToPlayer();
+void StashAllOutfitsToWardrobe();
+void StashSlotOutfit(size_t wheelIdx, size_t slotIdx);
+void RetrieveSlotOutfit(size_t wheelIdx, size_t slotIdx);
+void StashWheelOutfits(size_t wheelIdx);
+void RetrieveWheelOutfits(size_t wheelIdx);
 
 #endif#ifndef EXECUTION_QUEUE_H
 #define EXECUTION_QUEUE_H
@@ -1859,7 +2443,7 @@ class ExecutionQueue : public RE::BSTEventSink<RE::TESCombatEvent>,
                        public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>,
                        public RE::BSTEventSink<RE::MenuOpenCloseEvent> {
 private:
-    uint32_t lastEquipTimestamp = 0;
+    ContextFlags lastEnvironmentContext = ContextFlags::None;
     ExecutionQueue() = default;
 
     void RegisterEventsInternal();
@@ -1870,6 +2454,7 @@ public:
     ContextFlags GatherCurrentContext();
 
     void RegisterEvents();
+    void ResetEnvironmentState();
     void EvaluateAndQueueChange(bool isEmergency);
 
     RE::BSEventNotifyControl ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) override;
@@ -1890,6 +2475,7 @@ extern std::atomic<bool> g_isTyping;
 extern bool g_inputRegistered;
 
 void ShowWheel(bool isEditMode);
+void HideWheel();
 
 class WheelInputHandler : public RE::BSTEventSink<RE::InputEvent*> {
 public:
@@ -1920,6 +2506,12 @@ void AddSlotListener(const char* data);
 void DeleteWheelListener(const char* data);
 void SetSlotContextListener(const char* data);
 void SetSlotRatingListener(const char* data);
+void RetrieveAllOutfitsListener(const char* data);
+void StashAllOutfitsListener(const char* data);
+void StashSlotOutfitListener(const char* data);
+void RetrieveSlotOutfitListener(const char* data);
+void StashWheelOutfitsListener(const char* data);
+void RetrieveWheelOutfitsListener(const char* data);
 
 #endif#ifndef OUTFIT_MANAGER_H
 #define OUTFIT_MANAGER_H
@@ -1956,12 +2548,13 @@ struct Wheel {
 struct OutfitManager {
     std::vector<Wheel> wheels;
     size_t activeWheelIndex = 0;
+    uint32_t wardrobeContainerFormID = 0;
 
     OutfitManager();
 };
 
 extern OutfitManager g_manager;
-extern std::mutex g_dataMutex;
+extern std::recursive_mutex g_dataMutex;
 
 void SaveDataInternal();
 void LoadData();
@@ -2193,9 +2786,15 @@ extern uint32_t g_editKey;
 extern uint32_t g_editModifierKey;
 extern uint32_t g_playKey;
 extern uint32_t g_playModifierKey;
+
+extern uint32_t g_gamepadPlayKey;
+extern uint32_t g_gamepadPlayModifier;
+extern float g_thumbstickDeadzone;
+
 extern float g_wheelScale;
 extern float g_wheelOffsetX;
 
+extern bool g_autoStashEnabled;
 extern bool g_autoSystemEnabled;
 extern bool g_autoCityEnabled;
 extern bool g_autoHomeEnabled;

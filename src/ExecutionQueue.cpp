@@ -19,7 +19,23 @@ std::atomic<uint64_t> g_gameSessionGeneration{ 0 };
 std::atomic<uint64_t> g_outfitTaskGeneration{ 0 };
 static std::atomic<bool> g_eventsRegistered{ false };
 static std::atomic<bool> g_skipInitialLoadEval{ true };
-static std::atomic<uint32_t> g_lastEvalTick{ 0 };
+static std::atomic<uint64_t> g_lastEvalTick{ 0 };
+
+static RE::BGSKeyword* g_locTypePlayerHouse = nullptr;
+static RE::BGSKeyword* g_locTypeCity = nullptr;
+static RE::BGSKeyword* g_locTypeTown = nullptr;
+
+static void CacheLocationKeywords() {
+    if (!g_locTypePlayerHouse) {
+        g_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
+    }
+    if (!g_locTypeCity) {
+        g_locTypeCity = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeCity");
+    }
+    if (!g_locTypeTown) {
+        g_locTypeTown = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTown");
+    }
+}
 
 ExecutionQueue* ExecutionQueue::GetSingleton() {
     static ExecutionQueue instance;
@@ -34,6 +50,8 @@ void ExecutionQueue::RegisterEventsInternal() {
     auto ui = RE::UI::GetSingleton();
 
     if (!scriptSource || !player || !ui) return;
+
+    CacheLocationKeywords();
 
     scriptSource->AddEventSink<RE::TESCombatEvent>(this);
     scriptSource->AddEventSink<RE::TESActorLocationChangeEvent>(this);
@@ -60,12 +78,14 @@ void ExecutionQueue::ResetEnvironmentState() {
 }
 
 ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, RE::TESObjectCELL* cell) {
+    CacheLocationKeywords();
+
     if (location) {
-        if (location->HasKeywordString("LocTypePlayerHouse") || (location->parentLoc && location->parentLoc->HasKeywordString("LocTypePlayerHouse"))) {
+        if (g_locTypePlayerHouse && (location->HasKeyword(g_locTypePlayerHouse) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypePlayerHouse)))) {
             return ContextFlags::PlayerHome;
         }
-        if (location->HasKeywordString("LocTypeCity") || location->HasKeywordString("LocTypeTown") ||
-            (location->parentLoc && (location->parentLoc->HasKeywordString("LocTypeCity") || location->parentLoc->HasKeywordString("LocTypeTown")))) {
+        if ((g_locTypeCity && (location->HasKeyword(g_locTypeCity) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypeCity)))) ||
+            (g_locTypeTown && (location->HasKeyword(g_locTypeTown) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypeTown))))) {
             return ContextFlags::CityTown;
         }
     }
@@ -175,8 +195,8 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
         return;
     }
 
-    uint32_t currentTick = GetTickCount();
-    uint32_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
+    uint64_t currentTick = GetTickCount64();
+    uint64_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
     if (!isEmergency && (currentTick - lastTick < 1000)) {
         SKSE::log::info("EvaluateAndQueueChange: Coalesced duplicate cell/location event");
         return;

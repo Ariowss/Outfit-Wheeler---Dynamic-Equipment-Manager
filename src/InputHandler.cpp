@@ -23,6 +23,7 @@ static std::chrono::steady_clock::time_point g_lastToggleTime{};
 static std::chrono::steady_clock::time_point g_lastFilterTime{};
 static std::chrono::steady_clock::time_point g_lastWheelTime{};
 static uint32_t g_currentGamepadMask = 0;
+static float g_lastSentAngle = -999.0f;
 
 static const RE::BSFixedString MENU_CONSOLE("Console");
 static const RE::BSFixedString MENU_RACEMENU("RaceMenu");
@@ -56,6 +57,7 @@ void ShowWheel(bool isEditMode) {
     auto now = std::chrono::steady_clock::now();
     g_lastWheelTime = now + std::chrono::milliseconds(400);
     g_lastFilterTime = now + std::chrono::milliseconds(400);
+    g_lastSentAngle = -999.0f;
 
     isMenuOpen.store(true, std::memory_order_release);
 }
@@ -65,6 +67,7 @@ void HideWheel() {
         PrismaUI->Unfocus(view);
         PrismaUI->Hide(view);
     }
+    g_lastSentAngle = -999.0f;
     isMenuOpen.store(false, std::memory_order_release);
 }
 
@@ -123,11 +126,14 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                 float phi = std::atan2(normX, normY);
                 if (phi < 0.0f) phi += 6.2831853f;
 
-                SKSE::GetTaskInterface()->AddTask([phi]() {
-                    if (PrismaUI && view != 0) {
-                        PrismaUI->InteropCall(view, "setGamepadAngle", std::to_string(phi).c_str());
-                    }
-                });
+                if (std::abs(phi - g_lastSentAngle) > 0.05f) {
+                    g_lastSentAngle = phi;
+                    SKSE::GetTaskInterface()->AddTask([phi]() {
+                        if (PrismaUI && view != 0) {
+                            PrismaUI->InteropCall(view, "setGamepadAngle", std::to_string(phi).c_str());
+                        }
+                    });
+                }
             }
         }
     }

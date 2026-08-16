@@ -272,20 +272,25 @@ function equipOutfit(slotIndex) {
 function changeWheel(delta) {
     if (typeof window.ChangeWheel === 'function' && currentWheelData) {
         window.ChangeWheel(JSON.stringify({
-            delta: delta
+            delta: delta,
+            editMode: isEditModeActive()
         }));
     }
 }
 
 function addWheel() {
     if (typeof window.AddWheel === 'function' && currentWheelData) {
-        window.AddWheel("");
+        window.AddWheel(JSON.stringify({
+            editMode: isEditModeActive()
+        }));
     }
 }
 
 function addSlot() {
     if (typeof window.AddSlot === 'function' && currentWheelData) {
-        window.AddSlot("");
+        window.AddSlot(JSON.stringify({
+            editMode: isEditModeActive()
+        }));
     }
 }
 

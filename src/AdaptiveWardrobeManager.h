@@ -25,8 +25,8 @@ private:
 
     AdaptiveWardrobeManager();
 
-    float CalculatePreferenceWeight(uint8_t stars) const;
-    float CalculateRepetitionPenalty(const std::string& id) const;
+    float CalculatePreferenceWeight(uint8_t stars) const noexcept;
+    float CalculateRepetitionPenalty(const std::string& id) const noexcept;
 
 public:
     static AdaptiveWardrobeManager* GetSingleton();
@@ -34,7 +34,7 @@ public:
     void LoadWardrobe(const std::vector<AdaptiveOutfit>& outfits);
     std::vector<AdaptiveOutfit> GetWardrobe();
 
-    ContextFlags ResolveContextHierarchy(ContextFlags activeContext) const;
+    ContextFlags ResolveContextHierarchy(ContextFlags activeContext) const noexcept;
     std::optional<SelectionResult> SelectOptimalOutfit(ContextFlags activeContext, bool isEmergency);
 
     void RecordOutfitEquipped(const std::string& outfitID, uint32_t currentTimestamp);

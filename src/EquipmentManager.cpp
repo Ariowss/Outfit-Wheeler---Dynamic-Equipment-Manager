@@ -15,15 +15,16 @@
 #include "Settings.h"
 #include <windows.h>
 #include <SKSE/SKSE.h>
-#include <set>
-#include <map>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
 #include <mutex>
 
 static std::mutex g_weightMutex;
-static std::map<RE::FormID, float> g_originalWeights;
+static std::unordered_map<RE::FormID, float> g_originalWeights;
 static uint64_t g_lastEquipTimestamp = 0;
 
-bool IsPureApparel(RE::TESForm* a_form) {
+bool IsPureApparel(RE::TESForm* a_form) noexcept {
     if (!a_form) return false;
     if (a_form->GetFormType() != RE::FormType::Armor) {
         return false;
@@ -71,14 +72,19 @@ std::vector<InventoryWornEntry> GetEquippedInventoryEntries() {
     if (!player) return equipped;
 
     auto inventory = player->GetInventory();
+    equipped.reserve(16);
+
     for (const auto& [item, data] : inventory) {
-        if (item && IsPureApparel(item) && data.second && data.second->extraLists) {
-            for (auto* extraList : *data.second->extraLists) {
-                if (extraList && (extraList->HasType(RE::ExtraDataType::kWorn) || extraList->HasType(RE::ExtraDataType::kWornLeft))) {
-                    InventoryWornEntry entry;
-                    entry.object = item;
-                    entry.extraList = extraList;
-                    equipped.push_back(entry);
+        if (item && data.first > 0 && IsPureApparel(item) && data.second) {
+            auto* entryData = data.second.get();
+            if (entryData && entryData->extraLists) {
+                for (auto* extraList : *entryData->extraLists) {
+                    if (extraList && (extraList->HasType(RE::ExtraDataType::kWorn) || extraList->HasType(RE::ExtraDataType::kWornLeft))) {
+                        InventoryWornEntry entry;
+                        entry.object = item;
+                        entry.extraList = extraList;
+                        equipped.push_back(entry);
+                    }
                 }
             }
         }
@@ -98,27 +104,29 @@ void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equip
         return;
     }
 
-    std::set<RE::FormID> targetSet;
+    std::vector<RE::FormID> targetList;
+    targetList.reserve(targetItemIDs.size());
     for (RE::FormID fID : targetItemIDs) {
         auto* form = RE::TESForm::LookupByID(fID);
         if (form && IsPureApparel(form)) {
-            targetSet.insert(fID);
+            targetList.push_back(fID);
         }
     }
 
     auto currentlyWornEntries = GetEquippedInventoryEntries();
-    std::set<RE::FormID> currentlyWornSet;
+    std::vector<RE::FormID> currentlyWornList;
+    currentlyWornList.reserve(currentlyWornEntries.size());
 
     for (const auto& entry : currentlyWornEntries) {
         if (entry.object && IsPureApparel(entry.object)) {
-            currentlyWornSet.insert(entry.object->GetFormID());
+            currentlyWornList.push_back(entry.object->GetFormID());
         }
     }
 
     for (const auto& entry : currentlyWornEntries) {
         if (entry.object && IsPureApparel(entry.object)) {
             RE::FormID formID = entry.object->GetFormID();
-            if (targetSet.find(formID) == targetSet.end()) {
+            if (std::find(targetList.begin(), targetList.end(), formID) == targetList.end()) {
                 equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
                 if (g_autoStashEnabled) {
                     StashItemToGhost(entry.object);
@@ -127,7 +135,7 @@ void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equip
         }
     }
 
-    for (RE::FormID formID : targetSet) {
+    for (RE::FormID formID : targetList) {
         auto* form = RE::TESForm::LookupByID(formID);
         if (form && IsPureApparel(form)) {
             auto* boundObj = form->As<RE::TESBoundObject>();
@@ -138,8 +146,8 @@ void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equip
     }
 
     auto freshInventory = player->GetInventory();
-    for (RE::FormID formID : targetSet) {
-        if (currentlyWornSet.find(formID) == currentlyWornSet.end()) {
+    for (RE::FormID formID : targetList) {
+        if (std::find(currentlyWornList.begin(), currentlyWornList.end(), formID) == currentlyWornList.end()) {
             auto* form = RE::TESForm::LookupByID(formID);
             if (!form || !IsPureApparel(form)) continue;
 
@@ -148,11 +156,7 @@ void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equip
 
             auto it = freshInventory.find(boundObj);
             if (it != freshInventory.end() && it->second.first > 0) {
-                RE::ExtraDataList* targetExtra = nullptr;
-                if (it->second.second && it->second.second->extraLists && !it->second.second->extraLists->empty()) {
-                    targetExtra = it->second.second->extraLists->front();
-                }
-                equipManager->EquipObject(player, boundObj, targetExtra, 1, nullptr, false, false, false, true);
+                equipManager->EquipObject(player, boundObj, nullptr, 1, nullptr, false, false, false, true);
             }
         }
     }
@@ -165,16 +169,15 @@ void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(g_dataMutex);
-    if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
+    std::string savedName = "Outfit";
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (wheelIdx >= g_manager.wheels.size()) return;
+        if (slotIdx >= g_manager.wheels[wheelIdx].slots.size()) return;
+
         Outfit outfit;
         if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
-            outfit.name = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->name;
-            outfit.contextTag = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->contextTag;
-            outfit.preferenceStars = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->preferenceStars;
-            outfit.controlState = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->controlState;
-            outfit.usageCount = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->usageCount;
-            outfit.lastWornTimestamp = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->lastWornTimestamp;
+            outfit = *g_manager.wheels[wheelIdx].slots[slotIdx].outfit;
         } else {
             outfit.name = "Outfit " + std::to_string(slotIdx + 1);
             outfit.contextTag = "";
@@ -185,20 +188,22 @@ void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
         }
 
         outfit.itemIDs.clear();
+        outfit.itemIDs.reserve(equipped.size());
         for (const auto& entry : equipped) {
             if (entry.object && IsPureApparel(entry.object)) {
                 outfit.itemIDs.push_back(entry.object->GetFormID());
             }
         }
         g_manager.wheels[wheelIdx].slots[slotIdx].outfit = outfit;
+        savedName = outfit.name;
         SaveDataInternal();
-
-        if (g_autoStashEnabled) {
-            StashAllOutfitsToWardrobe();
-        }
-
-        RE::DebugNotification(("Saved " + outfit.name).c_str());
     }
+
+    if (g_autoStashEnabled) {
+        StashAllOutfitsToWardrobe();
+    }
+
+    RE::DebugNotification(("Saved " + savedName).c_str());
 }
 
 void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
@@ -211,7 +216,7 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
     Outfit targetOutfit;
     bool found = false;
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
             if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                 targetOutfit = *g_manager.wheels[wheelIdx].slots[slotIdx].outfit;
@@ -227,6 +232,7 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
     if (!player || !equipManager) return;
 
     std::vector<RE::FormID> sanitizedTargetIDs;
+    sanitizedTargetIDs.reserve(targetOutfit.itemIDs.size());
     for (RE::FormID fID : targetOutfit.itemIDs) {
         auto* form = RE::TESForm::LookupByID(fID);
         if (form && IsPureApparel(form)) {
@@ -235,17 +241,14 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
     }
 
     auto currentlyWornEntries = GetEquippedInventoryEntries();
-    std::set<RE::FormID> currentlyWornSet;
+    size_t matchCount = 0;
+
     for (const auto& entry : currentlyWornEntries) {
         if (entry.object && IsPureApparel(entry.object)) {
-            currentlyWornSet.insert(entry.object->GetFormID());
-        }
-    }
-
-    size_t matchCount = 0;
-    for (RE::FormID fID : sanitizedTargetIDs) {
-        if (currentlyWornSet.find(fID) != currentlyWornSet.end()) {
-            matchCount++;
+            RE::FormID formID = entry.object->GetFormID();
+            if (std::find(sanitizedTargetIDs.begin(), sanitizedTargetIDs.end(), formID) != sanitizedTargetIDs.end()) {
+                matchCount++;
+            }
         }
     }
 
@@ -261,13 +264,10 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
         for (const auto& entry : currentlyWornEntries) {
             if (entry.object && IsPureApparel(entry.object)) {
                 RE::FormID formID = entry.object->GetFormID();
-                for (RE::FormID tID : sanitizedTargetIDs) {
-                    if (formID == tID) {
-                        equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
-                        if (g_autoStashEnabled) {
-                            StashItemToGhost(entry.object);
-                        }
-                        break;
+                if (std::find(sanitizedTargetIDs.begin(), sanitizedTargetIDs.end(), formID) != sanitizedTargetIDs.end()) {
+                    equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
+                    if (g_autoStashEnabled) {
+                        StashItemToGhost(entry.object);
                     }
                 }
             }
@@ -290,7 +290,7 @@ void RetrieveAllOutfitsToPlayer() {
     if (!player) return;
 
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         for (const auto& wheel : g_manager.wheels) {
             for (const auto& slot : wheel.slots) {
                 if (slot.outfit.has_value()) {
@@ -315,17 +315,14 @@ void StashAllOutfitsToWardrobe() {
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
 
-    std::set<RE::FormID> allRegisteredIDs;
+    std::vector<RE::FormID> allRegisteredIDs;
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         for (const auto& wheel : g_manager.wheels) {
             for (const auto& slot : wheel.slots) {
                 if (slot.outfit.has_value()) {
                     for (RE::FormID fID : slot.outfit->itemIDs) {
-                        auto* form = RE::TESForm::LookupByID(fID);
-                        if (form && IsPureApparel(form)) {
-                            allRegisteredIDs.insert(fID);
-                        }
+                        allRegisteredIDs.push_back(fID);
                     }
                 }
             }
@@ -333,15 +330,16 @@ void StashAllOutfitsToWardrobe() {
     }
 
     auto currentlyWorn = GetEquippedInventoryEntries();
-    std::set<RE::FormID> currentlyWornIDs;
+    std::vector<RE::FormID> currentlyWornIDs;
+    currentlyWornIDs.reserve(currentlyWorn.size());
     for (const auto& entry : currentlyWorn) {
-        if (entry.object && IsPureApparel(entry.object)) {
-            currentlyWornIDs.insert(entry.object->GetFormID());
+        if (entry.object) {
+            currentlyWornIDs.push_back(entry.object->GetFormID());
         }
     }
 
     for (RE::FormID fID : allRegisteredIDs) {
-        if (currentlyWornIDs.find(fID) == currentlyWornIDs.end()) {
+        if (std::find(currentlyWornIDs.begin(), currentlyWornIDs.end(), fID) == currentlyWornIDs.end()) {
             auto* form = RE::TESForm::LookupByID(fID);
             if (form && IsPureApparel(form)) {
                 auto* boundObj = form->As<RE::TESBoundObject>();
@@ -363,7 +361,7 @@ void StashSlotOutfit(size_t wheelIdx, size_t slotIdx) {
     std::vector<RE::FormID> slotItems;
     std::string outfitName = "Outfit";
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
             if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                 slotItems = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->itemIDs;
@@ -377,11 +375,8 @@ void StashSlotOutfit(size_t wheelIdx, size_t slotIdx) {
     for (const auto& entry : currentlyWorn) {
         if (entry.object && IsPureApparel(entry.object)) {
             RE::FormID formID = entry.object->GetFormID();
-            for (RE::FormID targetID : slotItems) {
-                if (formID == targetID) {
-                    equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
-                    break;
-                }
+            if (std::find(slotItems.begin(), slotItems.end(), formID) != slotItems.end()) {
+                equipManager->UnequipObject(player, entry.object, entry.extraList, 1, nullptr, false, false, false, true);
             }
         }
     }
@@ -406,7 +401,7 @@ void RetrieveSlotOutfit(size_t wheelIdx, size_t slotIdx) {
     std::vector<RE::FormID> slotItems;
     std::string outfitName = "Outfit";
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
             if (g_manager.wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
                 slotItems = g_manager.wheels[wheelIdx].slots[slotIdx].outfit->itemIDs;
@@ -434,17 +429,14 @@ void StashWheelOutfits(size_t wheelIdx) {
     auto equipManager = RE::ActorEquipManager::GetSingleton();
     if (!player || !equipManager) return;
 
-    std::set<RE::FormID> wheelItemIDs;
+    std::vector<RE::FormID> wheelItemIDs;
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (wheelIdx < g_manager.wheels.size()) {
             for (const auto& slot : g_manager.wheels[wheelIdx].slots) {
                 if (slot.outfit.has_value()) {
                     for (RE::FormID fID : slot.outfit->itemIDs) {
-                        auto* form = RE::TESForm::LookupByID(fID);
-                        if (form && IsPureApparel(form)) {
-                            wheelItemIDs.insert(fID);
-                        }
+                        wheelItemIDs.push_back(fID);
                     }
                 }
             }
@@ -453,15 +445,16 @@ void StashWheelOutfits(size_t wheelIdx) {
     if (wheelItemIDs.empty()) return;
 
     auto currentlyWorn = GetEquippedInventoryEntries();
-    std::set<RE::FormID> currentlyWornIDs;
+    std::vector<RE::FormID> currentlyWornIDs;
+    currentlyWornIDs.reserve(currentlyWorn.size());
     for (const auto& entry : currentlyWorn) {
         if (entry.object && IsPureApparel(entry.object)) {
-            currentlyWornIDs.insert(entry.object->GetFormID());
+            currentlyWornIDs.push_back(entry.object->GetFormID());
         }
     }
 
     for (RE::FormID fID : wheelItemIDs) {
-        if (currentlyWornIDs.find(fID) == currentlyWornIDs.end()) {
+        if (std::find(currentlyWornIDs.begin(), currentlyWornIDs.end(), fID) == currentlyWornIDs.end()) {
             auto* form = RE::TESForm::LookupByID(fID);
             if (form && IsPureApparel(form)) {
                 auto* boundObj = form->As<RE::TESBoundObject>();
@@ -479,17 +472,14 @@ void RetrieveWheelOutfits(size_t wheelIdx) {
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
 
-    std::set<RE::FormID> wheelItemIDs;
+    std::vector<RE::FormID> wheelItemIDs;
     {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (wheelIdx < g_manager.wheels.size()) {
             for (const auto& slot : g_manager.wheels[wheelIdx].slots) {
                 if (slot.outfit.has_value()) {
                     for (RE::FormID fID : slot.outfit->itemIDs) {
-                        auto* form = RE::TESForm::LookupByID(fID);
-                        if (form && IsPureApparel(form)) {
-                            wheelItemIDs.insert(fID);
-                        }
+                        wheelItemIDs.push_back(fID);
                     }
                 }
             }

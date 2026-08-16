@@ -10,6 +10,7 @@
 
 #include "AdaptiveWardrobeManager.h"
 #include <SKSE/SKSE.h>
+#include <array>
 
 AdaptiveWardrobeManager::AdaptiveWardrobeManager() {
     std::random_device rd;
@@ -31,7 +32,7 @@ std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe() {
     return wardrobe;
 }
 
-ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const {
+ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const noexcept {
     if (HasContext(activeContext, ContextFlags::Combat)) return ContextFlags::Combat;
     if (HasContext(activeContext, ContextFlags::Swim)) return ContextFlags::Swim;
     if (HasContext(activeContext, ContextFlags::PlayerHome)) return ContextFlags::PlayerHome;
@@ -39,13 +40,13 @@ ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activ
     return ContextFlags::None;
 }
 
-float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const {
+float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const noexcept {
     static constexpr float kWeightTable[] = { 4.0f, 1.0f, 2.0f, 4.0f, 7.0f, 11.0f };
     if (stars <= 5) return kWeightTable[stars];
     return 4.0f;
 }
 
-float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::string& id) const {
+float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::string& id) const noexcept {
     size_t count = 0;
     for (const auto& historyID : recentHistory) {
         if (historyID == id) {
@@ -66,42 +67,60 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     ContextFlags targetContext = ResolveContextHierarchy(activeContext);
     if (targetContext == ContextFlags::None) return std::nullopt;
 
-    std::vector<const AdaptiveOutfit*> candidates;
-    candidates.reserve(wardrobe.size());
+    if (!currentOutfitID.empty()) {
+        for (const auto& outfit : wardrobe) {
+            if (outfit.id == currentOutfitID && outfit.controlState != ControlState::Excluded) {
+                for (const auto& rule : outfit.suitabilities) {
+                    if (HasContext(rule.contextMask, targetContext)) {
+                        SelectionResult res;
+                        res.selectedOutfit = outfit;
+                        res.reasonCode = "Current Outfit Already Suitable";
+                        res.calculatedWeight = 100.0f;
+                        return res;
+                    }
+                }
+            }
+        }
+    }
+
+    std::array<const AdaptiveOutfit*, 64> candidatesBuffer;
+    size_t candidateCount = 0;
 
     for (const auto& outfit : wardrobe) {
         if (outfit.controlState == ControlState::Excluded) continue;
         for (const auto& rule : outfit.suitabilities) {
             if (HasContext(rule.contextMask, targetContext)) {
-                candidates.push_back(&outfit);
+                if (candidateCount < candidatesBuffer.size()) {
+                    candidatesBuffer[candidateCount++] = &outfit;
+                }
                 break;
             }
         }
     }
 
-    if (candidates.empty()) return std::nullopt;
+    if (candidateCount == 0) return std::nullopt;
 
-    for (const auto* candidate : candidates) {
-        if (candidate->controlState == ControlState::Forced) {
+    for (size_t i = 0; i < candidateCount; ++i) {
+        if (candidatesBuffer[i]->controlState == ControlState::Forced) {
             SelectionResult res;
-            res.selectedOutfit = *candidate;
+            res.selectedOutfit = *candidatesBuffer[i];
             res.reasonCode = "Forced Control State Priority";
             res.calculatedWeight = 99999.0f;
             return res;
         }
     }
 
-    std::vector<float> weights;
-    weights.reserve(candidates.size());
+    std::array<float, 64> weightsBuffer;
     float totalWeight = 0.0f;
 
-    for (const auto* candidate : candidates) {
+    for (size_t i = 0; i < candidateCount; ++i) {
+        const auto* candidate = candidatesBuffer[i];
         float prefWeight = CalculatePreferenceWeight(candidate->preferenceStars);
         float repPenalty = CalculateRepetitionPenalty(candidate->id);
         float ctrlMultiplier = (candidate->controlState == ControlState::Favorite) ? 1.5f : 1.0f;
 
         float weight = prefWeight * repPenalty * ctrlMultiplier;
-        weights.push_back(weight);
+        weightsBuffer[i] = weight;
         totalWeight += weight;
 
         SKSE::log::info("SelectOptimalOutfit: Candidate '{}' ({}) | Stars: {} | RepPenalty: {:.2f} | FinalWeight: {:.2f}",
@@ -115,8 +134,8 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     float currentSum = 0.0f;
     size_t selectedIndex = 0;
 
-    for (size_t i = 0; i < candidates.size(); ++i) {
-        currentSum += weights[i];
+    for (size_t i = 0; i < candidateCount; ++i) {
+        currentSum += weightsBuffer[i];
         if (roll <= currentSum) {
             selectedIndex = i;
             break;
@@ -124,9 +143,9 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     }
 
     SelectionResult result;
-    result.selectedOutfit = *candidates[selectedIndex];
+    result.selectedOutfit = *candidatesBuffer[selectedIndex];
     result.reasonCode = "Weighted Random Selection";
-    result.calculatedWeight = weights[selectedIndex];
+    result.calculatedWeight = weightsBuffer[selectedIndex];
 
     SKSE::log::info("SelectOptimalOutfit: WINNER Selected '{}' ({}) | Weight: {:.2f} / Total: {:.2f} (Prob: {:.1f}%)",
                     result.selectedOutfit.name, result.selectedOutfit.id, result.calculatedWeight, totalWeight,

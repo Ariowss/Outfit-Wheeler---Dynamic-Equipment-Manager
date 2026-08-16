@@ -39,7 +39,7 @@ struct OutfitManager {
 };
 
 extern OutfitManager g_manager;
-extern std::mutex g_dataMutex;
+extern std::recursive_mutex g_dataMutex;
 
 void SaveDataInternal();
 void LoadData();

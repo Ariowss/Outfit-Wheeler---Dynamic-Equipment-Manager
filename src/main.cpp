@@ -57,6 +57,7 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             PrismaUI->RegisterConsoleCallback(view, OnConsoleMessageCallbackFunc);
             PrismaUI->RegisterJSListener(view, "SaveSettings", SaveSettingsListener);
             PrismaUI->RegisterJSListener(view, "SetTypingMode", SetTypingModeListener);
+            PrismaUI->RegisterJSListener(view, "SaveOutfit", SaveOutfitListener);
             PrismaUI->RegisterJSListener(view, "SaveOutfitToSlot", SaveOutfitListener);
             PrismaUI->RegisterJSListener(view, "RenameSlot", RenameSlotListener);
             PrismaUI->RegisterJSListener(view, "RenameWheel", RenameWheelListener);

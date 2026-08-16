@@ -24,7 +24,7 @@
 #include <SKSE/SKSE.h>
 
 OutfitManager g_manager;
-std::mutex g_dataMutex;
+std::recursive_mutex g_dataMutex;
 
 static const std::string g_savePath = "Data/SKSE/Plugins/PrismaOutfitWheel.json";
 static const std::string g_fallbackSavePath1 = "Data/SKSE/Plugins/OutfitWheeler.json";
@@ -105,16 +105,18 @@ static json SerializeFormID(RE::FormID formID) {
     auto* form = RE::TESForm::LookupByID(formID);
     if (form && IsPureApparel(form)) {
         auto* file = form->GetFile(0);
-        if (file) {
+        if (file && file->fileName && file->fileName[0] != '\0') {
             std::string modName = file->fileName;
-            uint32_t localID = file->IsLight() ? (formID & 0x00000FFF) : (formID & 0x00FFFFFF);
-            std::stringstream ss;
-            ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << localID;
-            return json{
-                {"plugin", modName},
-                {"localID", ss.str()},
-                {"rawID", static_cast<uint32_t>(formID)}
-            };
+            if (!modName.empty()) {
+                uint32_t localID = file->IsLight() ? (formID & 0x00000FFF) : (formID & 0x00FFFFFF);
+                std::stringstream ss;
+                ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << localID;
+                return json{
+                    {"plugin", modName},
+                    {"localID", ss.str()},
+                    {"rawID", static_cast<uint32_t>(formID)}
+                };
+            }
         }
     }
     std::stringstream ss;
@@ -226,7 +228,7 @@ void SaveDataInternal() {
                 SKSE::log::error("Failed to open temporary save file at {}", tmpPath);
                 return;
             }
-            file << root.dump(4);
+            file << root.dump();
         }
         std::filesystem::rename(tmpPath, g_savePath);
         SKSE::log::info("Data successfully saved to {}", g_savePath);
@@ -238,7 +240,7 @@ void SaveDataInternal() {
 }
 
 void LoadData() {
-    std::lock_guard<std::mutex> lock(g_dataMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
     std::string targetPath = g_savePath;
     if (!std::filesystem::exists(targetPath)) {
         if (std::filesystem::exists(g_fallbackSavePath1)) {
@@ -344,11 +346,12 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         g_manager.activeWheelIndex = 0;
     }
 
-    std::set<RE::FormID> currentlyWornSet;
+    std::vector<RE::FormID> currentlyWornList;
     auto equippedEntries = GetEquippedInventoryEntries();
+    currentlyWornList.reserve(equippedEntries.size());
     for (const auto& entry : equippedEntries) {
         if (entry.object && IsPureApparel(entry.object)) {
-            currentlyWornSet.insert(entry.object->GetFormID());
+            currentlyWornList.push_back(entry.object->GetFormID());
         }
     }
 
@@ -362,7 +365,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
             size_t matches = 0;
             for (RE::FormID fID : slot.outfit->itemIDs) {
-                if (currentlyWornSet.find(fID) != currentlyWornSet.end()) {
+                if (std::find(currentlyWornList.begin(), currentlyWornList.end(), fID) != currentlyWornList.end()) {
                     matches++;
                 }
             }
@@ -450,6 +453,6 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 }
 
 std::string GetWheelJson(bool isEditMode) {
-    std::lock_guard<std::mutex> lock(g_dataMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
     return GetWheelJsonInternal(isEditMode);
 }
