@@ -367,19 +367,18 @@ html, body {
     background: #b84a4d;
     color: #ffffff;
 }
-#rename-modal, #settings-modal, #context-modal, #keyboard-modal, #gamepad-modal {
-    position: absolute;
+.fullscreen-modal-backdrop {
+    position: fixed;
     top: 0;
     left: 0;
-    width: 580px;
-    height: 580px;
+    width: 100vw;
+    height: 100vh;
     background: rgba(10, 14, 26, 0.85);
     z-index: 100000000;
     display: none;
     justify-content: center;
     align-items: center;
     pointer-events: auto;
-    border-radius: 50%;
 }
 .modal-card {
     background: rgba(19, 27, 38, 0.98);

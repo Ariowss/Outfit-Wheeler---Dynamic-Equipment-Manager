@@ -2,6 +2,7 @@
 #include "Settings.h"
 #include "OutfitManager.h"
 #include "EquipmentManager.h"
+#include "AdaptiveWardrobeManager.h"
 #include "InputHandler.h"
 #include <SKSE/SKSE.h>
 
@@ -29,6 +30,7 @@ void SaveSettingsListener(const char* data) {
 
         if (req.contains("gamepadPlayKey")) g_gamepadPlayKey = req.value("gamepadPlayKey", 0x0008);
         if (req.contains("gamepadPlayModifier")) g_gamepadPlayModifier = req.value("gamepadPlayModifier", 0x0100);
+        if (req.contains("thumbstickDeadzone")) g_thumbstickDeadzone = req.value("thumbstickDeadzone", 0.25f);
 
         if (req.contains("autoStashEnabled")) g_autoStashEnabled = req.value("autoStashEnabled", false);
         if (req.contains("autoSystemEnabled")) g_autoSystemEnabled = req.value("autoSystemEnabled", true);
@@ -40,9 +42,11 @@ void SaveSettingsListener(const char* data) {
         SaveINI();
 
         SKSE::GetTaskInterface()->AddTask([editMode]() {
-            std::string jsCmd = GetWheelJson(editMode);
-            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-            RE::DebugNotification("Settings Saved!");
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJson(editMode);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                RE::DebugNotification("Settings Saved!");
+            }
         });
     } catch (const std::exception& e) {
         SKSE::log::error("Exception in SaveSettings listener: {}", e.what());
@@ -66,7 +70,7 @@ void SaveOutfitListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
             SaveOutfitToSlotImpl(wheelIdx, slotIdx);
-            if (PrismaUI) {
+            if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
@@ -91,8 +95,10 @@ void RenameSlotListener(const char* data) {
                     SaveDataInternal();
                     RE::DebugNotification(("Renamed outfit to " + newName).c_str());
                 }
-                std::string jsCmd = GetWheelJsonInternal(true);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -112,8 +118,10 @@ void RenameWheelListener(const char* data) {
                 g_manager.wheels[wheelIdx].name = newName;
                 SaveDataInternal();
                 RE::DebugNotification(("Renamed wheel to " + newName).c_str());
-                std::string jsCmd = GetWheelJsonInternal(true);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -128,14 +136,24 @@ void ClearSlotListener(const char* data) {
         size_t slotIdx = req.value("slotIndex", 0);
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
+            RetrieveSlotOutfit(wheelIdx, slotIdx);
+
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 g_manager.wheels[wheelIdx].slots[slotIdx].outfit.reset();
-                SaveDataInternal();
-                RE::DebugNotification("Cleared outfit data from slot");
 
-                std::string jsCmd = GetWheelJsonInternal(true);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                std::string thisSlotID = std::to_string(wheelIdx) + "_" + std::to_string(slotIdx);
+                if (AdaptiveWardrobeManager::GetSingleton()->GetCurrentOutfitID() == thisSlotID) {
+                    AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID("");
+                }
+
+                SaveDataInternal();
+                RE::DebugNotification("Cleared outfit data and returned items to inventory");
+
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -150,6 +168,8 @@ void DeleteSlotListener(const char* data) {
         size_t slotIdx = req.value("slotIndex", 0);
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
+            RetrieveSlotOutfit(wheelIdx, slotIdx);
+
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             if (wheelIdx < g_manager.wheels.size() && slotIdx < g_manager.wheels[wheelIdx].slots.size()) {
                 if (g_manager.wheels[wheelIdx].slots.size() > 1) {
@@ -157,11 +177,15 @@ void DeleteSlotListener(const char* data) {
                 } else {
                     g_manager.wheels[wheelIdx].slots[0].outfit.reset();
                 }
-                SaveDataInternal();
-                RE::DebugNotification("Deleted slot!");
 
-                std::string jsCmd = GetWheelJsonInternal(true);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID("");
+                SaveDataInternal();
+                RE::DebugNotification("Deleted slot and returned items to inventory!");
+
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -177,7 +201,7 @@ void EquipSlotListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
             EquipSlotImpl(wheelIdx, slotIdx);
-            if (PrismaUI) {
+            if (PrismaUI && view != 0) {
                 PrismaUI->Hide(view);
                 isMenuOpen.store(false, std::memory_order_release);
             }
@@ -204,13 +228,16 @@ void ChangeWheelListener(const char* data) {
             if (g_manager.wheels.empty()) return;
             int current = static_cast<int>(g_manager.activeWheelIndex);
             int total = static_cast<int>(g_manager.wheels.size());
+            if (total <= 0) return;
             current = (current + delta) % total;
             if (current < 0) current += total;
             g_manager.activeWheelIndex = static_cast<size_t>(current);
             SaveDataInternal();
 
-            std::string jsCmd = GetWheelJsonInternal(editMode);
-            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(editMode);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
         });
     } catch (const std::exception& e) {
         SKSE::log::error("Exception in ChangeWheel listener: {}", e.what());
@@ -238,9 +265,11 @@ void AddWheelListener(const char* data) {
         g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
         SaveDataInternal();
 
-        std::string jsCmd = GetWheelJsonInternal(editMode);
-        PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-        RE::DebugNotification("Created new wheel!");
+        if (PrismaUI && view != 0) {
+            std::string jsCmd = GetWheelJsonInternal(editMode);
+            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            RE::DebugNotification("Created new wheel!");
+        }
     });
 }
 
@@ -260,9 +289,11 @@ void AddSlotListener(const char* data) {
             g_manager.wheels[g_manager.activeWheelIndex].slots.push_back(s);
             SaveDataInternal();
 
-            std::string jsCmd = GetWheelJsonInternal(editMode);
-            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-            RE::DebugNotification("Added slot!");
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(editMode);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                RE::DebugNotification("Added slot!");
+            }
         }
     });
 }
@@ -271,15 +302,22 @@ void DeleteWheelListener(const char*) {
     SKSE::GetTaskInterface()->AddTask([]() {
         std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         if (g_manager.wheels.size() > 1) {
-            g_manager.wheels.erase(g_manager.wheels.begin() + g_manager.activeWheelIndex);
+            size_t delIdx = g_manager.activeWheelIndex;
+            RetrieveWheelOutfits(delIdx);
+
+            g_manager.wheels.erase(g_manager.wheels.begin() + delIdx);
             if (g_manager.activeWheelIndex >= g_manager.wheels.size()) {
                 g_manager.activeWheelIndex = g_manager.wheels.size() - 1;
             }
+
+            AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID("");
             SaveDataInternal();
 
-            std::string jsCmd = GetWheelJsonInternal(true);
-            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
-            RE::DebugNotification("Deleted wheel");
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                RE::DebugNotification("Deleted wheel and returned items to inventory");
+            }
         } else {
             RE::DebugNotification("Cannot delete the only wheel!");
         }
@@ -301,8 +339,10 @@ void SetSlotContextListener(const char* data) {
                     SaveDataInternal();
                     RE::DebugNotification(("Context Tag set to: " + (tag.empty() ? "None" : tag)).c_str());
                 }
-                std::string jsCmd = GetWheelJsonInternal(true);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -325,8 +365,10 @@ void SetSlotRatingListener(const char* data) {
                     SaveDataInternal();
                     RE::DebugNotification(("Rating set to " + std::to_string(stars) + " Stars").c_str());
                 }
-                std::string jsCmd = GetWheelJsonInternal(true);
-                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -337,12 +379,20 @@ void SetSlotRatingListener(const char* data) {
 void RetrieveAllOutfitsListener(const char*) {
     SKSE::GetTaskInterface()->AddTask([]() {
         RetrieveAllOutfitsToPlayer();
+        if (PrismaUI && view != 0) {
+            std::string jsCmd = GetWheelJsonInternal(true);
+            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+        }
     });
 }
 
 void StashAllOutfitsListener(const char*) {
     SKSE::GetTaskInterface()->AddTask([]() {
         StashAllOutfitsToWardrobe();
+        if (PrismaUI && view != 0) {
+            std::string jsCmd = GetWheelJsonInternal(true);
+            PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+        }
     });
 }
 
@@ -354,7 +404,7 @@ void StashSlotOutfitListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
             StashSlotOutfit(wheelIdx, slotIdx);
-            if (PrismaUI) {
+            if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
@@ -372,7 +422,7 @@ void RetrieveSlotOutfitListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
             RetrieveSlotOutfit(wheelIdx, slotIdx);
-            if (PrismaUI) {
+            if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
@@ -389,7 +439,7 @@ void StashWheelOutfitsListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx]() {
             StashWheelOutfits(wheelIdx);
-            if (PrismaUI) {
+            if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
@@ -406,7 +456,7 @@ void RetrieveWheelOutfitsListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx]() {
             RetrieveWheelOutfits(wheelIdx);
-            if (PrismaUI) {
+            if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }

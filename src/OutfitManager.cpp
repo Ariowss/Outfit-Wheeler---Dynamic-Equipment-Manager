@@ -230,9 +230,16 @@ void SaveDataInternal() {
             }
             file << root.dump();
         }
-        std::filesystem::rename(tmpPath, g_savePath);
-        SKSE::log::info("Data successfully saved to {}", g_savePath);
 
+        std::error_code ec;
+        std::filesystem::remove(g_savePath, ec);
+        std::filesystem::rename(tmpPath, g_savePath, ec);
+        if (ec) {
+            std::filesystem::copy_file(tmpPath, g_savePath, std::filesystem::copy_options::overwrite_existing, ec);
+            std::filesystem::remove(tmpPath, ec);
+        }
+
+        SKSE::log::info("Data successfully saved to {}", g_savePath);
         SyncWheelOutfitsToAdaptiveWardrobe();
     } catch (const std::exception& e) {
         SKSE::log::error("Exception in SaveDataInternal: {}", e.what());
@@ -355,31 +362,14 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         }
     }
 
-    const auto& activeWheel = g_manager.wheels[g_manager.activeWheelIndex];
-    size_t bestMatchingSlotIndex = SIZE_MAX;
-    float bestMatchRatio = 0.0f;
-    size_t maxMatches = 0;
-
-    size_t idx = 0;
-    for (const auto& slot : activeWheel.slots) {
-        if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
-            size_t matches = 0;
-            for (RE::FormID fID : slot.outfit->itemIDs) {
-                if (std::find(currentlyWornList.begin(), currentlyWornList.end(), fID) != currentlyWornList.end()) {
-                    matches++;
-                }
-            }
-            if (matches > 0) {
-                float ratio = static_cast<float>(matches) / static_cast<float>(slot.outfit->itemIDs.size());
-                if (ratio > bestMatchRatio || (ratio == bestMatchRatio && matches > maxMatches)) {
-                    bestMatchRatio = ratio;
-                    maxMatches = matches;
-                    bestMatchingSlotIndex = idx;
-                }
-            }
-        }
-        idx++;
+    auto* wardrobe = GetWardrobeContainer();
+    RE::TESObjectREFR::InventoryItemMap wardrobeInv;
+    if (wardrobe) {
+        wardrobeInv = wardrobe->GetInventory();
     }
+
+    const auto& activeWheel = g_manager.wheels[g_manager.activeWheelIndex];
+    std::string currentActiveID = AdaptiveWardrobeManager::GetSingleton()->GetCurrentOutfitID();
 
     bool isGpConnected = false;
     try {
@@ -425,21 +415,34 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         sJson["preferenceStars"] = slot.outfit.has_value() ? slot.outfit->preferenceStars : 3;
         sJson["controlState"] = slot.outfit.has_value() ? static_cast<uint8_t>(slot.outfit->controlState) : 0;
 
-        bool isWorn = (slotIdx == bestMatchingSlotIndex && bestMatchRatio >= 0.5f);
+        std::string thisSlotID = std::to_string(g_manager.activeWheelIndex) + "_" + std::to_string(slotIdx);
+        bool isWorn = false;
+        if (!currentActiveID.empty()) {
+            isWorn = (thisSlotID == currentActiveID);
+        } else if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
+            size_t matches = 0;
+            for (RE::FormID fID : slot.outfit->itemIDs) {
+                if (std::find(currentlyWornList.begin(), currentlyWornList.end(), fID) != currentlyWornList.end()) {
+                    matches++;
+                }
+            }
+            isWorn = (matches == slot.outfit->itemIDs.size() && matches == currentlyWornList.size());
+        }
+
         sJson["isWorn"] = isWorn;
         sJson["isEquipped"] = isWorn;
 
         bool inWardrobe = false;
-        if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
-            size_t ghostCount = 0;
+        if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty() && wardrobe) {
+            size_t foundInWardrobe = 0;
             for (RE::FormID fID : slot.outfit->itemIDs) {
                 auto* form = RE::TESForm::LookupByID(fID);
                 auto* bound = form ? form->As<RE::TESBoundObject>() : nullptr;
-                if (bound && IsPureApparel(bound) && ((bound->formFlags & 0x00000004) != 0)) {
-                    ghostCount++;
+                if (bound && wardrobeInv.find(bound) != wardrobeInv.end()) {
+                    foundInWardrobe++;
                 }
             }
-            if (ghostCount > 0) {
+            if (foundInWardrobe > 0) {
                 inWardrobe = true;
             }
         }

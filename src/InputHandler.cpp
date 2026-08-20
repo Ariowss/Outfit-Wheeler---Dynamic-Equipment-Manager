@@ -47,6 +47,16 @@ static inline bool IsModifierMatch(uint32_t modKey, bool shift, bool ctrl, bool 
     return false;
 }
 
+static bool GetActiveGamepadState(XINPUT_STATE* outState) {
+    for (DWORD i = 0; i < 4; ++i) {
+        ZeroMemory(outState, sizeof(XINPUT_STATE));
+        if (XInputGetState(i, outState) == ERROR_SUCCESS) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ShowWheel(bool isEditMode) {
     if (!PrismaUI || view == 0) return;
     std::string wheelDataJson = GetWheelJson(isEditMode);
@@ -89,7 +99,7 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     if (!a_event || !*a_event) return RE::BSEventNotifyControl::kContinue;
 
     auto player = RE::PlayerCharacter::GetSingleton();
-    if (!player || !player->Is3DLoaded()) return RE::BSEventNotifyControl::kContinue;
+    if (!player || !player->Is3DLoaded() || player->IsDead()) return RE::BSEventNotifyControl::kContinue;
 
     auto ui = RE::UI::GetSingleton();
     if (!ui) return RE::BSEventNotifyControl::kContinue;
@@ -113,8 +123,7 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
         }
     } else {
         XINPUT_STATE xState;
-        ZeroMemory(&xState, sizeof(XINPUT_STATE));
-        if (XInputGetState(0, &xState) == ERROR_SUCCESS) {
+        if (GetActiveGamepadState(&xState)) {
             float lx = static_cast<float>(xState.Gamepad.sThumbLX);
             float ly = static_cast<float>(xState.Gamepad.sThumbLY);
 
@@ -151,11 +160,6 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
             uint32_t keyCode = buttonEvent->GetIDCode();
 
             if (device == RE::INPUT_DEVICE::kKeyboard && buttonEvent->IsPressed()) {
-                if (keyCode == 0x01 && currentlyOpen) {
-                    SKSE::GetTaskInterface()->AddTask([]() { HideWheel(); });
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
                 if (!isTypingActive) {
                     bool editModMatch = IsModifierMatch(g_editModifierKey, shift, ctrl, alt);
                     bool playModMatch = IsModifierMatch(g_playModifierKey, shift, ctrl, alt);
@@ -192,7 +196,9 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                         });
 
                         if (keyCode == 0x2000 || keyCode == 0x0020 || keyCode == 0x0010) {
-                            SKSE::GetTaskInterface()->AddTask([]() { HideWheel(); });
+                            if (!isTypingActive) {
+                                SKSE::GetTaskInterface()->AddTask([]() { HideWheel(); });
+                            }
                             return RE::BSEventNotifyControl::kContinue;
                         }
                         if (keyCode == 0x1000) {

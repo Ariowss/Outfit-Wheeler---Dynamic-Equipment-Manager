@@ -55,6 +55,9 @@ void LoadINI() {
         if (GetPrivateProfileStringA("General", "fWheelOffsetX", "0.0", buffer, sizeof(buffer), targetPath.c_str())) {
             try { g_wheelOffsetX = std::stof(buffer); } catch (...) { g_wheelOffsetX = 0.0f; }
         }
+        if (GetPrivateProfileStringA("Gamepad", "fThumbstickDeadzone", "0.25", buffer, sizeof(buffer), targetPath.c_str())) {
+            try { g_thumbstickDeadzone = std::stof(buffer); } catch (...) { g_thumbstickDeadzone = 0.25f; }
+        }
     } else {
         SaveINI();
     }
@@ -69,6 +72,7 @@ void SaveINI() {
 
     WritePrivateProfileStringA("Gamepad", "kGamepadPlayKey", std::to_string(g_gamepadPlayKey).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("Gamepad", "kGamepadPlayModifier", std::to_string(g_gamepadPlayModifier).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("Gamepad", "fThumbstickDeadzone", std::to_string(g_thumbstickDeadzone).c_str(), g_mcmIniPath.c_str());
 
     WritePrivateProfileStringA("General", "fWheelScale", std::to_string(g_wheelScale).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("General", "fWheelOffsetX", std::to_string(g_wheelOffsetX).c_str(), g_mcmIniPath.c_str());

@@ -11,6 +11,7 @@
 #include "ExecutionQueue.h"
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "InputHandler.h"
 #include "Settings.h"
 #include <SKSE/SKSE.h>
 
@@ -133,7 +134,7 @@ ContextFlags ExecutionQueue::GatherCurrentContext() {
     auto actorState = player->AsActorState();
     float waterHeight = player->GetWaterHeight();
     float playerZ = player->GetPositionZ();
-    if (((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 20.0f)) && g_autoSwimEnabled) {
+    if (((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 80.0f)) && g_autoSwimEnabled) {
         flags |= ContextFlags::Swim;
     }
 
@@ -141,9 +142,14 @@ ContextFlags ExecutionQueue::GatherCurrentContext() {
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) {
-    if (!a_event || !a_event->targetActor || !a_event->targetActor->IsPlayerRef()) {
+    if (!a_event) return RE::BSEventNotifyControl::kContinue;
+
+    bool involvesPlayer = (a_event->actor && a_event->actor->IsPlayerRef()) ||
+                          (a_event->targetActor && a_event->targetActor->IsPlayerRef());
+    if (!involvesPlayer) {
         return RE::BSEventNotifyControl::kContinue;
     }
+
     SKSE::log::info("ProcessEvent: TESCombatEvent fired");
     if (a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat) {
         EvaluateAndQueueChange(true);
@@ -189,6 +195,11 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::MenuOpenCloseEve
 void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
     if (!g_autoSystemEnabled) return;
 
+    if (isMenuOpen.load(std::memory_order_acquire)) {
+        SKSE::log::info("EvaluateAndQueueChange: Skipped - Wheel menu is currently open");
+        return;
+    }
+
     if (g_skipInitialLoadEval.exchange(false, std::memory_order_acq_rel)) {
         SKSE::log::info("EvaluateAndQueueChange: Skipped - Initial game load");
         lastEnvironmentContext = GatherCurrentContext();
@@ -215,8 +226,8 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
     }
 
     auto playerRef = RE::PlayerCharacter::GetSingleton();
-    if (!playerRef || !playerRef->Is3DLoaded()) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Player or 3D not loaded");
+    if (!playerRef || !playerRef->Is3DLoaded() || playerRef->IsDead()) {
+        SKSE::log::info("EvaluateAndQueueChange: Skipped - Player or 3D not loaded or dead");
         return;
     }
 
@@ -257,7 +268,7 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
     SKSE::GetTaskInterface()->AddTask([manager, targetID, targetName, targetItems]() {
         auto player = RE::PlayerCharacter::GetSingleton();
         auto equipManager = RE::ActorEquipManager::GetSingleton();
-        if (!player || !equipManager || !player->Is3DLoaded()) {
+        if (!player || !equipManager || !player->Is3DLoaded() || player->IsDead()) {
             SKSE::log::info("TaskLambda: Skipped - Player/EquipManager null or 3D not loaded");
             return;
         }

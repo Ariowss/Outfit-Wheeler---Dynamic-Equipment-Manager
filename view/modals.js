@@ -58,11 +58,11 @@ function showSlotContextMenu(x, y, slotIndex) {
     let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
     let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
 
-    if (posX + 190 > window.innerWidth) posX = window.innerWidth - 200;
-    if (posY + 220 > window.innerHeight) posY = window.innerHeight - 230;
+    posX = Math.max(10, Math.min(posX, window.innerWidth - 200));
+    posY = Math.max(10, Math.min(posY, window.innerHeight - 230));
 
-    menu.style.left = Math.max(10, posX) + 'px';
-    menu.style.top = Math.max(10, posY) + 'px';
+    menu.style.left = posX + 'px';
+    menu.style.top = posY + 'px';
     menu.style.display = 'flex';
     lastMenuOpenTime = Date.now();
 }
@@ -102,8 +102,11 @@ function showWheelContextMenu(x, y) {
     let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
     let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
 
-    menu.style.left = Math.min(posX, window.innerWidth - 180) + 'px';
-    menu.style.top = Math.min(posY, window.innerHeight - 180) + 'px';
+    posX = Math.max(10, Math.min(posX, window.innerWidth - 200));
+    posY = Math.max(10, Math.min(posY, window.innerHeight - 200));
+
+    menu.style.left = posX + 'px';
+    menu.style.top = posY + 'px';
     menu.style.display = 'flex';
     lastMenuOpenTime = Date.now();
 }
@@ -175,6 +178,9 @@ function openSettingsModal(e) {
 }
 
 function hideSettingsModal() {
+    tempScale = currentWheelData.wheelScale || 1.0;
+    tempOffsetX = currentWheelData.wheelOffsetX || 0.0;
+    applyTransform();
     hideAllModals();
     setTyping(false);
 }
@@ -274,6 +280,7 @@ function saveSettings() {
 
     if (typeof window.SaveSettings === 'function') {
         window.SaveSettings(JSON.stringify({
+            editMode: isEditModeActive(),
             wheelScale: tempScale,
             wheelOffsetX: tempOffsetX,
             editKey: tempEditKey,

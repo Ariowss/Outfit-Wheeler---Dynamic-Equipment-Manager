@@ -1,4 +1,15 @@
 var lastEquipCallTimestamp = 0;
+var updateWheelRafId = null;
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
 
 function describeArc(x, y, innerRadius, outerRadius, startAngle, endAngle) {
     const x1_out = x + outerRadius * Math.cos(startAngle);
@@ -23,7 +34,11 @@ function describeArc(x, y, innerRadius, outerRadius, startAngle, endAngle) {
 }
 
 function updateWheelUI() {
-    window.requestAnimationFrame(() => {
+    if (updateWheelRafId) {
+        window.cancelAnimationFrame(updateWheelRafId);
+    }
+    updateWheelRafId = window.requestAnimationFrame(() => {
+        updateWheelRafId = null;
         const container = document.getElementById('wheel-container');
         const svg = document.getElementById('wheel-svg');
         const labelsContainer = document.getElementById('labels-container');
@@ -93,6 +108,7 @@ function updateWheelUI() {
         const rMid = (rIn + rOut) / 2;
 
         const sliceAngle = (2 * Math.PI) / total;
+        const gapAngle = Math.min(0.02, sliceAngle * 0.08);
 
         const svgFragment = document.createDocumentFragment();
         const labelFragment = document.createDocumentFragment();
@@ -103,7 +119,6 @@ function updateWheelUI() {
                 startAngle = -Math.PI / 2;
                 endAngle = startAngle + (2 * Math.PI) - 0.001;
             } else {
-                const gapAngle = 0.02;
                 startAngle = (index * sliceAngle) - (Math.PI / 2) + (gapAngle / 2);
                 endAngle = ((index + 1) * sliceAngle) - (Math.PI / 2) - (gapAngle / 2);
             }
@@ -205,7 +220,7 @@ function updateWheelUI() {
 
             if (hasOutfit) {
                 labelEl.innerHTML = '<div class="slot-icon">' + svgOutfitIcon + '</div>' +
-                    '<div class="slot-title">' + slot.name + '</div>' +
+                    '<div class="slot-title">' + escapeHtml(slot.name) + '</div>' +
                     '<div class="slot-subtitle">' + (inCloud ? 'Cloud Stored' : (slot.count + ' items')) + '</div>' +
                     (isEquipped ? '<div class="slot-equipped-badge">EQUIPPED</div>' : '');
             } else {

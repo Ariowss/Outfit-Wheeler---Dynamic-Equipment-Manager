@@ -10,8 +10,10 @@ struct InventoryWornEntry {
 };
 
 bool IsPureApparel(RE::TESForm* a_form) noexcept;
+bool IsItemInAnyWheelOutfit(RE::FormID a_formID);
 std::vector<InventoryWornEntry> GetEquippedInventoryEntries();
 RE::TESObjectREFR* GetWardrobeContainer();
+
 void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs);
 void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx);
 void EquipSlotImpl(size_t wheelIdx, size_t slotIdx);

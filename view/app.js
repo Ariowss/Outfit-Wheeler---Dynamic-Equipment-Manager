@@ -72,12 +72,26 @@ var tempOffsetX = 0.0;
 var tempStars = 3;
 var toastTimeout = null;
 var lastMenuOpenTime = 0;
+var lastEscTimestamp = 0;
+var lastWheelScrollTimestamp = 0;
 
 var modNameMap = { 0: 'None', 42: 'Shift', 29: 'Ctrl', 56: 'Alt' };
 var gpModNameMap = { 0: 'None', 256: 'LB', 512: 'RB', 9: 'LT', 10: 'RT' };
 
 var svgOutfitIcon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 2L2 5V10C2 15.52 6.48 20.74 12 22C17.52 20.74 22 15.52 22 10V5L17 2L12 5L7 2Z" fill="rgba(82, 165, 245, 0.15)" stroke="#79bac1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 5V22" stroke="#6c829c" stroke-width="1.2" stroke-dasharray="2 2"/><path d="M7 8H17" stroke="#79bac1" stroke-width="1.5" stroke-linecap="round"/><path d="M8 12H16" stroke="#6c829c" stroke-width="1.2" stroke-linecap="round"/><circle cx="12" cy="8" r="1.5" fill="#fad165"/></svg>';
 var svgPlusIcon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="#6c829c" stroke-width="1.5" stroke-dasharray="3 3"/><path d="M12 8V16M8 12H16" stroke="#a3b8cc" stroke-width="2" stroke-linecap="round"/></svg>';
+
+function isAnyModalOpen() {
+    const modalIds = ['rename-modal', 'context-modal', 'settings-modal', 'keyboard-modal', 'gamepad-modal'];
+    for (let id of modalIds) {
+        const el = document.getElementById(id);
+        if (el && el.style.display === 'flex') return true;
+    }
+    const slotCtx = document.getElementById('slot-context-menu');
+    const wheelCtx = document.getElementById('wheel-context-menu');
+    if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) return true;
+    return false;
+}
 
 function getScanCode(e) {
     if (e.code && scanCodeMap[e.code]) {
@@ -200,7 +214,10 @@ window.setGamepadAngle = function(phiStr) {
     if (total === 0) return;
 
     const sliceAngle = (2 * Math.PI) / total;
-    let targetIdx = Math.floor(phi / sliceAngle);
+    let normalizedPhi = phi + (sliceAngle / 2);
+    if (normalizedPhi >= 2 * Math.PI) normalizedPhi -= 2 * Math.PI;
+
+    let targetIdx = Math.floor(normalizedPhi / sliceAngle);
     if (targetIdx >= total) targetIdx = total - 1;
 
     if (targetIdx !== gamepadHoverSlotIndex) {
@@ -231,6 +248,8 @@ window.onGamepadButtonPress = function(codeStr) {
 };
 
 window.gamepadConfirm = function() {
+    if (isAnyModalOpen()) return;
+
     const paths = document.querySelectorAll('.slice-path');
     if (gamepadHoverSlotIndex !== null && gamepadHoverSlotIndex < paths.length) {
         const targetPath = paths[gamepadHoverSlotIndex];
@@ -248,11 +267,13 @@ window.gamepadConfirm = function() {
 };
 
 window.gamepadCycleWheel = function(deltaStr) {
+    if (isAnyModalOpen()) return;
     const delta = parseInt(deltaStr) || 1;
     changeWheel(delta);
 };
 
 window.gamepadCycleFilter = function(deltaStr) {
+    if (isAnyModalOpen()) return;
     const delta = parseInt(deltaStr) || 1;
     const tags = ['ALL', 'City', 'Home', 'Combat', 'Swim'];
     let currentIdx = tags.indexOf(activeCategoryFilter);
@@ -347,37 +368,80 @@ function handleEscClose(e) {
             e.stopPropagation();
         }
 
-        const renameModal = document.getElementById('rename-modal');
-        if (renameModal && renameModal.style.display === 'flex') {
-            hideRenameModal();
+        const now = Date.now();
+        if (now - lastEscTimestamp < 200) {
             return true;
         }
-        const ctxModal = document.getElementById('context-modal');
-        if (ctxModal && ctxModal.style.display === 'flex') {
-            hideContextModal();
+        lastEscTimestamp = now;
+
+        if (listeningKeyType || listeningGamepadType) {
+            listeningKeyType = null;
+            listeningGamepadType = null;
+            const editBtn = document.getElementById('btn-edit-key');
+            const playBtn = document.getElementById('btn-play-key');
+            const gpPlayBtn = document.getElementById('btn-gp-play-key');
+            if (editBtn) {
+                editBtn.innerText = '[' + getKeyName(tempEditKey) + ']';
+                editBtn.classList.remove('listening');
+            }
+            if (playBtn) {
+                playBtn.innerText = '[' + getKeyName(tempPlayKey) + ']';
+                playBtn.classList.remove('listening');
+            }
+            if (gpPlayBtn) {
+                gpPlayBtn.innerText = '[' + (gamepadNames[tempGamepadPlayKey] ? gamepadNames[tempGamepadPlayKey] : ('0x' + tempGamepadPlayKey.toString(16).toUpperCase())) + ']';
+                gpPlayBtn.classList.remove('listening');
+            }
             return true;
         }
-        const gpModal = document.getElementById('gamepad-modal');
-        if (gpModal && gpModal.style.display === 'flex') {
-            hideGamepadModal();
+
+        const ddEdit = document.getElementById('dd-edit-list');
+        const ddPlay = document.getElementById('dd-play-list');
+        const ddGpPlay = document.getElementById('dd-gp-play-list');
+        if ((ddEdit && ddEdit.style.display === 'flex') ||
+            (ddPlay && ddPlay.style.display === 'flex') ||
+            (ddGpPlay && ddGpPlay.style.display === 'flex')) {
+            closeAllDropdowns();
             return true;
         }
+
         const kbModal = document.getElementById('keyboard-modal');
         if (kbModal && kbModal.style.display === 'flex') {
             hideKeyboardModal();
             return true;
         }
+
+        const gpModal = document.getElementById('gamepad-modal');
+        if (gpModal && gpModal.style.display === 'flex') {
+            hideGamepadModal();
+            return true;
+        }
+
+        const renameModal = document.getElementById('rename-modal');
+        if (renameModal && renameModal.style.display === 'flex') {
+            hideRenameModal();
+            return true;
+        }
+
+        const ctxModal = document.getElementById('context-modal');
+        if (ctxModal && ctxModal.style.display === 'flex') {
+            hideContextModal();
+            return true;
+        }
+
         const settingsModal = document.getElementById('settings-modal');
         if (settingsModal && settingsModal.style.display === 'flex') {
             hideSettingsModal();
             return true;
         }
+
         const slotCtx = document.getElementById('slot-context-menu');
         const wheelCtx = document.getElementById('wheel-context-menu');
         if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) {
             hideAllMenus();
             return true;
         }
+
         closeWheel();
         return true;
     }
@@ -385,12 +449,17 @@ function handleEscClose(e) {
 }
 
 window.addEventListener('keydown', handleEscClose, true);
-window.addEventListener('keyup', handleEscClose, true);
 
 document.addEventListener('wheel', (e) => {
     if (e.target.closest('#settings-modal') || e.target.closest('#keyboard-modal') || e.target.closest('#gamepad-modal') || e.target.closest('.modal-card')) {
         return;
     }
+    const now = Date.now();
+    if (now - lastWheelScrollTimestamp < 150) {
+        return;
+    }
+    lastWheelScrollTimestamp = now;
+
     if (currentWheelData) {
         const delta = e.deltaY < 0 ? -1 : 1;
         changeWheel(delta);
