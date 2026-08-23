@@ -95,32 +95,17 @@ std::vector<InventoryWornEntry> GetEquippedInventoryEntries(RE::Actor* a_actor) 
     equipped.reserve(16);
 
     for (const auto& [item, data] : inventory) {
-        if (item && data.first > 0 && IsPureApparel(item)) {
+        if (item && data.first > 0 && IsPureApparel(item) && data.second) {
             auto* entryData = data.second.get();
-            if (!entryData) continue;
-
-            bool isWorn = false;
-            RE::ExtraDataList* wornExtra = nullptr;
-
-            if (entryData->extraLists) {
+            if (entryData && entryData->extraLists) {
                 for (auto* extraList : *entryData->extraLists) {
                     if (extraList && (extraList->HasType(RE::ExtraDataType::kWorn) || extraList->HasType(RE::ExtraDataType::kWornLeft))) {
-                        isWorn = true;
-                        wornExtra = extraList;
-                        break;
+                        InventoryWornEntry entry;
+                        entry.object = item;
+                        entry.extraList = extraList;
+                        equipped.push_back(entry);
                     }
                 }
-            }
-
-            if (!isWorn && entryData->IsWorn()) {
-                isWorn = true;
-            }
-
-            if (isWorn) {
-                InventoryWornEntry entry;
-                entry.object = item;
-                entry.extraList = wornExtra;
-                equipped.push_back(entry);
             }
         }
     }
@@ -138,6 +123,14 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
         return;
     }
 
+    auto race = targetActor->GetRace();
+    if (race) {
+        auto npcKw = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("ActorTypeNPC");
+        if (npcKw && !race->HasKeyword(npcKw)) {
+            return;
+        }
+    }
+
     auto* wardrobe = GetWardrobeContainer();
 
     std::vector<RE::FormID> targetList;
@@ -150,11 +143,12 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
     }
 
     auto currentlyWornEntries = GetEquippedInventoryEntries(targetActor);
-    std::vector<RE::FormID> currentlyWornIDs;
-    currentlyWornIDs.reserve(currentlyWornEntries.size());
+    std::vector<RE::FormID> currentlyWornList;
+    currentlyWornList.reserve(currentlyWornEntries.size());
+
     for (const auto& entry : currentlyWornEntries) {
-        if (entry.object) {
-            currentlyWornIDs.push_back(entry.object->GetFormID());
+        if (entry.object && IsPureApparel(entry.object)) {
+            currentlyWornList.push_back(entry.object->GetFormID());
         }
     }
 
@@ -188,35 +182,35 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
 
     auto freshInventory = targetActor->GetInventory();
     for (RE::FormID formID : targetList) {
-        if (std::find(currentlyWornIDs.begin(), currentlyWornIDs.end(), formID) != currentlyWornIDs.end()) {
-            continue;
-        }
+        if (std::find(currentlyWornList.begin(), currentlyWornList.end(), formID) == currentlyWornList.end()) {
+            auto* form = RE::TESForm::LookupByID(formID);
+            if (!form || !IsPureApparel(form)) continue;
 
-        auto* form = RE::TESForm::LookupByID(formID);
-        if (!form || !IsPureApparel(form)) continue;
+            auto* boundObj = form->As<RE::TESBoundObject>();
+            if (!boundObj) continue;
 
-        auto* boundObj = form->As<RE::TESBoundObject>();
-        if (!boundObj) continue;
+            auto it = freshInventory.find(boundObj);
+            if (it != freshInventory.end() && it->second.first > 0) {
+                auto* entryData = it->second.second.get();
+                RE::ExtraDataList* targetExtra = nullptr;
 
-        auto it = freshInventory.find(boundObj);
-        if (it != freshInventory.end() && it->second.first > 0) {
-            auto* entryData = it->second.second.get();
-            RE::ExtraDataList* targetExtra = nullptr;
-
-            if (entryData && entryData->extraLists && !entryData->extraLists->empty()) {
-                for (auto* xList : *entryData->extraLists) {
-                    if (xList && !xList->HasType(RE::ExtraDataType::kWorn) && !xList->HasType(RE::ExtraDataType::kWornLeft)) {
-                        targetExtra = xList;
-                        break;
+                if (entryData && entryData->extraLists && !entryData->extraLists->empty()) {
+                    for (auto* xList : *entryData->extraLists) {
+                        if (xList && !xList->HasType(RE::ExtraDataType::kWorn) && !xList->HasType(RE::ExtraDataType::kWornLeft)) {
+                            targetExtra = xList;
+                            break;
+                        }
                     }
                 }
-            }
 
-            equipManager->EquipObject(targetActor, boundObj, targetExtra, 1, nullptr, false, false, true, true);
+                if (entryData && entryData->IsWorn() && !targetExtra) {
+                    continue;
+                }
+
+                equipManager->EquipObject(targetActor, boundObj, targetExtra, 1, nullptr, false, false, true, true);
+            }
         }
     }
-
-    targetActor->Update3DModel();
 }
 
 void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
@@ -336,7 +330,6 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
                 }
             }
         }
-        targetActor->Update3DModel();
         AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID(targetActorID, "");
         RE::DebugNotification(("Unequipped " + targetOutfit.name).c_str());
         return;
@@ -478,7 +471,6 @@ void StashSlotOutfit(size_t wheelIdx, size_t slotIdx) {
         }
     }
 
-    targetActor->Update3DModel();
     RE::DebugNotification(("Stored " + outfitName + " in wardrobe!").c_str());
 }
 
@@ -587,7 +579,6 @@ void StashWheelOutfits(size_t wheelIdx) {
         }
     }
 
-    targetActor->Update3DModel();
     RE::DebugNotification("Wheel outfits stored in wardrobe!");
 }
 

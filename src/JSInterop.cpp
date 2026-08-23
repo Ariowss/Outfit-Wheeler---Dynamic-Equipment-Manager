@@ -685,8 +685,6 @@ void ToggleItemEquipListener(const char* data) {
                 }
             }
 
-            targetActor->Update3DModel();
-
             if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
