@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <RE/Skyrim.h>
 
 struct InventoryWornEntry {
     RE::TESBoundObject* object{ nullptr };
@@ -11,10 +12,11 @@ struct InventoryWornEntry {
 
 bool IsPureApparel(RE::TESForm* a_form) noexcept;
 bool IsItemInAnyWheelOutfit(RE::FormID a_formID);
-std::vector<InventoryWornEntry> GetEquippedInventoryEntries();
+RE::Actor* ResolveActiveTargetActor();
+std::vector<InventoryWornEntry> GetEquippedInventoryEntries(RE::Actor* a_actor = nullptr);
 RE::TESObjectREFR* GetWardrobeContainer();
 
-void PerformOutfitSwap(RE::PlayerCharacter* player, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs);
+void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs);
 void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx);
 void EquipSlotImpl(size_t wheelIdx, size_t slotIdx);
 

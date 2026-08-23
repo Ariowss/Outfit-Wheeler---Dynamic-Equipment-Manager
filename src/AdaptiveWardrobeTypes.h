@@ -15,11 +15,12 @@ using json = nlohmann::json;
 
 enum class ContextFlags : uint32_t {
     None        = 0,
-    CityTown    = 1 << 0,
-    PlayerHome  = 1 << 1,
-    Combat      = 1 << 2,
-    Swim        = 1 << 3,
-    Inn         = 1 << 4
+    Default     = 1 << 0,
+    CityTown    = 1 << 1,
+    PlayerHome  = 1 << 2,
+    Combat      = 1 << 3,
+    Swim        = 1 << 4,
+    Inn         = 1 << 5
 };
 
 inline ContextFlags operator|(ContextFlags a, ContextFlags b) {

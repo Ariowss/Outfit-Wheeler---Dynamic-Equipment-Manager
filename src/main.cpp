@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "PrismaUI_API.h"
 #include "Settings.h"
 #include "OutfitManager.h"
@@ -71,6 +71,12 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             PrismaUI->RegisterJSListener(view, "DeleteWheel", DeleteWheelListener);
             PrismaUI->RegisterJSListener(view, "SetSlotContext", SetSlotContextListener);
             PrismaUI->RegisterJSListener(view, "SetSlotRating", SetSlotRatingListener);
+            PrismaUI->RegisterJSListener(view, "SetSlotType", SetSlotTypeListener);
+            PrismaUI->RegisterJSListener(view, "ToggleItemEquip", ToggleItemEquipListener);
+            PrismaUI->RegisterJSListener(view, "OrbitCamera", OrbitCameraListener);
+            PrismaUI->RegisterJSListener(view, "ZoomCamera", ZoomCameraListener);
+            PrismaUI->RegisterJSListener(view, "PanCamera", PanCameraListener);
+            PrismaUI->RegisterJSListener(view, "SelectTargetActor", SelectTargetActorListener);
             PrismaUI->RegisterJSListener(view, "RetrieveAllOutfits", RetrieveAllOutfitsListener);
             PrismaUI->RegisterJSListener(view, "StashAllOutfits", StashAllOutfitsListener);
             PrismaUI->RegisterJSListener(view, "StashSlotOutfit", StashSlotOutfitListener);

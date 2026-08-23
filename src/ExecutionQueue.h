@@ -8,6 +8,7 @@
 #include "AdaptiveWardrobeTypes.h"
 #include <RE/Skyrim.h>
 #include <atomic>
+#include <unordered_map>
 
 extern std::atomic<bool> g_gameFullyLoaded;
 extern std::atomic<uint64_t> g_gameSessionGeneration;
@@ -19,11 +20,12 @@ class ExecutionQueue : public RE::BSTEventSink<RE::TESCombatEvent>,
                        public RE::BSTEventSink<RE::TESCellFullyLoadedEvent>,
                        public RE::BSTEventSink<RE::MenuOpenCloseEvent> {
 private:
-    ContextFlags lastEnvironmentContext = ContextFlags::None;
+    std::unordered_map<RE::FormID, ContextFlags> lastActorContexts;
     ExecutionQueue() = default;
 
     void RegisterEventsInternal();
     ContextFlags ResolveLocationContext(RE::BGSLocation* location, RE::TESObjectCELL* cell);
+    ContextFlags GatherActorContext(RE::Actor* a_actor, bool a_isPlayer);
 
 public:
     static ExecutionQueue* GetSingleton();

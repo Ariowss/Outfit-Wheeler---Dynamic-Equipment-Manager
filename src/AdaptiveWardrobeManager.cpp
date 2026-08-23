@@ -22,14 +22,21 @@ AdaptiveWardrobeManager* AdaptiveWardrobeManager::GetSingleton() {
     return &instance;
 }
 
-void AdaptiveWardrobeManager::LoadWardrobe(const std::vector<AdaptiveOutfit>& outfits) {
-    std::lock_guard<std::mutex> lock(wardrobeMutex);
-    wardrobe = outfits;
+ActorWardrobeData& AdaptiveWardrobeManager::GetOrCreateWardrobeData(RE::FormID a_actorID) {
+    RE::FormID canonicalID = (a_actorID == 0x00000014 || a_actorID == 0) ? 0x00000007 : a_actorID;
+    return actorWardrobes[canonicalID];
 }
 
-std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe() {
+void AdaptiveWardrobeManager::LoadWardrobe(RE::FormID a_actorID, const std::vector<AdaptiveOutfit>& outfits) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
-    return wardrobe;
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    data.wardrobe = outfits;
+}
+
+std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe(RE::FormID a_actorID) {
+    std::lock_guard<std::mutex> lock(wardrobeMutex);
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    return data.wardrobe;
 }
 
 ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const noexcept {
@@ -37,7 +44,7 @@ ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activ
     if (HasContext(activeContext, ContextFlags::Swim)) return ContextFlags::Swim;
     if (HasContext(activeContext, ContextFlags::PlayerHome)) return ContextFlags::PlayerHome;
     if (HasContext(activeContext, ContextFlags::CityTown)) return ContextFlags::CityTown;
-    return ContextFlags::None;
+    return ContextFlags::Default;
 }
 
 float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const noexcept {
@@ -46,9 +53,9 @@ float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const no
     return 4.0f;
 }
 
-float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::string& id) const noexcept {
+float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::deque<std::string>& history, const std::string& id) const noexcept {
     size_t count = 0;
-    for (const auto& historyID : recentHistory) {
+    for (const auto& historyID : history) {
         if (historyID == id) {
             count++;
         }
@@ -60,16 +67,16 @@ float AdaptiveWardrobeManager::CalculateRepetitionPenalty(const std::string& id)
     return 0.10f;
 }
 
-std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(ContextFlags activeContext, [[maybe_unused]] bool isEmergency) {
+std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::FormID a_actorID, ContextFlags activeContext, bool isEmergency) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
-    if (wardrobe.empty()) return std::nullopt;
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    if (data.wardrobe.empty()) return std::nullopt;
 
     ContextFlags targetContext = ResolveContextHierarchy(activeContext);
-    if (targetContext == ContextFlags::None) return std::nullopt;
 
-    if (!currentOutfitID.empty()) {
-        for (const auto& outfit : wardrobe) {
-            if (outfit.id == currentOutfitID && outfit.controlState != ControlState::Excluded) {
+    if (!isEmergency && !data.currentOutfitID.empty()) {
+        for (const auto& outfit : data.wardrobe) {
+            if (outfit.id == data.currentOutfitID && outfit.controlState != ControlState::Excluded) {
                 for (const auto& rule : outfit.suitabilities) {
                     if (HasContext(rule.contextMask, targetContext)) {
                         SelectionResult res;
@@ -84,14 +91,22 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     }
 
     std::vector<const AdaptiveOutfit*> candidates;
-    candidates.reserve(wardrobe.size());
+    candidates.reserve(data.wardrobe.size());
 
-    for (const auto& outfit : wardrobe) {
+    for (const auto& outfit : data.wardrobe) {
         if (outfit.controlState == ControlState::Excluded) continue;
         for (const auto& rule : outfit.suitabilities) {
             if (HasContext(rule.contextMask, targetContext)) {
                 candidates.push_back(&outfit);
                 break;
+            }
+        }
+    }
+
+    if (candidates.empty() && targetContext == ContextFlags::Default) {
+        for (const auto& outfit : data.wardrobe) {
+            if (outfit.controlState != ControlState::Excluded) {
+                candidates.push_back(&outfit);
             }
         }
     }
@@ -114,15 +129,12 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
 
     for (const auto* candidate : candidates) {
         float prefWeight = CalculatePreferenceWeight(candidate->preferenceStars);
-        float repPenalty = CalculateRepetitionPenalty(candidate->id);
+        float repPenalty = CalculateRepetitionPenalty(data.recentHistory, candidate->id);
         float ctrlMultiplier = (candidate->controlState == ControlState::Favorite) ? 1.5f : 1.0f;
 
         float weight = prefWeight * repPenalty * ctrlMultiplier;
         weights.push_back(weight);
         totalWeight += weight;
-
-        SKSE::log::info("SelectOptimalOutfit: Candidate '{}' ({}) | Stars: {} | RepPenalty: {:.2f} | FinalWeight: {:.2f}",
-                        candidate->name, candidate->id, candidate->preferenceStars, repPenalty, weight);
     }
 
     if (totalWeight <= 0.0f) return std::nullopt;
@@ -144,30 +156,28 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(Cont
     result.selectedOutfit = *candidates[selectedIndex];
     result.reasonCode = "Weighted Random Selection";
     result.calculatedWeight = weights[selectedIndex];
-
-    SKSE::log::info("SelectOptimalOutfit: WINNER Selected '{}' ({}) | Weight: {:.2f} / Total: {:.2f} (Prob: {:.1f}%)",
-                    result.selectedOutfit.name, result.selectedOutfit.id, result.calculatedWeight, totalWeight,
-                    (result.calculatedWeight / totalWeight) * 100.0f);
-
     return result;
 }
 
-void AdaptiveWardrobeManager::RecordOutfitEquipped(const std::string& outfitID, uint32_t) {
+void AdaptiveWardrobeManager::RecordOutfitEquipped(RE::FormID a_actorID, const std::string& outfitID, uint32_t) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
-    currentOutfitID = outfitID;
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    data.currentOutfitID = outfitID;
 
-    recentHistory.push_front(outfitID);
-    if (recentHistory.size() > 5) {
-        recentHistory.pop_back();
+    data.recentHistory.push_front(outfitID);
+    if (data.recentHistory.size() > 5) {
+        data.recentHistory.pop_back();
     }
 }
 
-void AdaptiveWardrobeManager::SetCurrentOutfitID(const std::string& id) {
+void AdaptiveWardrobeManager::SetCurrentOutfitID(RE::FormID a_actorID, const std::string& id) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
-    currentOutfitID = id;
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    data.currentOutfitID = id;
 }
 
-std::string AdaptiveWardrobeManager::GetCurrentOutfitID() {
+std::string AdaptiveWardrobeManager::GetCurrentOutfitID(RE::FormID a_actorID) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
-    return currentOutfitID;
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    return data.currentOutfitID;
 }

@@ -1,3 +1,17 @@
+var tempScale = 1.0;
+var tempOffsetX = 0.0;
+var tempEditKey = 0x31;
+var tempEditMod = 0;
+var tempPlayKey = 0x2F;
+var tempPlayMod = 0;
+var tempGamepadPlayKey = 0x0008;
+var tempGamepadPlayMod = 0x0100;
+var tempStars = 3;
+var renameTargetMode = 'slot';
+var listeningKeyType = null;
+var listeningGamepadType = null;
+var toastTimeout = null;
+
 function showSaveToast(text) {
     const toast = document.getElementById('save-toast');
     if (!toast) return;
@@ -9,93 +23,24 @@ function showSaveToast(text) {
     }, 1500);
 }
 
-function hideAllModals() {
-    ['rename-modal', 'context-modal', 'settings-modal', 'keyboard-modal', 'gamepad-modal'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-    });
-    listeningKeyType = null;
-    listeningGamepadType = null;
-    closeAllDropdowns();
-}
-
 function hideAllMenus(e) {
     if (e) e.stopPropagation();
     ['slot-context-menu', 'wheel-context-menu'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
-    closeAllDropdowns();
 }
 
-function showSlotContextMenu(x, y, slotIndex) {
-    if (!isEditModeActive()) return;
-    selectedSlotIndex = slotIndex;
-    hideAllMenus();
-
-    const menu = document.getElementById('slot-context-menu');
-    const title = document.getElementById('slot-ctx-title');
-    if (!menu || !title) return;
-
-    title.innerText = 'Slot ' + (slotIndex + 1) + ' Options';
-
-    const currentSlot = currentWheelData.slots.find(s => s.index === slotIndex);
-    const wardrobeBtn = document.getElementById('ctx-slot-wardrobe-toggle');
-    if (wardrobeBtn) {
-        if (!currentSlot || !currentSlot.hasOutfit) {
-            wardrobeBtn.style.display = 'none';
-        } else if (currentSlot.isInWardrobe) {
-            wardrobeBtn.style.display = 'block';
-            wardrobeBtn.innerText = 'Transfer to Inventory';
-            wardrobeBtn.setAttribute('data-action', 'retrieve');
-        } else {
-            wardrobeBtn.style.display = 'block';
-            wardrobeBtn.innerText = 'Transfer to Cloud';
-            wardrobeBtn.setAttribute('data-action', 'store');
-        }
+function handleCenterRightClick(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
     }
-
-    let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
-    let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
-
-    posX = Math.max(10, Math.min(posX, window.innerWidth - 200));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 230));
-
-    menu.style.left = posX + 'px';
-    menu.style.top = posY + 'px';
-    menu.style.display = 'flex';
-    lastMenuOpenTime = Date.now();
-}
-
-function ctxToggleSlotWardrobe(e) {
-    if (e) e.stopPropagation();
-    if (selectedSlotIndex === null || !currentWheelData) return;
-    const wardrobeBtn = document.getElementById('ctx-slot-wardrobe-toggle');
-    const action = wardrobeBtn ? wardrobeBtn.getAttribute('data-action') : 'store';
-    if (action === 'retrieve') {
-        if (typeof window.RetrieveSlotOutfit === 'function') {
-            window.RetrieveSlotOutfit(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex,
-                slotIndex: selectedSlotIndex
-            }));
-        }
-        showSaveToast("Outfit Retrieved to Inventory!");
-    } else {
-        if (typeof window.StashSlotOutfit === 'function') {
-            window.StashSlotOutfit(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex,
-                slotIndex: selectedSlotIndex
-            }));
-        }
-        showSaveToast("Outfit Stored in Cloud!");
-    }
-    hideAllMenus();
+    showWheelContextMenu(e.clientX || (window.innerWidth / 2), e.clientY || (window.innerHeight / 2));
 }
 
 function showWheelContextMenu(x, y) {
-    if (!isEditModeActive()) return;
     hideAllMenus();
-
     const menu = document.getElementById('wheel-context-menu');
     if (!menu) return;
 
@@ -108,7 +53,267 @@ function showWheelContextMenu(x, y) {
     menu.style.left = posX + 'px';
     menu.style.top = posY + 'px';
     menu.style.display = 'flex';
-    lastMenuOpenTime = Date.now();
+}
+
+function closeWheel() {
+    hideAllMenus();
+    if (typeof window.OnCloseWheel === 'function') {
+        window.OnCloseWheel("");
+    }
+}
+
+function renderDrawerDetails() {
+    const badge = document.getElementById('drawer-slot-badge');
+    const nameEl = document.getElementById('drawer-outfit-name');
+    const statusContainer = document.getElementById('drawer-slot-status');
+    const btnFull = document.getElementById('btn-type-full');
+    const btnAddon = document.getElementById('btn-type-addon');
+
+    if (!badge || !nameEl || !currentWheelData || !currentWheelData.slots) return;
+
+    const slot = currentWheelData.slots.find(s => s.index === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+    if (!slot) return;
+
+    badge.innerText = 'SLOT ' + (selectedSlotIndex + 1);
+    nameEl.innerText = slot.hasOutfit ? slot.name : 'Empty Slot';
+
+    if (statusContainer) {
+        if (slot.isAddon) {
+            statusContainer.innerHTML = '<span class="status-chip chip-addon">ADDON</span>';
+        } else if (slot.isWorn || slot.isEquipped) {
+            statusContainer.innerHTML = '<span class="status-chip chip-equipped">EQUIPPED</span>';
+        } else {
+            statusContainer.innerHTML = '<span class="status-chip" style="background:rgba(255,255,255,0.06); color:#94a3b8;">INACTIVE</span>';
+        }
+    }
+
+    if (btnFull && btnAddon) {
+        if (slot.isAddon) {
+            btnFull.classList.remove('active');
+            btnAddon.classList.add('active');
+        } else {
+            btnFull.classList.add('active');
+            btnAddon.classList.remove('active');
+        }
+    }
+
+    updateStarsDisplay(slot.preferenceStars !== undefined ? slot.preferenceStars : 3);
+    updateContextDisplay(slot.contextTag || '');
+    renderDrawerItemsList(slot);
+}
+
+function renderDrawerItemsList(slot) {
+    const list = document.getElementById('drawer-items-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    const items = slot.items || slot.itemIDs || [];
+    if (!slot.hasOutfit || items.length === 0) {
+        list.innerHTML = '<div style="font-size:10px; color:#64748b; text-align:center; padding:16px;">No items saved in this slot. Click \'Save Current Gear\' to assign loadout.</div>';
+        return;
+    }
+
+    items.forEach(itemEntry => {
+        let itemObj = null;
+        if (typeof itemEntry === 'object' && itemEntry.name) {
+            itemObj = itemEntry;
+        } else {
+            const formIdStr = (typeof itemEntry === 'number') ? ('0x' + itemEntry.toString(16).toUpperCase()) : String(itemEntry);
+            itemObj = (currentWheelData.inventory || []).find(x => x.id === formIdStr || x.rawID === itemEntry) || {
+                name: 'Apparel Item (' + formIdStr + ')',
+                type: 'Armor',
+                icon: '🛡️'
+            };
+        }
+        const row = document.createElement('div');
+        row.className = 'drawer-item-row';
+        row.innerHTML = `
+            <div class="drawer-item-info">
+                <span>${itemObj.icon || '🛡️'}</span>
+                <span>${itemObj.name}</span>
+            </div>
+            <span class="drawer-item-slot-tag">${itemObj.type || 'Apparel'}</span>
+        `;
+        list.appendChild(row);
+    });
+}
+
+function updateStarsDisplay(num) {
+    const stars = document.querySelectorAll('#stars-widget .star-icon');
+    stars.forEach((s, idx) => {
+        if (idx < num) s.classList.add('active');
+        else s.classList.remove('active');
+    });
+}
+
+function updateContextDisplay(tagStr) {
+    const lower = (tagStr || '').toLowerCase();
+    const map = {
+        'Combat': 'ctx-chip-combat',
+        'City': 'ctx-chip-city',
+        'Home': 'ctx-chip-home',
+        'Swim': 'ctx-chip-swim'
+    };
+    for (let key in map) {
+        const el = document.getElementById(map[key]);
+        if (el) {
+            if (lower.includes(key.toLowerCase())) el.classList.add('active');
+            else el.classList.remove('active');
+        }
+    }
+}
+
+function toggleSlotAddonType(isAddon) {
+    if (typeof window.SetSlotType === 'function' && currentWheelData) {
+        window.SetSlotType(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex,
+            isAddon: isAddon
+        }));
+    }
+    showSaveToast("Slot type updated!");
+}
+
+function setSlotRatingDirect(num) {
+    if (typeof window.SetSlotRating === 'function' && currentWheelData) {
+        window.SetSlotRating(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex,
+            ratingStars: num
+        }));
+    }
+    updateStarsDisplay(num);
+    showSaveToast(num + " Stars Saved!");
+}
+
+function toggleContextTagDirect(ctxKey) {
+    const slot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
+    if (!slot) return;
+
+    let currentTags = (slot.contextTag || '').split(',').map(x => x.trim()).filter(x => x.length > 0);
+    if (currentTags.includes(ctxKey)) {
+        currentTags = currentTags.filter(x => x !== ctxKey);
+    } else {
+        currentTags.push(ctxKey);
+    }
+
+    const newTagStr = currentTags.join(', ');
+    if (typeof window.SetSlotContext === 'function' && currentWheelData) {
+        window.SetSlotContext(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex,
+            contextTag: newTagStr
+        }));
+    }
+    updateContextDisplay(newTagStr);
+    showSaveToast("Context Updated: " + (newTagStr || "None"));
+}
+
+function saveCurrentEquippedToSlot() {
+    saveOutfit(selectedSlotIndex);
+}
+
+function clearSelectedSlot() {
+    ctxClearSlot();
+}
+
+function saveOutfit(slotIndex) {
+    showSaveToast("Outfit Saved!");
+    if (typeof window.SaveOutfit === 'function' && currentWheelData) {
+        window.SaveOutfit(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: slotIndex
+        }));
+    }
+}
+
+function equipOutfit(slotIndex) {
+    const now = Date.now();
+    if (now - lastEquipCallTimestamp < 350) return;
+    lastEquipCallTimestamp = now;
+
+    lastEquippedSlotIndex = slotIndex;
+    if (typeof updateWheelUI === 'function') updateWheelUI();
+    if (typeof window.EquipSlot === 'function' && currentWheelData) {
+        window.EquipSlot(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: slotIndex,
+            editMode: isEditModeActive()
+        }));
+    }
+}
+
+function changeWheel(delta) {
+    if (typeof window.ChangeWheel === 'function' && currentWheelData) {
+        window.ChangeWheel(JSON.stringify({
+            delta: delta,
+            editMode: isEditModeActive()
+        }));
+    }
+}
+
+function addWheel() {
+    if (typeof window.AddWheel === 'function' && currentWheelData) {
+        window.AddWheel(JSON.stringify({
+            editMode: isEditModeActive()
+        }));
+    }
+}
+
+function addSlot() {
+    if (typeof window.AddSlot === 'function' && currentWheelData) {
+        window.AddSlot(JSON.stringify({
+            editMode: isEditModeActive()
+        }));
+    }
+}
+
+function ctxRenameSlot(e) {
+    if (e) e.stopPropagation();
+    if (selectedSlotIndex === null) return;
+    renameTargetMode = 'slot';
+    const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
+    const currentName = (currentSlot && currentSlot.hasOutfit) ? currentSlot.name : ('Outfit ' + (selectedSlotIndex + 1));
+    showRenameModal("Rename Slot", currentName);
+    hideAllMenus();
+}
+
+function ctxClearSlot(e) {
+    if (e) e.stopPropagation();
+    if (selectedSlotIndex !== null && typeof window.ClearSlot === 'function' && currentWheelData) {
+        window.ClearSlot(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex
+        }));
+    }
+    hideAllMenus();
+}
+
+function ctxDeleteSlot(e) {
+    if (e) e.stopPropagation();
+    if (selectedSlotIndex !== null && typeof window.DeleteSlot === 'function' && currentWheelData) {
+        window.DeleteSlot(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex
+        }));
+    }
+    hideAllMenus();
+}
+
+function ctxRenameWheel(e) {
+    if (e) e.stopPropagation();
+    renameTargetMode = 'wheel';
+    const currentName = currentWheelData.wheelName || ('Wheel ' + (currentWheelData.wheelIndex + 1));
+    showRenameModal("Rename Wheel", currentName);
+    hideAllMenus();
+}
+
+function ctxDeleteWheel(e) {
+    if (e) e.stopPropagation();
+    if (typeof window.DeleteWheel === 'function' && currentWheelData) {
+        window.DeleteWheel(JSON.stringify({}));
+    }
+    hideAllMenus();
 }
 
 function ctxStashAllOutfits(e) {
@@ -129,154 +334,40 @@ function ctxRetrieveAllOutfits(e) {
     hideAllMenus();
 }
 
-function handleCenterRightClick(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
+function ctxToggleSlotWardrobe(e) {
+    if (e) e.stopPropagation();
+    if (selectedSlotIndex === null || !currentWheelData) return;
+    if (typeof window.StashSlotOutfit === 'function') {
+        window.StashSlotOutfit(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex
+        }));
     }
-    if (!isEditModeActive()) return;
-    showWheelContextMenu(e.clientX || 200, e.clientY || 200);
+    showSaveToast("Transferred to Cloud!");
+    hideAllMenus();
 }
 
 function openSettingsModal(e) {
     if (e) e.stopPropagation();
     hideAllMenus();
-    hideAllModals();
-
     const modal = document.getElementById('settings-modal');
-    const scaleInput = document.getElementById('scale-input');
-    const offsetInput = document.getElementById('offsetx-input');
-
-    const chkAutoStash = document.getElementById('chk-auto-stash');
-    const chkMaster = document.getElementById('chk-auto-master');
-    const chkCity = document.getElementById('chk-auto-city');
-    const chkHome = document.getElementById('chk-auto-home');
-    const chkCombat = document.getElementById('chk-auto-combat');
-    const chkSwim = document.getElementById('chk-auto-swim');
-
-    if (chkAutoStash) chkAutoStash.checked = currentWheelData.autoStashEnabled === true;
-    if (chkMaster) chkMaster.checked = currentWheelData.autoSystemEnabled !== false;
-    if (chkCity) chkCity.checked = currentWheelData.autoCityEnabled !== false;
-    if (chkHome) chkHome.checked = currentWheelData.autoHomeEnabled !== false;
-    if (chkCombat) chkCombat.checked = currentWheelData.autoCombatEnabled !== false;
-    if (chkSwim) chkSwim.checked = currentWheelData.autoSwimEnabled !== false;
-
-    tempScale = currentWheelData.wheelScale || 1.0;
-    tempOffsetX = currentWheelData.wheelOffsetX || 0.0;
-    tempEditKey = currentWheelData.editKey || 0x31;
-    tempEditMod = currentWheelData.editModifierKey || 0;
-    tempPlayKey = currentWheelData.playKey || 0x2F;
-    tempPlayMod = currentWheelData.playModifierKey || 0;
-    tempGamepadPlayKey = currentWheelData.gamepadPlayKey || 0x0008;
-    tempGamepadPlayMod = currentWheelData.gamepadPlayModifier || 0x0100;
-
-    if (scaleInput) scaleInput.value = Math.round(tempScale * 100) + '%';
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetX) + 'px';
-
     if (modal) modal.style.display = 'flex';
     setTyping(true);
 }
 
 function hideSettingsModal() {
-    tempScale = currentWheelData.wheelScale || 1.0;
-    tempOffsetX = currentWheelData.wheelOffsetX || 0.0;
-    applyTransform();
-    hideAllModals();
+    const modal = document.getElementById('settings-modal');
+    if (modal) modal.style.display = 'none';
     setTyping(false);
 }
 
-function openKeyboardModal(e) {
-    if (e) e.stopPropagation();
-    hideAllModals();
-
-    const kbModal = document.getElementById('keyboard-modal');
-    const editBtn = document.getElementById('btn-edit-key');
-    const playBtn = document.getElementById('btn-play-key');
-    const editModText = document.getElementById('dd-edit-text');
-    const playModText = document.getElementById('dd-play-text');
-
-    if (editBtn) editBtn.innerText = '[' + getKeyName(tempEditKey) + ']';
-    if (playBtn) playBtn.innerText = '[' + getKeyName(tempPlayKey) + ']';
-    if (editModText) editModText.innerText = modNameMap[tempEditMod] || 'None';
-    if (playModText) playModText.innerText = modNameMap[tempPlayMod] || 'None';
-
-    if (kbModal) kbModal.style.display = 'flex';
-    setTyping(true);
-}
-
-function hideKeyboardModal() {
-    hideAllModals();
-    const settingsModal = document.getElementById('settings-modal');
-    if (settingsModal) settingsModal.style.display = 'flex';
-}
-
-function openGamepadModal(e) {
-    if (e) e.stopPropagation();
-    hideAllModals();
-
-    const gpModal = document.getElementById('gamepad-modal');
-    const gpPlayBtn = document.getElementById('btn-gp-play-key');
-    const gpPlayModText = document.getElementById('dd-gp-play-text');
-
-    if (gpPlayBtn) gpPlayBtn.innerText = '[' + (gamepadNames[tempGamepadPlayKey] ? gamepadNames[tempGamepadPlayKey] : ('0x' + tempGamepadPlayKey.toString(16).toUpperCase())) + ']';
-    if (gpPlayModText) gpPlayModText.innerText = gpModNameMap[tempGamepadPlayMod] || 'None';
-
-    if (gpModal) gpModal.style.display = 'flex';
-    setTyping(true);
-}
-
-function hideGamepadModal() {
-    hideAllModals();
-    const settingsModal = document.getElementById('settings-modal');
-    if (settingsModal) settingsModal.style.display = 'flex';
-}
-
-function saveKeyboardSettings() {
-    currentWheelData.editKey = tempEditKey;
-    currentWheelData.editModifierKey = tempEditMod;
-    currentWheelData.playKey = tempPlayKey;
-    currentWheelData.playModifierKey = tempPlayMod;
-    saveSettings();
-    hideKeyboardModal();
-}
-
-function saveGamepadSettings() {
-    currentWheelData.gamepadPlayKey = tempGamepadPlayKey;
-    currentWheelData.gamepadPlayModifier = tempGamepadPlayMod;
-    saveSettings();
-    hideGamepadModal();
-}
-
 function saveSettings() {
-    currentWheelData.wheelScale = tempScale;
-    currentWheelData.wheelOffsetX = tempOffsetX;
-    currentWheelData.editKey = tempEditKey;
-    currentWheelData.editModifierKey = tempEditMod;
-    currentWheelData.playKey = tempPlayKey;
-    currentWheelData.playModifierKey = tempPlayMod;
-    currentWheelData.gamepadPlayKey = tempGamepadPlayKey;
-    currentWheelData.gamepadPlayModifier = tempGamepadPlayMod;
-
     const chkAutoStash = document.getElementById('chk-auto-stash');
     const chkMaster = document.getElementById('chk-auto-master');
     const chkCity = document.getElementById('chk-auto-city');
     const chkHome = document.getElementById('chk-auto-home');
     const chkCombat = document.getElementById('chk-auto-combat');
     const chkSwim = document.getElementById('chk-auto-swim');
-
-    const autoStashVal = chkAutoStash ? chkAutoStash.checked : false;
-    const masterVal = chkMaster ? chkMaster.checked : true;
-    const cityVal = chkCity ? chkCity.checked : true;
-    const homeVal = chkHome ? chkHome.checked : true;
-    const combatVal = chkCombat ? chkCombat.checked : true;
-    const swimVal = chkSwim ? chkSwim.checked : true;
-
-    currentWheelData.autoStashEnabled = autoStashVal;
-    currentWheelData.autoSystemEnabled = masterVal;
-    currentWheelData.autoCityEnabled = cityVal;
-    currentWheelData.autoHomeEnabled = homeVal;
-    currentWheelData.autoCombatEnabled = combatVal;
-    currentWheelData.autoSwimEnabled = swimVal;
 
     if (typeof window.SaveSettings === 'function') {
         window.SaveSettings(JSON.stringify({
@@ -289,96 +380,18 @@ function saveSettings() {
             playModifierKey: tempPlayMod,
             gamepadPlayKey: tempGamepadPlayKey,
             gamepadPlayModifier: tempGamepadPlayMod,
-            autoStashEnabled: autoStashVal,
-            autoSystemEnabled: masterVal,
-            autoCityEnabled: cityVal,
-            autoHomeEnabled: homeVal,
-            autoCombatEnabled: combatVal,
-            autoSwimEnabled: swimVal
+            autoStashEnabled: chkAutoStash ? chkAutoStash.checked : false,
+            autoSystemEnabled: chkMaster ? chkMaster.checked : true,
+            autoCityEnabled: chkCity ? chkCity.checked : true,
+            autoHomeEnabled: chkHome ? chkHome.checked : true,
+            autoCombatEnabled: chkCombat ? chkCombat.checked : true,
+            autoSwimEnabled: chkSwim ? chkSwim.checked : true
         }));
     }
     hideSettingsModal();
 }
 
-function openContextModal(e) {
-    if (e) e.stopPropagation();
-    if (selectedSlotIndex === null) return;
-
-    hideAllMenus();
-    hideAllModals();
-
-    const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
-    const currentTag = (currentSlot && currentSlot.contextTag) ? currentSlot.contextTag.toLowerCase() : "";
-    const currentRating = (currentSlot && currentSlot.preferenceStars !== undefined) ? currentSlot.preferenceStars : 3;
-
-    const chkCity = document.getElementById('chk-city');
-    const chkHome = document.getElementById('chk-home');
-    const chkCombat = document.getElementById('chk-combat');
-    const chkSwim = document.getElementById('chk-swim');
-
-    if (chkCity) chkCity.checked = currentTag.includes("city") || currentTag.includes("town");
-    if (chkHome) chkHome.checked = currentTag.includes("home") || currentTag.includes("house");
-    if (chkCombat) chkCombat.checked = currentTag.includes("combat") || currentTag.includes("fight");
-    if (chkSwim) chkSwim.checked = currentTag.includes("swim") || currentTag.includes("water");
-
-    setStarRating(currentRating);
-
-    const modal = document.getElementById('context-modal');
-    if (modal) modal.style.display = 'flex';
-    setTyping(true);
-}
-
-function hideContextModal() {
-    hideAllModals();
-    setTyping(false);
-}
-
-function setStarRating(num) {
-    tempStars = num;
-    document.querySelectorAll('.star').forEach((s, idx) => {
-        if (idx < num) s.classList.add('active');
-        else s.classList.remove('active');
-    });
-}
-
-function saveSlotContextAndRating() {
-    if (selectedSlotIndex === null) return;
-
-    const chkCity = document.getElementById('chk-city');
-    const chkHome = document.getElementById('chk-home');
-    const chkCombat = document.getElementById('chk-combat');
-    const chkSwim = document.getElementById('chk-swim');
-
-    let tags = [];
-    if (chkCity && chkCity.checked) tags.push("City");
-    if (chkHome && chkHome.checked) tags.push("Home");
-    if (chkCombat && chkCombat.checked) tags.push("Combat");
-    if (chkSwim && chkSwim.checked) tags.push("Swim");
-
-    const contextString = tags.length > 0 ? tags.join(", ") : "";
-
-    if (typeof window.SetSlotContext === 'function' && currentWheelData) {
-        window.SetSlotContext(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex,
-            contextTag: contextString
-        }));
-    }
-
-    if (typeof window.SetSlotRating === 'function' && currentWheelData) {
-        window.SetSlotRating(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex,
-            ratingStars: tempStars
-        }));
-    }
-
-    showSaveToast("Context & Rating Saved!");
-    hideContextModal();
-}
-
 function showRenameModal(titleText, initialValue) {
-    hideAllModals();
     const modal = document.getElementById('rename-modal');
     const title = document.getElementById('modal-title-text');
     const input = document.getElementById('rename-input');
@@ -386,6 +399,7 @@ function showRenameModal(titleText, initialValue) {
         title.innerText = titleText;
         input.value = initialValue;
         modal.style.display = 'flex';
+        setTyping(true);
         setTimeout(() => {
             input.focus();
             input.select();
@@ -394,14 +408,14 @@ function showRenameModal(titleText, initialValue) {
 }
 
 function hideRenameModal() {
-    hideAllModals();
+    const modal = document.getElementById('rename-modal');
+    if (modal) modal.style.display = 'none';
     setTyping(false);
 }
 
 function confirmRename() {
     const input = document.getElementById('rename-input');
     if (!input) return;
-
     const val = input.value.trim();
     if (!val) {
         hideRenameModal();
@@ -432,165 +446,119 @@ function handleRenameKey(e) {
     else if (e.key === 'Escape') hideRenameModal();
 }
 
-function ctxSaveOutfit(e) {
+function openContextModal(e) {
     if (e) e.stopPropagation();
-    if (selectedSlotIndex !== null) saveOutfit(selectedSlotIndex);
     hideAllMenus();
+    const modal = document.getElementById('context-modal');
+    if (modal) modal.style.display = 'flex';
+    setTyping(true);
 }
 
-function ctxRenameSlot(e) {
-    if (e) e.stopPropagation();
-    if (selectedSlotIndex === null) return;
-    renameTargetMode = 'slot';
-    const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
-    const currentName = (currentSlot && currentSlot.hasOutfit) ? currentSlot.name : ('Outfit ' + (selectedSlotIndex + 1));
-    showRenameModal("Rename Slot", currentName);
-    hideAllMenus();
+function hideContextModal() {
+    const modal = document.getElementById('context-modal');
+    if (modal) modal.style.display = 'none';
+    setTyping(false);
 }
 
-function ctxClearSlot(e) {
-    if (e) e.stopPropagation();
-    if (selectedSlotIndex !== null && typeof window.ClearSlot === 'function' && currentWheelData) {
-        window.ClearSlot(JSON.stringify({
+function setStarRating(num) {
+    tempStars = num;
+    document.querySelectorAll('#modal-star-rating .star').forEach((s, idx) => {
+        if (idx < num) s.classList.add('active');
+        else s.classList.remove('active');
+    });
+}
+
+function saveSlotContextAndRating() {
+    const chkCity = document.getElementById('chk-city');
+    const chkHome = document.getElementById('chk-home');
+    const chkCombat = document.getElementById('chk-combat');
+    const chkSwim = document.getElementById('chk-swim');
+
+    let tags = [];
+    if (chkCity && chkCity.checked) tags.push("City");
+    if (chkHome && chkHome.checked) tags.push("Home");
+    if (chkCombat && chkCombat.checked) tags.push("Combat");
+    if (chkSwim && chkSwim.checked) tags.push("Swim");
+
+    const contextString = tags.join(", ");
+
+    if (typeof window.SetSlotContext === 'function' && currentWheelData) {
+        window.SetSlotContext(JSON.stringify({
             wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex
+            slotIndex: selectedSlotIndex,
+            contextTag: contextString
         }));
     }
-    selectedSlotIndex = null;
-    hideAllMenus();
-}
 
-function ctxDeleteSlot(e) {
-    if (e) e.stopPropagation();
-    if (selectedSlotIndex !== null && typeof window.DeleteSlot === 'function' && currentWheelData) {
-        window.DeleteSlot(JSON.stringify({
+    if (typeof window.SetSlotRating === 'function' && currentWheelData) {
+        window.SetSlotRating(JSON.stringify({
             wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex
+            slotIndex: selectedSlotIndex,
+            ratingStars: tempStars
         }));
     }
-    selectedSlotIndex = null;
-    hideAllMenus();
-}
 
-function ctxRenameWheel(e) {
-    if (e) e.stopPropagation();
-    renameTargetMode = 'wheel';
-    const currentName = currentWheelData.wheelName || ('Wheel ' + (currentWheelData.wheelIndex + 1));
-    showRenameModal("Rename Wheel", currentName);
-    hideAllMenus();
-}
-
-function ctxDeleteWheel(e) {
-    if (e) e.stopPropagation();
-    if (typeof window.DeleteWheel === 'function' && currentWheelData) {
-        window.DeleteWheel(JSON.stringify({}));
-    }
-    hideAllMenus();
+    showSaveToast("Saved!");
+    hideContextModal();
 }
 
 function stepScale(delta) {
     tempScale = Math.max(0.1, tempScale + delta);
-    const scaleInput = document.getElementById('scale-input');
-    if (scaleInput) scaleInput.value = Math.round(tempScale * 100) + '%';
-    applyTransform();
+    const inp = document.getElementById('scale-input');
+    if (inp) inp.value = Math.round(tempScale * 100) + '%';
 }
 
 function stepOffsetX(delta) {
     tempOffsetX += delta;
-    const offsetInput = document.getElementById('offsetx-input');
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetX) + 'px';
-    applyTransform();
+    const inp = document.getElementById('offsetx-input');
+    if (inp) inp.value = Math.round(tempOffsetX) + 'px';
 }
 
 function onScaleInputChange(val) {
-    let clean = String(val).replace('%', '').trim();
-    let num = parseFloat(clean);
+    let num = parseFloat(String(val).replace('%', '').trim());
     if (!isNaN(num)) {
         if (num > 10) num /= 100.0;
         tempScale = Math.max(0.1, num);
     }
-    const scaleInput = document.getElementById('scale-input');
-    if (scaleInput) scaleInput.value = Math.round(tempScale * 100) + '%';
-    applyTransform();
 }
 
-function onScaleInputBlur() {
-    setTyping(false);
-    const scaleInput = document.getElementById('scale-input');
-    if (scaleInput) onScaleInputChange(scaleInput.value);
-}
-
+function onScaleInputBlur() { setTyping(false); }
 function onOffsetXInputChange(val) {
-    let clean = String(val).replace('px', '').trim();
-    let num = parseFloat(clean);
+    let num = parseFloat(String(val).replace('px', '').trim());
     if (!isNaN(num)) tempOffsetX = num;
-    const offsetInput = document.getElementById('offsetx-input');
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetX) + 'px';
-    applyTransform();
 }
+function onOffsetXInputBlur() { setTyping(false); }
 
-function onOffsetXInputBlur() {
-    setTyping(false);
-    const offsetInput = document.getElementById('offsetx-input');
-    if (offsetInput) onOffsetXInputChange(offsetInput.value);
-}
-
-function handleScaleScroll(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        stepScale(e.deltaY < 0 ? 0.05 : -0.05);
-    }
-}
-
-function handleOffsetScroll(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        stepOffsetX(e.deltaY < 0 ? 10 : -10);
-    }
-}
-
-function applyTransform() {
-    const container = document.getElementById('wheel-container');
-    if (container) {
-        container.style.transform = 'translateX(' + tempOffsetX + 'px) scale(' + tempScale + ')';
-    }
-}
-
-function toggleDropdown(type, e) {
+function openKeyboardModal(e) {
     if (e) e.stopPropagation();
-    const map = {
-        'edit': document.getElementById('dd-edit-list'),
-        'play': document.getElementById('dd-play-list'),
-        'gp-play': document.getElementById('dd-gp-play-list')
-    };
-    for (let key in map) {
-        if (map[key]) {
-            if (key === type) map[key].style.display = map[key].style.display === 'none' ? 'flex' : 'none';
-            else map[key].style.display = 'none';
-        }
-    }
+    hideSettingsModal();
+    const modal = document.getElementById('keyboard-modal');
+    if (modal) modal.style.display = 'flex';
+    setTyping(true);
 }
+function hideKeyboardModal() {
+    const modal = document.getElementById('keyboard-modal');
+    if (modal) modal.style.display = 'none';
+    openSettingsModal();
+}
+function startKeyListen(type) {
+    listeningKeyType = type;
+    const btn = document.getElementById(type === 'edit' ? 'btn-edit-key' : 'btn-play-key');
+    if (btn) btn.innerText = '[Press Any Key...]';
+}
+function saveKeyboardSettings() { hideKeyboardModal(); }
 
-function selectMod(type, val, text, e) {
+function openGamepadModal(e) {
     if (e) e.stopPropagation();
-    if (type === 'edit') {
-        tempEditMod = val;
-        document.getElementById('dd-edit-text').innerText = text;
-    } else if (type === 'play') {
-        tempPlayMod = val;
-        document.getElementById('dd-play-text').innerText = text;
-    } else if (type === 'gp-play') {
-        tempGamepadPlayMod = val;
-        document.getElementById('dd-gp-play-text').innerText = text;
-    }
-    closeAllDropdowns();
+    hideSettingsModal();
+    const modal = document.getElementById('gamepad-modal');
+    if (modal) modal.style.display = 'flex';
+    setTyping(true);
 }
-
-function closeAllDropdowns() {
-    ['dd-edit-list', 'dd-play-list', 'dd-gp-play-list'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-    });
+function hideGamepadModal() {
+    const modal = document.getElementById('gamepad-modal');
+    if (modal) modal.style.display = 'none';
+    openSettingsModal();
 }
+function startGamepadListen(type) { listeningGamepadType = type; }
+function saveGamepadSettings() { hideGamepadModal(); }

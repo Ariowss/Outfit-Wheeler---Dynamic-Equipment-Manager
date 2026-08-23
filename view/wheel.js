@@ -1,5 +1,8 @@
-var lastEquipCallTimestamp = 0;
 var updateWheelRafId = null;
+var lastEquipCallTimestamp = 0;
+
+var svgOutfitIcon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.38 3.46L16 2a4 4 0 01-8 0L3.62 3.46a2 2 0 00-1.34 2.23l.58 3.47a1 1 0 00.99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 002-2V10h2.15a1 1 0 00.99-.84l.58-3.47a2 2 0 00-1.34-2.23z"/></svg>';
+var svgPlusIcon = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 
 function escapeHtml(str) {
     if (!str) return '';
@@ -42,28 +45,33 @@ function updateWheelUI() {
         const container = document.getElementById('wheel-container');
         const svg = document.getElementById('wheel-svg');
         const labelsContainer = document.getElementById('labels-container');
-        const modeText = document.getElementById('mode-text');
-        const wheelName = document.getElementById('wheel-name');
-        const editActions = document.getElementById('edit-actions');
+        const wheelIndexLbl = document.getElementById('wheel-index-label');
+        const wheelNameCenter = document.getElementById('wheel-name-center');
+        const wheelNameDrawer = document.getElementById('wheel-name');
 
-        if (!svg || !labelsContainer || !modeText || !wheelName || !container) return;
-
-        const scale = currentWheelData.wheelScale || 1.0;
-        const offsetX = currentWheelData.wheelOffsetX || 0.0;
-        container.style.transform = 'translateX(' + offsetX + 'px) scale(' + scale + ')';
+        if (!svg || !labelsContainer || !container) return;
 
         const isEdit = isEditModeActive();
-        modeText.innerText = isEdit ? "EDIT MODE" : "PLAY MODE";
-        modeText.style.color = isEdit ? "#6c829c" : "#cddbe8";
+        const baseScale = isEdit ? 0.55 : 1.0;
+        const userScale = currentWheelData.wheelScale || 1.0;
+        const offsetX = isEdit ? 0.0 : (currentWheelData.wheelOffsetX || 0.0);
 
-        if (activeCategoryFilter !== 'ALL') {
-            wheelName.innerText = activeCategoryFilter + ' View';
-        } else {
-            wheelName.innerText = currentWheelData.wheelName || ('Wheel ' + (currentWheelData.wheelIndex + 1));
+        container.style.transform = `translateX(${offsetX}px) scale(${baseScale * userScale})`;
+
+        if (wheelIndexLbl) {
+            wheelIndexLbl.innerText = `WHEEL ${currentWheelData.wheelIndex + 1} OF ${currentWheelData.totalWheels || 1}`;
         }
 
-        if (editActions) {
-            editActions.style.display = isEdit ? "flex" : "none";
+        const defaultWheelTitle = currentWheelData.wheelName || ('Wheel ' + (currentWheelData.wheelIndex + 1));
+        if (wheelNameDrawer) {
+            wheelNameDrawer.innerText = defaultWheelTitle;
+        }
+        if (wheelNameCenter) {
+            if (activeWheelContextFilter !== 'ALL') {
+                wheelNameCenter.innerText = activeWheelContextFilter + ' View';
+            } else {
+                wheelNameCenter.innerText = defaultWheelTitle;
+            }
         }
 
         svg.innerHTML = '';
@@ -72,7 +80,7 @@ function updateWheelUI() {
         const rawSlots = currentWheelData.slots || [];
         let displaySlots = [];
 
-        if (activeCategoryFilter === 'ALL') {
+        if (activeWheelContextFilter === 'ALL') {
             rawSlots.forEach((s, idx) => {
                 const realIdx = s.index !== undefined ? s.index : idx;
                 const hasOutfit = s && s.hasOutfit && (s.count === undefined || s.count > 0 || (s.items && s.items.length > 0));
@@ -81,7 +89,7 @@ function updateWheelUI() {
                 }
             });
         } else {
-            const filterTag = activeCategoryFilter.toLowerCase();
+            const filterTag = activeWheelContextFilter.toLowerCase();
             rawSlots.forEach((s, idx) => {
                 const realIdx = s.index !== undefined ? s.index : idx;
                 const hasOutfit = s && s.hasOutfit && (s.count === undefined || s.count > 0 || (s.items && s.items.length > 0));
@@ -96,15 +104,13 @@ function updateWheelUI() {
             });
         }
 
-        updateGamepadHintsVisibility();
-
         const total = displaySlots.length;
         if (total === 0) return;
 
         const cx = 290;
         const cy = 290;
         const rIn = 95;
-        const rOut = 245;
+        const rOut = 265;
         const rMid = (rIn + rOut) / 2;
 
         const sliceAngle = (2 * Math.PI) / total;
@@ -127,7 +133,7 @@ function updateWheelUI() {
             const hasOutfit = slot.hasOutfit;
             const realSlotIndex = slot.realIndex;
             const isEquipped = hasOutfit && (slot.isWorn === true || slot.isEquipped === true);
-            const inCloud = (slot.isInWardrobe === true || slot.isInWardrobe === "true" || slot.isInWardrobe === 1);
+            const isAddon = slot.isAddon === true;
 
             const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
             pathEl.setAttribute("d", describeArc(cx, cy, rIn, rOut, startAngle, endAngle));
@@ -135,23 +141,29 @@ function updateWheelUI() {
 
             let defaultFill, defaultStroke, hoverFill, hoverStroke;
 
-            if (isEquipped) {
-                defaultFill = 'rgba(16, 60, 48, 0.92)';
-                defaultStroke = '#34d399';
-                hoverFill = 'rgba(20, 85, 65, 0.98)';
-                hoverStroke = '#6ee7b7';
+            if (isAddon) {
+                defaultFill = isEquipped ? 'rgba(168, 85, 247, 0.35)' : 'rgba(168, 85, 247, 0.12)';
+                defaultStroke = '#c084fc';
+                hoverFill = 'rgba(168, 85, 247, 0.55)';
+                hoverStroke = '#e9d5ff';
+                pathEl.setAttribute("class", isEquipped ? "slice-path equipped" : "slice-path");
+            } else if (isEquipped) {
+                defaultFill = 'rgba(16, 185, 129, 0.25)';
+                defaultStroke = '#10b981';
+                hoverFill = 'rgba(16, 185, 129, 0.45)';
+                hoverStroke = '#34d399';
                 pathEl.setAttribute("class", "slice-path equipped");
             } else if (hasOutfit) {
-                defaultFill = 'rgba(19, 27, 38, 0.85)';
-                defaultStroke = '#6c829c';
-                hoverFill = 'rgba(108, 130, 156, 0.95)';
-                hoverStroke = '#cddbe8';
+                defaultFill = 'rgba(13, 18, 26, 0.88)';
+                defaultStroke = 'rgba(45, 58, 75, 0.55)';
+                hoverFill = 'rgba(255, 255, 255, 0.15)';
+                hoverStroke = '#f8fafc';
                 pathEl.setAttribute("class", "slice-path");
             } else {
-                defaultFill = 'rgba(19, 27, 38, 0.55)';
-                defaultStroke = '#384553';
-                hoverFill = 'rgba(56, 69, 83, 0.85)';
-                hoverStroke = '#6c829c';
+                defaultFill = 'rgba(13, 18, 26, 0.55)';
+                defaultStroke = 'rgba(45, 58, 75, 0.35)';
+                hoverFill = 'rgba(255, 255, 255, 0.08)';
+                hoverStroke = '#94a3b8';
                 pathEl.setAttribute("class", "slice-path empty");
             }
 
@@ -168,43 +180,16 @@ function updateWheelUI() {
                 pathEl.style.stroke = defaultStroke;
             };
 
-            const handleLeftClickTrigger = (e) => {
-                if (e) {
-                    e.stopPropagation();
-                    e.preventDefault();
-                }
-                if (isEditModeActive()) {
-                    saveOutfit(realSlotIndex);
-                } else {
-                    equipOutfit(realSlotIndex);
-                }
-            };
-
-            const handleRightClickTrigger = (e) => {
-                if (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                }
-                if (!isEditModeActive()) return;
-                const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : 200;
-                const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : 200;
-                showSlotContextMenu(clickX, clickY, realSlotIndex);
-            };
-
             pathEl.onclick = (e) => {
                 if (e && e.button === 0) {
-                    handleLeftClickTrigger(e);
+                    if (isEditModeActive()) {
+                        selectedSlotIndex = realSlotIndex;
+                        renderSlotsRail();
+                        renderDrawerDetails();
+                    } else {
+                        equipOutfit(realSlotIndex);
+                    }
                 }
-            };
-
-            pathEl.onmousedown = (e) => {
-                if (e.button === 2 || e.which === 3) {
-                    handleRightClickTrigger(e);
-                }
-            };
-
-            pathEl.oncontextmenu = (e) => {
-                handleRightClickTrigger(e);
             };
 
             svgFragment.appendChild(pathEl);
@@ -218,13 +203,20 @@ function updateWheelUI() {
             labelEl.style.top = (cy + ly) + 'px';
             labelEl.setAttribute("data-slot-index", realSlotIndex);
 
+            let badgeHtml = '';
+            if (isAddon) {
+                badgeHtml = '<div class="slot-equipped-badge" style="color:#c084fc; background:rgba(168,85,247,0.25);">ADDON</div>';
+            } else if (isEquipped) {
+                badgeHtml = '<div class="slot-equipped-badge">EQUIPPED</div>';
+            }
+
             if (hasOutfit) {
-                labelEl.innerHTML = '<div class="slot-icon">' + svgOutfitIcon + '</div>' +
-                    '<div class="slot-title">' + escapeHtml(slot.name) + '</div>' +
-                    '<div class="slot-subtitle">' + (inCloud ? 'Cloud Stored' : (slot.count + ' items')) + '</div>' +
-                    (isEquipped ? '<div class="slot-equipped-badge">EQUIPPED</div>' : '');
+                labelEl.innerHTML = `<div class="slot-icon">${svgOutfitIcon}</div>` +
+                    `<div class="slot-title">${escapeHtml(slot.name)}</div>` +
+                    `<div class="slot-subtitle">${(slot.count || 0) + ' items'}</div>` +
+                    badgeHtml;
             } else {
-                labelEl.innerHTML = '<div class="slot-icon">' + svgPlusIcon + '</div>' +
+                labelEl.innerHTML = `<div class="slot-icon">${svgPlusIcon}</div>` +
                     '<div class="slot-title">Empty</div>';
             }
 
@@ -236,83 +228,20 @@ function updateWheelUI() {
     });
 }
 
-function setCategoryFilter(tag, e) {
-    if (e) e.stopPropagation();
-    activeCategoryFilter = tag;
+function handleGamepadAngle(angle) {
+    if (!currentWheelData || !currentWheelData.slots) return;
+    const total = currentWheelData.slots.length;
+    if (total === 0) return;
 
-    const tabs = document.querySelectorAll('.filter-tab');
-    tabs.forEach(tab => {
-        if (tab.getAttribute('data-tag') === tag) {
-            tab.classList.add('active');
-        } else {
-            tab.classList.remove('active');
-        }
-    });
+    const sliceAngle = (2 * Math.PI) / total;
+    let normalized = angle + (sliceAngle / 2);
+    if (normalized < 0) normalized += (2 * Math.PI);
+    normalized = normalized % (2 * Math.PI);
 
-    updateWheelUI();
-}
-
-function saveOutfit(slotIndex) {
-    showSaveToast("Outfit Saved!");
-    if (typeof window.SaveOutfit === 'function' && currentWheelData) {
-        window.SaveOutfit(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: slotIndex
-        }));
-    } else if (typeof window.SaveOutfitToSlot === 'function' && currentWheelData) {
-        window.SaveOutfitToSlot(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: slotIndex
-        }));
-    }
-}
-
-function equipOutfit(slotIndex) {
-    const now = Date.now();
-    if (now - lastEquipCallTimestamp < 350) {
-        return;
-    }
-    lastEquipCallTimestamp = now;
-
-    lastEquippedSlotIndex = slotIndex;
-    updateWheelUI();
-    if (typeof window.EquipSlot === 'function' && currentWheelData) {
-        window.EquipSlot(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: slotIndex
-        }));
-    }
-}
-
-function changeWheel(delta) {
-    if (typeof window.ChangeWheel === 'function' && currentWheelData) {
-        window.ChangeWheel(JSON.stringify({
-            delta: delta,
-            editMode: isEditModeActive()
-        }));
-    }
-}
-
-function addWheel() {
-    if (typeof window.AddWheel === 'function' && currentWheelData) {
-        window.AddWheel(JSON.stringify({
-            editMode: isEditModeActive()
-        }));
-    }
-}
-
-function addSlot() {
-    if (typeof window.AddSlot === 'function' && currentWheelData) {
-        window.AddSlot(JSON.stringify({
-            editMode: isEditModeActive()
-        }));
-    }
-}
-
-function closeWheel() {
-    hideAllMenus();
-    hideAllModals();
-    if (typeof window.OnCloseWheel === 'function') {
-        window.OnCloseWheel("");
+    const slotIdx = Math.floor(normalized / sliceAngle);
+    if (slotIdx >= 0 && slotIdx < total) {
+        selectedSlotIndex = slotIdx;
+        renderDrawerDetails();
+        renderSlotsRail();
     }
 }

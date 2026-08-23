@@ -65,7 +65,6 @@ void ExecutionQueue::RegisterEventsInternal() {
     }
 
     g_eventsRegistered.store(true, std::memory_order_release);
-    SKSE::log::info("RegisterEvents: SUCCESS");
 }
 
 void ExecutionQueue::RegisterEvents() {
@@ -75,32 +74,51 @@ void ExecutionQueue::RegisterEvents() {
 }
 
 void ExecutionQueue::ResetEnvironmentState() {
-    lastEnvironmentContext = ContextFlags::None;
+    lastActorContexts.clear();
 }
 
 ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, RE::TESObjectCELL* cell) {
     CacheLocationKeywords();
 
     if (location) {
-        if (g_locTypePlayerHouse && (location->HasKeyword(g_locTypePlayerHouse) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypePlayerHouse)))) {
-            return ContextFlags::PlayerHome;
-        }
-        if ((g_locTypeCity && (location->HasKeyword(g_locTypeCity) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypeCity)))) ||
-            (g_locTypeTown && (location->HasKeyword(g_locTypeTown) || (location->parentLoc && location->parentLoc->HasKeyword(g_locTypeTown))))) {
-            return ContextFlags::CityTown;
+        auto* curLoc = location;
+        while (curLoc) {
+            if (g_locTypePlayerHouse && curLoc->HasKeyword(g_locTypePlayerHouse)) {
+                return ContextFlags::PlayerHome;
+            }
+            if ((g_locTypeCity && curLoc->HasKeyword(g_locTypeCity)) || (g_locTypeTown && curLoc->HasKeyword(g_locTypeTown))) {
+                return ContextFlags::CityTown;
+            }
+            curLoc = curLoc->parentLoc;
         }
     }
 
-    if (cell && cell->IsInteriorCell()) {
-        auto owner = cell->GetOwner();
-        if (owner) {
-            if (owner->Is(RE::FormType::NPC) && owner->GetFormID() == 0x00000007) {
-                return ContextFlags::PlayerHome;
-            }
-            if (owner->Is(RE::FormType::Faction)) {
-                uint32_t fID = owner->GetFormID();
-                if (fID == 0x00013702 || fID == 0x000A2C9D) {
+    if (cell) {
+        auto* cellLoc = cell->GetLocation();
+        if (cellLoc) {
+            auto* curLoc = cellLoc;
+            while (curLoc) {
+                if (g_locTypePlayerHouse && curLoc->HasKeyword(g_locTypePlayerHouse)) {
                     return ContextFlags::PlayerHome;
+                }
+                if ((g_locTypeCity && curLoc->HasKeyword(g_locTypeCity)) || (g_locTypeTown && curLoc->HasKeyword(g_locTypeTown))) {
+                    return ContextFlags::CityTown;
+                }
+                curLoc = curLoc->parentLoc;
+            }
+        }
+
+        if (cell->IsInteriorCell()) {
+            auto owner = cell->GetOwner();
+            if (owner) {
+                if (owner->Is(RE::FormType::NPC) && (owner->GetFormID() == 0x00000007 || owner->GetFormID() == 0x00000014)) {
+                    return ContextFlags::PlayerHome;
+                }
+                if (owner->Is(RE::FormType::Faction)) {
+                    uint32_t fID = owner->GetFormID();
+                    if (fID == 0x00013702 || fID == 0x000A2C9D) {
+                        return ContextFlags::PlayerHome;
+                    }
                 }
             }
         }
@@ -109,48 +127,63 @@ ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, R
     return ContextFlags::None;
 }
 
-ContextFlags ExecutionQueue::GatherCurrentContext() {
-    if (!g_autoSystemEnabled) return ContextFlags::None;
+ContextFlags ExecutionQueue::GatherActorContext(RE::Actor* a_actor, bool a_isPlayer) {
+    if (!a_actor || !g_autoSystemEnabled) return ContextFlags::Default;
 
     auto player = RE::PlayerCharacter::GetSingleton();
-    if (!player) return ContextFlags::None;
+    bool isInCombat = a_actor->IsInCombat() || (a_isPlayer ? false : (player && player->IsInCombat()));
+    if (isInCombat && g_autoCombatEnabled) {
+        return ContextFlags::Combat;
+    }
 
-    ContextFlags flags = ContextFlags::None;
-    auto parentCell = player->GetParentCell();
-    auto loc = player->GetCurrentLocation();
+    auto actorState = a_actor->AsActorState();
+    float waterHeight = a_actor->GetWaterHeight();
+    float posZ = a_actor->GetPositionZ();
+    if (((actorState && actorState->IsSwimming()) || (waterHeight > posZ + 80.0f)) && g_autoSwimEnabled) {
+        return ContextFlags::Swim;
+    }
+
+    auto parentCell = a_actor->GetParentCell();
+    auto loc = a_actor->GetCurrentLocation();
 
     ContextFlags locFlags = ResolveLocationContext(loc, parentCell);
     if (HasContext(locFlags, ContextFlags::PlayerHome) && g_autoHomeEnabled) {
-        flags |= ContextFlags::PlayerHome;
+        return ContextFlags::PlayerHome;
     }
     if (HasContext(locFlags, ContextFlags::CityTown) && g_autoCityEnabled) {
-        flags |= ContextFlags::CityTown;
+        return ContextFlags::CityTown;
     }
 
-    if (player->IsInCombat() && g_autoCombatEnabled) {
-        flags |= ContextFlags::Combat;
-    }
+    return ContextFlags::Default;
+}
 
-    auto actorState = player->AsActorState();
-    float waterHeight = player->GetWaterHeight();
-    float playerZ = player->GetPositionZ();
-    if (((actorState && actorState->IsSwimming()) || (waterHeight > playerZ + 80.0f)) && g_autoSwimEnabled) {
-        flags |= ContextFlags::Swim;
-    }
-
-    return flags;
+ContextFlags ExecutionQueue::GatherCurrentContext() {
+    auto player = RE::PlayerCharacter::GetSingleton();
+    return GatherActorContext(player, true);
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
 
-    bool involvesPlayer = (a_event->actor && a_event->actor->IsPlayerRef()) ||
-                          (a_event->targetActor && a_event->targetActor->IsPlayerRef());
-    if (!involvesPlayer) {
+    bool involvesPlayerOrTeammate = false;
+
+    if (a_event->actor) {
+        auto* act = a_event->actor->As<RE::Actor>();
+        if (act && (act->IsPlayerRef() || act->IsPlayerTeammate())) {
+            involvesPlayerOrTeammate = true;
+        }
+    }
+    if (a_event->targetActor) {
+        auto* target = a_event->targetActor->As<RE::Actor>();
+        if (target && (target->IsPlayerRef() || target->IsPlayerTeammate())) {
+            involvesPlayerOrTeammate = true;
+        }
+    }
+
+    if (!involvesPlayerOrTeammate) {
         return RE::BSEventNotifyControl::kContinue;
     }
 
-    SKSE::log::info("ProcessEvent: TESCombatEvent fired");
     if (a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat) {
         EvaluateAndQueueChange(true);
     } else {
@@ -161,7 +194,6 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* 
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
-    SKSE::log::info("ProcessEvent: BGSActorCellEvent fired");
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -170,14 +202,12 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESActorLocation
     if (!a_event || !a_event->actor || !a_event->actor->IsPlayerRef()) {
         return RE::BSEventNotifyControl::kContinue;
     }
-    SKSE::log::info("ProcessEvent: TESActorLocationChangeEvent fired");
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
 
 RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCellFullyLoadedEvent* a_event, RE::BSTEventSource<RE::TESCellFullyLoadedEvent>*) {
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
-    SKSE::log::info("ProcessEvent: TESCellFullyLoadedEvent fired");
     EvaluateAndQueueChange(false);
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -186,7 +216,6 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::MenuOpenCloseEve
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
 
     if (!a_event->opening && (a_event->menuName == RE::LoadingMenu::MENU_NAME || a_event->menuName == RE::FaderMenu::MENU_NAME)) {
-        SKSE::log::info("ProcessEvent: MenuOpenCloseEvent - '{}' CLOSED", a_event->menuName.c_str());
         EvaluateAndQueueChange(false);
     }
     return RE::BSEventNotifyControl::kContinue;
@@ -195,92 +224,79 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::MenuOpenCloseEve
 void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
     if (!g_autoSystemEnabled) return;
 
-    if (isMenuOpen.load(std::memory_order_acquire)) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Wheel menu is currently open");
-        return;
-    }
+    if (isMenuOpen.load(std::memory_order_acquire)) return;
 
     if (g_skipInitialLoadEval.exchange(false, std::memory_order_acq_rel)) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Initial game load");
-        lastEnvironmentContext = GatherCurrentContext();
+        lastActorContexts[0x00000007] = GatherCurrentContext();
         return;
     }
 
     uint64_t currentTick = GetTickCount64();
     uint64_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
-    if (!isEmergency && (currentTick - lastTick < 1000)) {
-        SKSE::log::info("EvaluateAndQueueChange: Coalesced duplicate cell/location event");
+    if (!isEmergency && (currentTick - lastTick < 800)) {
         return;
     }
     g_lastEvalTick.store(currentTick, std::memory_order_release);
 
-    if (!g_gameFullyLoaded.load(std::memory_order_acquire)) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Game not fully loaded");
-        return;
-    }
+    if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return;
 
     auto uiRef = RE::UI::GetSingleton();
     if (uiRef && (uiRef->IsMenuOpen(RE::MainMenu::MENU_NAME) || uiRef->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || uiRef->IsMenuOpen(RE::FaderMenu::MENU_NAME))) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Loading/Fader/Main menu active");
         return;
     }
 
     auto playerRef = RE::PlayerCharacter::GetSingleton();
-    if (!playerRef || !playerRef->Is3DLoaded() || playerRef->IsDead()) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Player or 3D not loaded or dead");
-        return;
-    }
+    if (!playerRef || !playerRef->Is3DLoaded() || playerRef->IsDead()) return;
 
-    ContextFlags currentContext = GatherCurrentContext();
-    if (currentContext == ContextFlags::None) {
-        return;
-    }
+    std::vector<RE::Actor*> targetActors;
+    targetActors.push_back(playerRef);
 
-    if (!isEmergency && currentContext == lastEnvironmentContext) {
-        return;
+    auto processLists = RE::ProcessLists::GetSingleton();
+    if (processLists) {
+        for (auto& handle : processLists->highActorHandles) {
+            auto actor = handle.get();
+            if (actor && actor.get() != playerRef && actor->IsPlayerTeammate() && !actor->IsDead() && actor->Is3DLoaded()) {
+                targetActors.push_back(actor.get());
+            }
+        }
     }
-    lastEnvironmentContext = currentContext;
 
     auto manager = AdaptiveWardrobeManager::GetSingleton();
-    SKSE::log::info("EvaluateAndQueueChange: State changed to context {:08X}", static_cast<uint32_t>(currentContext));
 
-    auto selectionOpt = manager->SelectOptimalOutfit(currentContext, isEmergency);
-    if (!selectionOpt.has_value()) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - No optimal outfit found for context {:08X}", static_cast<uint32_t>(currentContext));
-        return;
+    for (auto* actor : targetActors) {
+        if (!actor || !actor->Is3DLoaded() || actor->IsDead()) continue;
+
+        bool isPlayer = actor->IsPlayerRef() || (actor == playerRef);
+        RE::FormID actorID = isPlayer ? 0x00000007 : actor->GetFormID();
+
+        ContextFlags currentContext = GatherActorContext(actor, isPlayer);
+
+        auto lastCtxIt = lastActorContexts.find(actorID);
+        ContextFlags lastCtx = (lastCtxIt != lastActorContexts.end()) ? lastCtxIt->second : ContextFlags::None;
+
+        if (!isEmergency && currentContext == lastCtx) continue;
+        lastActorContexts[actorID] = currentContext;
+
+        auto selectionOpt = manager->SelectOptimalOutfit(actorID, currentContext, isEmergency);
+        if (!selectionOpt.has_value()) continue;
+
+        auto selection = selectionOpt.value();
+        if (selection.selectedOutfit.id == manager->GetCurrentOutfitID(actorID)) continue;
+
+        std::string targetID = selection.selectedOutfit.id;
+        std::string targetName = selection.selectedOutfit.name;
+        std::vector<RE::FormID> targetItems = selection.selectedOutfit.itemIDs;
+        RE::ActorHandle aHandle = actor->GetHandle();
+
+        SKSE::GetTaskInterface()->AddTask([manager, actorID, aHandle, targetID, targetName, targetItems]() {
+            auto targetActorPtr = aHandle.get();
+            auto equipManager = RE::ActorEquipManager::GetSingleton();
+            if (!targetActorPtr || !equipManager || !targetActorPtr->Is3DLoaded() || targetActorPtr->IsDead()) {
+                return;
+            }
+
+            PerformOutfitSwap(targetActorPtr.get(), equipManager, targetItems);
+            manager->RecordOutfitEquipped(actorID, targetID, 0);
+        });
     }
-
-    auto selection = selectionOpt.value();
-    SKSE::log::info("EvaluateAndQueueChange: Candidate selected outfit ID '{}' ('{}'), current outfit ID '{}'",
-                    selection.selectedOutfit.id, selection.selectedOutfit.name, manager->GetCurrentOutfitID());
-
-    if (selection.selectedOutfit.id == manager->GetCurrentOutfitID()) {
-        SKSE::log::info("EvaluateAndQueueChange: Skipped - Selected outfit matches current outfit ID '{}'", manager->GetCurrentOutfitID());
-        return;
-    }
-
-    std::string targetID = selection.selectedOutfit.id;
-    std::string targetName = selection.selectedOutfit.name;
-    std::vector<RE::FormID> targetItems = selection.selectedOutfit.itemIDs;
-
-    SKSE::log::info("EvaluateAndQueueChange: Queuing SKSE task to swap to '{}' ({})", targetName, targetID);
-
-    SKSE::GetTaskInterface()->AddTask([manager, targetID, targetName, targetItems]() {
-        auto player = RE::PlayerCharacter::GetSingleton();
-        auto equipManager = RE::ActorEquipManager::GetSingleton();
-        if (!player || !equipManager || !player->Is3DLoaded() || player->IsDead()) {
-            SKSE::log::info("TaskLambda: Skipped - Player/EquipManager null or 3D not loaded");
-            return;
-        }
-
-        if (manager->GetCurrentOutfitID() == targetID) {
-            SKSE::log::info("TaskLambda: Skipped - Outfit ID '{}' already equipped", targetID);
-            return;
-        }
-
-        SKSE::log::info("TaskLambda: EXECUTING PerformOutfitSwap to '{}' ({})", targetName, targetID);
-        PerformOutfitSwap(player, equipManager, targetItems);
-        manager->RecordOutfitEquipped(targetID, 0);
-        SKSE::log::info("TaskLambda: PerformOutfitSwap COMPLETE for '{}'", targetName);
-    });
 }

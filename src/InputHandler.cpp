@@ -1,7 +1,11 @@
+#include "pch.h"
 #include "InputHandler.h"
 #include "Settings.h"
 #include "OutfitManager.h"
 #include "PrismaUI_API.h"
+#include "JSInterop.h"
+#include "ExecutionQueue.h"
+#include <RE/C/CrosshairPickData.h>
 #include <SKSE/SKSE.h>
 #include <windows.h>
 #include <Xinput.h>
@@ -17,11 +21,13 @@ extern PrismaView view;
 
 std::atomic<bool> isMenuOpen{ false };
 std::atomic<bool> g_isTyping{ false };
+std::atomic<bool> g_isEditModeOpen{ false };
 bool g_inputRegistered = false;
 
 static std::chrono::steady_clock::time_point g_lastToggleTime{};
 static std::chrono::steady_clock::time_point g_lastFilterTime{};
 static std::chrono::steady_clock::time_point g_lastWheelTime{};
+static std::chrono::steady_clock::time_point g_lastPeriodicEvalTime{};
 static uint32_t g_currentGamepadMask = 0;
 static float g_lastSentAngle = -999.0f;
 
@@ -38,6 +44,7 @@ static const RE::BSFixedString MENU_LOCKPICKING("Lockpicking Menu");
 static const RE::BSFixedString MENU_CRAFTING("Crafting Menu");
 static const RE::BSFixedString MENU_DIALOGUE("Dialogue Menu");
 static const RE::BSFixedString MENU_FADER("Fader Menu");
+static const RE::BSFixedString MENU_LOADING("Loading Menu");
 
 static inline bool IsModifierMatch(uint32_t modKey, bool shift, bool ctrl, bool alt) {
     if (modKey == 0) return true;
@@ -57,33 +64,131 @@ static bool GetActiveGamepadState(XINPUT_STATE* outState) {
     return false;
 }
 
-void ShowWheel(bool isEditMode) {
+static void SetupStudioCameraAndControls(bool enableStudio) {
+    auto controlMap = RE::ControlMap::GetSingleton();
+    if (controlMap) {
+        using UEFlag = RE::ControlMap::UEFlag;
+        uint32_t flags = static_cast<uint32_t>(UEFlag::kFighting) |
+                         static_cast<uint32_t>(UEFlag::kMovement) |
+                         static_cast<uint32_t>(UEFlag::kJumping) |
+                         static_cast<uint32_t>(UEFlag::kSneaking) |
+                         static_cast<uint32_t>(UEFlag::kActivate);
+        controlMap->ToggleControls(static_cast<UEFlag>(flags), !enableStudio);
+    }
+
+    auto player = RE::PlayerCharacter::GetSingleton();
+    if (player && enableStudio) {
+        auto actorState = player->AsActorState();
+        if (actorState && actorState->GetWeaponState() != RE::WEAPON_STATE::kSheathed) {
+            player->DrawWeaponMagicHands(false);
+        }
+    }
+
+    auto cam = RE::PlayerCamera::GetSingleton();
+    if (cam) {
+        if (enableStudio) {
+            if (cam->currentState && cam->currentState->id == RE::CameraState::kFirstPerson) {
+                cam->ForceThirdPerson();
+            }
+            if (player) {
+                cam->cameraTarget = player->GetHandle();
+            }
+            if (cam->currentState && (cam->currentState->id == RE::CameraState::kThirdPerson || cam->currentState->id == RE::CameraState::kAutoVanity)) {
+                auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
+                if (tpState) {
+                    tpState->freeRotation.x = 3.14159265f;
+                    tpState->freeRotation.y = 0.0f;
+                    tpState->targetZoomOffset = 0.45f;
+                }
+            }
+        } else {
+            if (player) {
+                cam->cameraTarget = player->GetHandle();
+            }
+        }
+    }
+}
+
+void OpenWheel(bool isEditMode) {
     if (!PrismaUI || view == 0) return;
-    std::string wheelDataJson = GetWheelJson(isEditMode);
-    PrismaUI->Show(view);
-    PrismaUI->Focus(view, true, false);
-    PrismaUI->InteropCall(view, "openWheel", wheelDataJson.c_str());
 
-    auto now = std::chrono::steady_clock::now();
-    g_lastWheelTime = now + std::chrono::milliseconds(400);
-    g_lastFilterTime = now + std::chrono::milliseconds(400);
-    g_lastSentAngle = -999.0f;
+    SKSE::GetTaskInterface()->AddTask([isEditMode]() {
+        if (!PrismaUI || view == 0) return;
 
-    isMenuOpen.store(true, std::memory_order_release);
+        RE::FormID targetID = 0x00000007;
+        if (!isEditMode) {
+            auto* crosshair = RE::CrosshairPickData::GetSingleton();
+            if (crosshair && crosshair->target) {
+                auto targetRef = crosshair->target->get();
+                if (targetRef) {
+                    auto* actor = targetRef->As<RE::Actor>();
+                    if (actor && actor->IsPlayerTeammate() && !actor->IsDead()) {
+                        targetID = actor->GetFormID();
+                    }
+                }
+            }
+        } else {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            targetID = g_manager.activeTargetActorID;
+        }
+
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            g_manager.activeTargetActorID = targetID;
+        }
+
+        if (isEditMode) {
+            InitializeStudioStage();
+            SetupStudioCameraAndControls(true);
+        }
+
+        std::string wheelDataJson = GetWheelJson(isEditMode);
+        PrismaUI->InteropCall(view, "openWheel", wheelDataJson.c_str());
+        PrismaUI->Show(view);
+        PrismaUI->Focus(view, false, false);
+
+        auto now = std::chrono::steady_clock::now();
+        g_lastWheelTime = now + std::chrono::milliseconds(400);
+        g_lastFilterTime = now + std::chrono::milliseconds(400);
+        g_lastSentAngle = -999.0f;
+
+        g_isEditModeOpen.store(isEditMode, std::memory_order_release);
+        isMenuOpen.store(true, std::memory_order_release);
+    });
+}
+
+void ShowWheel(bool isEditMode) {
+    OpenWheel(isEditMode);
 }
 
 void HideWheel() {
-    if (PrismaUI && view != 0) {
+    if (!PrismaUI || view == 0) return;
+
+    SKSE::GetTaskInterface()->AddTask([]() {
+        if (!PrismaUI || view == 0) return;
+
+        RestoreStudioActors();
+        SetupStudioCameraAndControls(false);
         PrismaUI->Unfocus(view);
         PrismaUI->Hide(view);
-    }
-    g_lastSentAngle = -999.0f;
-    isMenuOpen.store(false, std::memory_order_release);
+
+        g_lastSentAngle = -999.0f;
+        g_isEditModeOpen.store(false, std::memory_order_release);
+        isMenuOpen.store(false, std::memory_order_release);
+    });
 }
 
 WheelInputHandler* WheelInputHandler::GetSingleton() {
     static WheelInputHandler singleton;
     return &singleton;
+}
+
+void WheelInputHandler::OpenWheel(bool isEditMode) {
+    ::OpenWheel(isEditMode);
+}
+
+void WheelInputHandler::HideWheel() {
+    ::HideWheel();
 }
 
 void WheelInputHandler::Register() {
@@ -97,6 +202,13 @@ void WheelInputHandler::Register() {
 
 RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) {
     if (!a_event || !*a_event) return RE::BSEventNotifyControl::kContinue;
+    if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return RE::BSEventNotifyControl::kContinue;
+
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastPeriodicEvalTime).count() > 1500) {
+        g_lastPeriodicEvalTime = now;
+        ExecutionQueue::GetSingleton()->EvaluateAndQueueChange(false);
+    }
 
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player || !player->Is3DLoaded() || player->IsDead()) return RE::BSEventNotifyControl::kContinue;
@@ -105,6 +217,7 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     if (!ui) return RE::BSEventNotifyControl::kContinue;
 
     bool currentlyOpen = isMenuOpen.load(std::memory_order_acquire);
+    bool isEditMode = g_isEditModeOpen.load(std::memory_order_acquire);
     bool isTypingActive = g_isTyping.load(std::memory_order_acquire);
 
     if (!currentlyOpen) {
@@ -116,32 +229,50 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                               ui->IsMenuOpen(MENU_BARTER) || ui->IsMenuOpen(MENU_BOOK) ||
                               ui->IsMenuOpen(MENU_JOURNAL) || ui->IsMenuOpen(MENU_MAP) ||
                               ui->IsMenuOpen(MENU_LOCKPICKING) || ui->IsMenuOpen(MENU_CRAFTING) ||
-                              ui->IsMenuOpen(MENU_DIALOGUE) || ui->IsMenuOpen(MENU_FADER);
+                              ui->IsMenuOpen(MENU_DIALOGUE) || ui->IsMenuOpen(MENU_FADER) ||
+                              ui->IsMenuOpen(MENU_LOADING);
 
         if (hasBlockingMenu || (ui->GameIsPaused() && !isInventoryOpen)) {
             return RE::BSEventNotifyControl::kContinue;
         }
     } else {
-        XINPUT_STATE xState;
-        if (GetActiveGamepadState(&xState)) {
-            float lx = static_cast<float>(xState.Gamepad.sThumbLX);
-            float ly = static_cast<float>(xState.Gamepad.sThumbLY);
+        if (!isEditMode) {
+            XINPUT_STATE xState;
+            if (GetActiveGamepadState(&xState)) {
+                float rx = static_cast<float>(xState.Gamepad.sThumbRX) / 32767.0f;
+                float ry = static_cast<float>(xState.Gamepad.sThumbRY) / 32767.0f;
+                float rMag = std::sqrt(rx * rx + ry * ry);
 
-            float normX = lx / 32767.0f;
-            float normY = ly / 32767.0f;
-            float mag = std::sqrt(normX * normX + normY * normY);
+                float lx = static_cast<float>(xState.Gamepad.sThumbLX) / 32767.0f;
+                float ly = static_cast<float>(xState.Gamepad.sThumbLY) / 32767.0f;
+                float lMag = std::sqrt(lx * lx + ly * ly);
 
-            if (mag >= g_thumbstickDeadzone) {
-                float phi = std::atan2(normX, normY);
-                if (phi < 0.0f) phi += 6.2831853f;
+                float useX = 0.0f;
+                float useY = 0.0f;
+                float useMag = 0.0f;
 
-                if (std::abs(phi - g_lastSentAngle) > 0.05f) {
-                    g_lastSentAngle = phi;
-                    SKSE::GetTaskInterface()->AddTask([phi]() {
-                        if (PrismaUI && view != 0) {
-                            PrismaUI->InteropCall(view, "setGamepadAngle", std::to_string(phi).c_str());
-                        }
-                    });
+                if (rMag >= g_thumbstickDeadzone) {
+                    useX = rx;
+                    useY = ry;
+                    useMag = rMag;
+                } else if (lMag >= g_thumbstickDeadzone) {
+                    useX = lx;
+                    useY = ly;
+                    useMag = lMag;
+                }
+
+                if (useMag >= g_thumbstickDeadzone) {
+                    float phi = std::atan2(useX, useY);
+                    if (phi < 0.0f) phi += 6.2831853f;
+
+                    if (std::abs(phi - g_lastSentAngle) > 0.03f) {
+                        g_lastSentAngle = phi;
+                        SKSE::GetTaskInterface()->AddTask([phi]() {
+                            if (PrismaUI && view != 0) {
+                                PrismaUI->InteropCall(view, "setGamepadAngle", std::to_string(phi).c_str());
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -161,6 +292,11 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
 
             if (device == RE::INPUT_DEVICE::kKeyboard && buttonEvent->IsPressed()) {
                 if (!isTypingActive) {
+                    if (keyCode == 0x01 && currentlyOpen) {
+                        HideWheel();
+                        return RE::BSEventNotifyControl::kContinue;
+                    }
+
                     bool editModMatch = IsModifierMatch(g_editModifierKey, shift, ctrl, alt);
                     bool playModMatch = IsModifierMatch(g_playModifierKey, shift, ctrl, alt);
 
@@ -168,27 +304,28 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                     bool triggerPlay = (keyCode == g_playKey && playModMatch);
 
                     if (triggerEdit || triggerPlay) {
-                        auto now = std::chrono::steady_clock::now();
                         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastToggleTime).count() < 200) {
                             return RE::BSEventNotifyControl::kContinue;
                         }
                         g_lastToggleTime = now;
 
                         bool targetMode = triggerEdit;
-                        SKSE::GetTaskInterface()->AddTask([targetMode]() {
-                            if (!isMenuOpen.load(std::memory_order_acquire)) ShowWheel(targetMode);
-                            else HideWheel();
-                        });
+                        if (!isMenuOpen.load(std::memory_order_acquire)) OpenWheel(targetMode);
+                        else HideWheel();
+
+                        return RE::BSEventNotifyControl::kContinue;
                     }
                 }
             } else if (device == RE::INPUT_DEVICE::kGamepad) {
+                if (currentlyOpen && isEditMode) {
+                    return RE::BSEventNotifyControl::kContinue;
+                }
+
                 if (buttonEvent->IsDown()) g_currentGamepadMask |= keyCode;
                 else if (buttonEvent->IsUp()) g_currentGamepadMask &= ~keyCode;
 
                 if (buttonEvent->IsPressed()) {
-                    auto now = std::chrono::steady_clock::now();
-
-                    if (currentlyOpen) {
+                    if (currentlyOpen && !isEditMode) {
                         SKSE::GetTaskInterface()->AddTask([keyCode]() {
                             if (PrismaUI && view != 0) {
                                 PrismaUI->InteropCall(view, "onGamepadButtonPress", std::to_string(keyCode).c_str());
@@ -197,19 +334,21 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
 
                         if (keyCode == 0x2000 || keyCode == 0x0020 || keyCode == 0x0010) {
                             if (!isTypingActive) {
-                                SKSE::GetTaskInterface()->AddTask([]() { HideWheel(); });
+                                HideWheel();
                             }
                             return RE::BSEventNotifyControl::kContinue;
                         }
+
                         if (keyCode == 0x1000) {
                             SKSE::GetTaskInterface()->AddTask([]() {
                                 if (PrismaUI && view != 0) PrismaUI->InteropCall(view, "gamepadConfirm", "");
                             });
                             return RE::BSEventNotifyControl::kContinue;
                         }
+
                         if (keyCode == 0x0100 || keyCode == 0x0200) {
                             if (now >= g_lastWheelTime) {
-                                g_lastWheelTime = now + std::chrono::milliseconds(250);
+                                g_lastWheelTime = now + std::chrono::milliseconds(220);
                                 int dir = (keyCode == 0x0100) ? -1 : 1;
                                 SKSE::GetTaskInterface()->AddTask([dir]() {
                                     if (PrismaUI && view != 0) PrismaUI->InteropCall(view, "gamepadCycleWheel", std::to_string(dir).c_str());
@@ -217,9 +356,10 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                             }
                             return RE::BSEventNotifyControl::kContinue;
                         }
+
                         if (keyCode == 0x0009 || keyCode == 0x000A) {
                             if (now >= g_lastFilterTime) {
-                                g_lastFilterTime = now + std::chrono::milliseconds(250);
+                                g_lastFilterTime = now + std::chrono::milliseconds(220);
                                 int dir = (keyCode == 0x0009) ? -1 : 1;
                                 SKSE::GetTaskInterface()->AddTask([dir]() {
                                     if (PrismaUI && view != 0) PrismaUI->InteropCall(view, "gamepadCycleFilter", std::to_string(dir).c_str());
@@ -227,7 +367,7 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                             }
                             return RE::BSEventNotifyControl::kContinue;
                         }
-                    } else {
+                    } else if (!currentlyOpen) {
                         if (!isTypingActive) {
                             bool gpPlayModMatch = (g_gamepadPlayModifier == 0) || ((g_currentGamepadMask & g_gamepadPlayModifier) != 0);
                             bool gpTriggerPlay = (keyCode == g_gamepadPlayKey && gpPlayModMatch);
@@ -238,7 +378,8 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                                 }
                                 g_lastToggleTime = now;
 
-                                SKSE::GetTaskInterface()->AddTask([]() { ShowWheel(false); });
+                                OpenWheel(false);
+                                return RE::BSEventNotifyControl::kContinue;
                             }
                         }
                     }
