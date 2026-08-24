@@ -1,5 +1,4 @@
 var updateWheelRafId = null;
-var lastEquipCallTimestamp = 0;
 
 var svgOutfitIcon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.38 3.46L16 2a4 4 0 01-8 0L3.62 3.46a2 2 0 00-1.34 2.23l.58 3.47a1 1 0 00.99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 002-2V10h2.15a1 1 0 00.99-.84l.58-3.47a2 2 0 00-1.34-2.23z"/></svg>';
 var svgPlusIcon = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
@@ -53,16 +52,17 @@ function updateWheelUI() {
 
         const isEdit = isEditModeActive();
         const baseScale = isEdit ? 0.55 : 1.0;
-        const userScale = currentWheelData.wheelScale || 1.0;
-        const offsetX = isEdit ? 0.0 : (currentWheelData.wheelOffsetX || 0.0);
+        const userScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
+        const offsetX = isEdit ? 0.0 : ((currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0);
+        const offsetY = isEdit ? 0.0 : ((currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0);
 
-        container.style.transform = `translateX(${offsetX}px) scale(${baseScale * userScale})`;
+        container.style.transform = 'translateX(' + offsetX + 'px) translateY(' + offsetY + 'px) scale(' + (baseScale * userScale) + ')';
 
         if (wheelIndexLbl) {
-            wheelIndexLbl.innerText = `WHEEL ${currentWheelData.wheelIndex + 1} OF ${currentWheelData.totalWheels || 1}`;
+            wheelIndexLbl.innerText = `WHEEL ${(currentWheelData.wheelIndex || 0) + 1} OF ${currentWheelData.totalWheels || 1}`;
         }
 
-        const defaultWheelTitle = currentWheelData.wheelName || ('Wheel ' + (currentWheelData.wheelIndex + 1));
+        const defaultWheelTitle = currentWheelData.wheelName || ('Wheel ' + ((currentWheelData.wheelIndex || 0) + 1));
         if (wheelNameDrawer) {
             wheelNameDrawer.innerText = defaultWheelTitle;
         }
@@ -103,6 +103,8 @@ function updateWheelUI() {
                 }
             });
         }
+
+        updateGamepadHintsVisibility();
 
         const total = displaySlots.length;
         if (total === 0) return;
@@ -156,7 +158,7 @@ function updateWheelUI() {
             } else if (hasOutfit) {
                 defaultFill = 'rgba(13, 18, 26, 0.88)';
                 defaultStroke = 'rgba(45, 58, 75, 0.55)';
-                hoverFill = 'rgba(255, 255, 255, 0.15)';
+                hoverFill = 'rgba(255, 255, 255, 0.18)';
                 hoverStroke = '#f8fafc';
                 pathEl.setAttribute("class", "slice-path");
             } else {
@@ -165,6 +167,10 @@ function updateWheelUI() {
                 hoverFill = 'rgba(255, 255, 255, 0.08)';
                 hoverStroke = '#94a3b8';
                 pathEl.setAttribute("class", "slice-path empty");
+            }
+
+            if (gamepadHoverSlotIndex === index) {
+                pathEl.classList.add('gamepad-hover');
             }
 
             pathEl.style.fill = defaultFill;
@@ -226,22 +232,4 @@ function updateWheelUI() {
         svg.appendChild(svgFragment);
         labelsContainer.appendChild(labelFragment);
     });
-}
-
-function handleGamepadAngle(angle) {
-    if (!currentWheelData || !currentWheelData.slots) return;
-    const total = currentWheelData.slots.length;
-    if (total === 0) return;
-
-    const sliceAngle = (2 * Math.PI) / total;
-    let normalized = angle + (sliceAngle / 2);
-    if (normalized < 0) normalized += (2 * Math.PI);
-    normalized = normalized % (2 * Math.PI);
-
-    const slotIdx = Math.floor(normalized / sliceAngle);
-    if (slotIdx >= 0 && slotIdx < total) {
-        selectedSlotIndex = slotIdx;
-        renderDrawerDetails();
-        renderSlotsRail();
-    }
 }

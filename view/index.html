@@ -6,7 +6,8 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="ui-wrapper" class="studio-theme-stealth-black">
+<div id="save-toast" class="toast-popup">Outfit Saved!</div>
+<div id="ui-wrapper" onclick="handleWrapperClick(event)">
     <div id="top-follower-bar" class="edit-only">
         <div class="follower-carousel-container" id="follower-carousel-container">
             <button class="carousel-arrow prev" onclick="cycleFollowerCarousel(-1)">◀</button>
@@ -14,7 +15,7 @@
             <button class="carousel-arrow next" onclick="cycleFollowerCarousel(1)">▶</button>
         </div>
         <button class="top-settings-btn" onclick="openSettingsModal(event)" title="Settings">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="3"></circle>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
@@ -32,17 +33,7 @@
             <div class="panel-header">
                 <div class="inv-source-carousel-wrapper" id="inv-source-carousel-wrapper">
                     <button class="source-nav-arrow" onclick="cycleInvSource(-1)">◀</button>
-                    <div class="inv-source-strip" id="inv-source-strip">
-                        <button class="inv-source-chip active" id="src-btn-player" data-source="PLAYER" onclick="setInventorySource('PLAYER')">
-                            <span>🎒 Player</span>
-                        </button>
-                        <button class="inv-source-chip" id="src-btn-follower" data-source="FOLLOWER" onclick="setInventorySource('FOLLOWER')">
-                            <span>👤 Follower</span>
-                        </button>
-                        <button class="inv-source-chip" id="src-btn-cloud" data-source="CLOUD" onclick="setInventorySource('CLOUD')">
-                            <span>☁️ Cloud</span>
-                        </button>
-                    </div>
+                    <div class="inv-source-strip" id="inv-source-strip"></div>
                     <button class="source-nav-arrow" onclick="cycleInvSource(1)">▶</button>
                 </div>
 
@@ -50,7 +41,7 @@
                     <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2">
                         <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
                     </svg>
-                    <input type="text" class="inventory-search-input" id="inventory-search" placeholder="Search armors, jewelry..." oninput="handleInventorySearch(this.value)">
+                    <input type="text" class="inventory-search-input" id="inventory-search" placeholder="Search armors, jewelry..." oninput="handleInventorySearch(this.value)" onfocus="setTyping(true)" onblur="setTyping(false)">
                     <button class="search-clear-btn" onclick="clearInventorySearch()">✕</button>
                 </div>
 
@@ -132,8 +123,7 @@
             <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'br')"></div>
         </section>
 
-        <section id="panel-viewport" class="center-stage-viewport edit-only">
-        </section>
+        <section id="panel-viewport" class="center-stage-viewport edit-only"></section>
 
         <div id="playmode-wheel-container">
             <div id="wheel-container">
@@ -294,16 +284,24 @@
                         <label>Scale</label>
                         <div class="number-control">
                             <button onclick="stepScale(-0.05)">-</button>
-                            <input type="text" id="scale-input" value="100%" oninput="onScaleInputChange(this.value)" onblur="onScaleInputBlur()">
+                            <input type="text" id="scale-input" value="100%" oninput="onScaleInputChange(this.value)" onblur="onScaleInputBlur()" onfocus="setTyping(true)">
                             <button onclick="stepScale(0.05)">+</button>
                         </div>
                     </div>
-                    <div class="setting-row">
-                        <label>X Offset</label>
+                    <div class="setting-row" onwheel="handleOffsetScroll(event)">
+                        <label>X Position</label>
                         <div class="number-control">
                             <button onclick="stepOffsetX(-10)">-</button>
-                            <input type="text" id="offsetx-input" value="0px" oninput="onOffsetXInputChange(this.value)" onblur="onOffsetXInputBlur()">
+                            <input type="text" id="offsetx-input" value="0px" oninput="onOffsetXInputChange(this.value)" onblur="onOffsetXInputBlur()" onfocus="setTyping(true)">
                             <button onclick="stepOffsetX(10)">+</button>
+                        </div>
+                    </div>
+                    <div class="setting-row" onwheel="handleOffsetYScroll(event)">
+                        <label>Y Position</label>
+                        <div class="number-control">
+                            <button onclick="stepOffsetY(-10)">-</button>
+                            <input type="text" id="offsety-input" value="0px" oninput="onOffsetYInputChange(this.value)" onblur="onOffsetYInputBlur()" onfocus="setTyping(true)">
+                            <button onclick="stepOffsetY(10)">+</button>
                         </div>
                     </div>
                 </div>
@@ -359,8 +357,32 @@
             </div>
             <div class="modal-body settings-grid">
                 <div class="setting-row">
+                    <label>Edit Modifier</label>
+                    <div class="custom-dropdown" onclick="toggleDropdown('edit', event)">
+                        <span id="dd-edit-text">None</span>
+                        <div class="dropdown-list" id="dd-edit-list" style="display: none;">
+                            <div class="dropdown-item" onclick="selectMod('edit', 0, 'None', event)">None</div>
+                            <div class="dropdown-item" onclick="selectMod('edit', 42, 'Shift', event)">Shift</div>
+                            <div class="dropdown-item" onclick="selectMod('edit', 29, 'Ctrl', event)">Ctrl</div>
+                            <div class="dropdown-item" onclick="selectMod('edit', 56, 'Alt', event)">Alt</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="setting-row">
                     <label>Edit Mode Key</label>
                     <button id="btn-edit-key" class="keybind-btn" onclick="startKeyListen('edit')">[N]</button>
+                </div>
+                <div class="setting-row">
+                    <label>Play Modifier</label>
+                    <div class="custom-dropdown" onclick="toggleDropdown('play', event)">
+                        <span id="dd-play-text">None</span>
+                        <div class="dropdown-list" id="dd-play-list" style="display: none;">
+                            <div class="dropdown-item" onclick="selectMod('play', 0, 'None', event)">None</div>
+                            <div class="dropdown-item" onclick="selectMod('play', 42, 'Shift', event)">Shift</div>
+                            <div class="dropdown-item" onclick="selectMod('play', 29, 'Ctrl', event)">Ctrl</div>
+                            <div class="dropdown-item" onclick="selectMod('play', 56, 'Alt', event)">Alt</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="setting-row">
                     <label>Play Mode Key</label>
@@ -382,8 +404,21 @@
             </div>
             <div class="modal-body settings-grid">
                 <div class="setting-row">
+                    <label>Play Modifier</label>
+                    <div class="custom-dropdown" onclick="toggleDropdown('gp-play', event)">
+                        <span id="dd-gp-play-text">LB</span>
+                        <div class="dropdown-list" id="dd-gp-play-list" style="display: none;">
+                            <div class="dropdown-item" onclick="selectMod('gp-play', 0, 'None', event)">None</div>
+                            <div class="dropdown-item" onclick="selectMod('gp-play', 256, 'LB', event)">LB</div>
+                            <div class="dropdown-item" onclick="selectMod('gp-play', 512, 'RB', event)">RB</div>
+                            <div class="dropdown-item" onclick="selectMod('gp-play', 9, 'LT', event)">LT</div>
+                            <div class="dropdown-item" onclick="selectMod('gp-play', 10, 'RT', event)">RT</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="setting-row">
                     <label>Play Mode Key</label>
-                    <button id="btn-gp-play-key" class="keybind-btn" onclick="startGamepadListen('play')">[RB + DPad Right]</button>
+                    <button id="btn-gp-play-key" class="keybind-btn" onclick="startGamepadListen('play')">[DPad Right]</button>
                 </div>
             </div>
             <div class="modal-footer">
@@ -452,8 +487,6 @@
             </div>
         </div>
     </div>
-
-    <div id="save-toast" class="toast-popup">Outfit Saved!</div>
 </div>
 
 <script src="app.js"></script>

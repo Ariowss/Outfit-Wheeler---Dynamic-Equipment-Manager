@@ -708,6 +708,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
     data["totalWheels"] = activeProfile.wheels.size();
     data["wheelScale"] = g_wheelScale;
     data["wheelOffsetX"] = g_wheelOffsetX;
+    data["wheelOffsetY"] = g_wheelOffsetY;
     data["editKey"] = g_editKey;
     data["editModifierKey"] = g_editModifierKey;
     data["playKey"] = g_playKey;
@@ -781,19 +782,20 @@ std::string GetWheelJsonInternal(bool isEditMode) {
                     sID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << fID;
                     auto* arm = f->As<RE::TESObjectARMO>();
                     std::string tStr = GetApparelTypeString(arm);
-                    std::string ic = "🛡️";
-                    if (tStr == "Helmet") ic = "🪖";
-                    else if (tStr == "Amulet") ic = "📿";
-                    else if (tStr == "Ring") ic = "💍";
-                    else if (tStr == "Gauntlets") ic = "🧤";
-                    else if (tStr == "Boots") ic = "👢";
+                    std::string icon = "🛡️";
+                    if (tStr == "Helmet") icon = "🪖";
+                    else if (tStr == "Amulet") icon = "📿";
+                    else if (tStr == "Ring") icon = "💍";
+                    else if (tStr == "Gauntlets") icon = "🧤";
+                    else if (tStr == "Boots") icon = "👢";
+                    else if (tStr == "Shield") icon = "🛡️";
 
                     itemObjects.push_back(json{
                         {"id", sID.str()},
                         {"rawID", static_cast<uint32_t>(fID)},
                         {"name", SanitizeUtf8(f->GetName() ? f->GetName() : "Apparel")},
                         {"type", tStr},
-                        {"icon", ic}
+                        {"icon", icon}
                     });
                 }
             }

@@ -247,6 +247,7 @@ void SaveSettingsListener(const char* data) {
         bool editMode = req.value("editMode", false);
         if (req.contains("wheelScale")) g_wheelScale = req.value("wheelScale", 1.0f);
         if (req.contains("wheelOffsetX")) g_wheelOffsetX = req.value("wheelOffsetX", 0.0f);
+        if (req.contains("wheelOffsetY")) g_wheelOffsetY = req.value("wheelOffsetY", 0.0f);
         if (req.contains("editKey")) g_editKey = req.value("editKey", 0x31);
         if (req.contains("editModifierKey")) g_editModifierKey = req.value("editModifierKey", 0x00);
         if (req.contains("playKey")) g_playKey = req.value("playKey", 0x2F);

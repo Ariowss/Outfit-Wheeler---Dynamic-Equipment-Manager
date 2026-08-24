@@ -15,6 +15,7 @@ float g_thumbstickDeadzone = 0.25f;
 
 float g_wheelScale = 1.0f;
 float g_wheelOffsetX = 0.0f;
+float g_wheelOffsetY = 0.0f;
 
 bool g_autoStashEnabled = false;
 bool g_autoSystemEnabled = true;
@@ -55,6 +56,9 @@ void LoadINI() {
         if (GetPrivateProfileStringA("General", "fWheelOffsetX", "0.0", buffer, sizeof(buffer), targetPath.c_str())) {
             try { g_wheelOffsetX = std::stof(buffer); } catch (...) { g_wheelOffsetX = 0.0f; }
         }
+        if (GetPrivateProfileStringA("General", "fWheelOffsetY", "0.0", buffer, sizeof(buffer), targetPath.c_str())) {
+            try { g_wheelOffsetY = std::stof(buffer); } catch (...) { g_wheelOffsetY = 0.0f; }
+        }
         if (GetPrivateProfileStringA("Gamepad", "fThumbstickDeadzone", "0.25", buffer, sizeof(buffer), targetPath.c_str())) {
             try { g_thumbstickDeadzone = std::stof(buffer); } catch (...) { g_thumbstickDeadzone = 0.25f; }
         }
@@ -76,6 +80,7 @@ void SaveINI() {
 
     WritePrivateProfileStringA("General", "fWheelScale", std::to_string(g_wheelScale).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("General", "fWheelOffsetX", std::to_string(g_wheelOffsetX).c_str(), g_mcmIniPath.c_str());
+    WritePrivateProfileStringA("General", "fWheelOffsetY", std::to_string(g_wheelOffsetY).c_str(), g_mcmIniPath.c_str());
     WritePrivateProfileStringA("General", "bAutoStashInactive", g_autoStashEnabled ? "1" : "0", g_mcmIniPath.c_str());
 
     WritePrivateProfileStringA("AutoSystem", "bMasterAutoSystem", g_autoSystemEnabled ? "1" : "0", g_mcmIniPath.c_str());

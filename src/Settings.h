@@ -15,6 +15,7 @@ extern float g_thumbstickDeadzone;
 
 extern float g_wheelScale;
 extern float g_wheelOffsetX;
+extern float g_wheelOffsetY;
 
 extern bool g_autoStashEnabled;
 extern bool g_autoSystemEnabled;
