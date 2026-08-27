@@ -722,7 +722,8 @@ function equipOutfit(slotIndex) {
     if (typeof window.EquipSlot === 'function' && currentWheelData) {
         window.EquipSlot(JSON.stringify({
             wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: slotIndex
+            slotIndex: slotIndex,
+            editMode: isEditModeActive()
         }));
     }
 }
@@ -818,10 +819,10 @@ function loadPanelsLayout() {
             const data = layout[id];
             const el = document.getElementById(id);
             if (el && data) {
-                let l = Math.max(8, Math.min(data.left, screenW - 100));
-                let t = Math.max(8, Math.min(data.top, screenH - 80));
-                let w = Math.max(180, Math.min(data.width, screenW - 16));
-                let h = Math.max(150, Math.min(data.height, screenH - 16));
+                let l = Math.max(12, Math.min(data.left, screenW - 100));
+                let t = Math.max(12, Math.min(data.top, screenH - 80));
+                let w = Math.max(180, Math.min(data.width, screenW - 24));
+                let h = Math.max(150, Math.min(data.height, screenH - 24));
 
                 el.style.position = 'fixed';
                 el.style.left = l + 'px';
@@ -944,18 +945,72 @@ function initDraggablePanels() {
         const panel = document.getElementById(activeDragPanelId);
         if (!panel) return;
 
-        let targetLeft = panelStartLeft + (e.clientX - dragStartX);
-        let targetTop = panelStartTop + (e.clientY - dragStartY);
+        const screenW = window.innerWidth;
+        const screenH = window.innerHeight;
+        const panelW = panel.offsetWidth;
+        const panelH = panel.offsetHeight;
+
+        let rawLeft = panelStartLeft + (e.clientX - dragStartX);
+        let rawTop = panelStartTop + (e.clientY - dragStartY);
+
+        const SNAP_THRESHOLD = 18;
+        const SCREEN_MARGIN = 14;
+        const PANEL_GAP = 12;
+
+        let snappedLeft = rawLeft;
+        let snappedTop = rawTop;
+
+        if (Math.abs(rawLeft - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+            snappedLeft = SCREEN_MARGIN;
+        } else if (Math.abs(rawLeft - (screenW - panelW - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+            snappedLeft = screenW - panelW - SCREEN_MARGIN;
+        }
+
+        if (Math.abs(rawTop - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+            snappedTop = SCREEN_MARGIN;
+        } else if (Math.abs(rawTop - (screenH - panelH - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+            snappedTop = screenH - panelH - SCREEN_MARGIN;
+        }
+
+        document.querySelectorAll('.draggable-panel').forEach(other => {
+            if (other.id === activeDragPanelId || other.style.display === 'none') return;
+            const oRect = other.getBoundingClientRect();
+
+            if (Math.abs(snappedLeft - oRect.left) < SNAP_THRESHOLD) {
+                snappedLeft = oRect.left;
+            } else if (Math.abs(snappedLeft - (oRect.right + PANEL_GAP)) < SNAP_THRESHOLD) {
+                snappedLeft = oRect.right + PANEL_GAP;
+            } else if (Math.abs((snappedLeft + panelW) - oRect.left) < SNAP_THRESHOLD) {
+                snappedLeft = oRect.left - panelW - PANEL_GAP;
+            } else if (Math.abs((snappedLeft + panelW) - oRect.right) < SNAP_THRESHOLD) {
+                snappedLeft = oRect.right - panelW;
+            }
+
+            if (Math.abs(snappedTop - oRect.top) < SNAP_THRESHOLD) {
+                snappedTop = oRect.top;
+            } else if (Math.abs(snappedTop - (oRect.bottom + PANEL_GAP)) < SNAP_THRESHOLD) {
+                snappedTop = oRect.bottom + PANEL_GAP;
+            } else if (Math.abs((snappedTop + panelH) - oRect.top) < SNAP_THRESHOLD) {
+                snappedTop = oRect.top - panelH - PANEL_GAP;
+            } else if (Math.abs((snappedTop + panelH) - oRect.bottom) < SNAP_THRESHOLD) {
+                snappedTop = oRect.bottom - panelH;
+            }
+        });
+
+        snappedLeft = Math.max(SCREEN_MARGIN, Math.min(snappedLeft, screenW - panelW - SCREEN_MARGIN));
+        snappedTop = Math.max(SCREEN_MARGIN, Math.min(snappedTop, screenH - panelH - SCREEN_MARGIN));
 
         panel.style.position = 'fixed';
-        panel.style.left = targetLeft + 'px';
-        panel.style.top = targetTop + 'px';
+        panel.style.left = snappedLeft + 'px';
+        panel.style.top = snappedTop + 'px';
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
     });
 
     window.addEventListener('mouseup', () => {
         if (activeDragPanelId) {
+            const panel = document.getElementById(activeDragPanelId);
+            if (panel) panel.classList.remove('is-dragging');
             savePanelsLayout();
             activeDragPanelId = null;
         }
@@ -972,9 +1027,15 @@ function startPanelDrag(e, panelId) {
     dragStartY = e.clientY;
     const panel = document.getElementById(panelId);
     if (panel) {
+        panel.classList.add('is-dragging');
         const rect = panel.getBoundingClientRect();
         panelStartLeft = rect.left;
         panelStartTop = rect.top;
+        panel.style.position = 'fixed';
+        panel.style.left = panelStartLeft + 'px';
+        panel.style.top = panelStartTop + 'px';
+        panel.style.margin = '0';
+        panel.style.transform = 'none';
         panel.style.maxWidth = 'none';
         panel.style.maxHeight = 'none';
     }
@@ -996,19 +1057,36 @@ function initResizablePanels() {
         let newLeft = panelStartLeft;
         let newTop = panelStartTop;
 
-        if (resizeDirection.includes('r')) newW = Math.max(180, Math.min(panelStartWidth + dx, screenW - panelStartLeft - 10));
-        if (resizeDirection.includes('l')) {
-            const maxDx = panelStartWidth - 180;
-            const clampedDx = Math.min(maxDx, Math.max(-panelStartLeft + 10, dx));
-            newW = panelStartWidth - clampedDx;
-            newLeft = panelStartLeft + clampedDx;
+        const SNAP_THRESHOLD = 18;
+        const SCREEN_MARGIN = 14;
+
+        if (resizeDirection.includes('r')) {
+            newW = Math.max(180, panelStartWidth + dx);
+            if (Math.abs((newLeft + newW) - (screenW - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+                newW = screenW - SCREEN_MARGIN - newLeft;
+            }
         }
-        if (resizeDirection.includes('b')) newH = Math.max(150, Math.min(panelStartHeight + dy, screenH - panelStartTop - 10));
+        if (resizeDirection.includes('l')) {
+            let candidateLeft = panelStartLeft + dx;
+            if (Math.abs(candidateLeft - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+                candidateLeft = SCREEN_MARGIN;
+            }
+            newW = Math.max(180, (panelStartLeft + panelStartWidth) - candidateLeft);
+            newLeft = (panelStartLeft + panelStartWidth) - newW;
+        }
+        if (resizeDirection.includes('b')) {
+            newH = Math.max(150, panelStartHeight + dy);
+            if (Math.abs((newTop + newH) - (screenH - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+                newH = screenH - SCREEN_MARGIN - newTop;
+            }
+        }
         if (resizeDirection.includes('t')) {
-            const maxDy = panelStartHeight - 150;
-            const clampedDy = Math.min(maxDy, Math.max(-panelStartTop + 10, dy));
-            newH = panelStartHeight - clampedDy;
-            newTop = panelStartTop + clampedDy;
+            let candidateTop = panelStartTop + dy;
+            if (Math.abs(candidateTop - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+                candidateTop = SCREEN_MARGIN;
+            }
+            newH = Math.max(150, (panelStartTop + panelStartHeight) - candidateTop);
+            newTop = (panelStartTop + panelStartHeight) - newH;
         }
 
         panel.style.width = newW + 'px';
@@ -1019,6 +1097,8 @@ function initResizablePanels() {
 
     window.addEventListener('mouseup', () => {
         if (activeResizePanelId) {
+            const panel = document.getElementById(activeResizePanelId);
+            if (panel) panel.classList.remove('is-resizing');
             savePanelsLayout();
             activeResizePanelId = null;
             resizeDirection = '';
@@ -1034,6 +1114,7 @@ function handlePanelResizeStart(e, panelId, dir) {
     const panel = document.getElementById(panelId);
     if (!panel) return;
 
+    panel.classList.add('is-resizing');
     const rect = panel.getBoundingClientRect();
     panelStartLeft = rect.left;
     panelStartTop = rect.top;
@@ -1043,8 +1124,8 @@ function handlePanelResizeStart(e, panelId, dir) {
     panel.style.position = 'fixed';
     panel.style.left = panelStartLeft + 'px';
     panel.style.top = panelStartTop + 'px';
-    panel.style.right = 'auto';
-    panel.style.bottom = 'auto';
+    panel.style.margin = '0';
+    panel.style.transform = 'none';
     panel.style.maxWidth = 'none';
     panel.style.maxHeight = 'none';
 
@@ -1074,7 +1155,7 @@ function renderFollowersStrip() {
     const activeTarget = (currentWheelData.activeTargetActorId || '0x00000007').toUpperCase();
 
     if (list.length === 0) {
-        strip.innerHTML = '<div class="follower-tab-item active" onclick="selectFollower(\'0x00000007\')"><div class="follower-avatar">D</div><span class="follower-name">Player Character</span></div>';
+        strip.innerHTML = '<div class="follower-tab-item active" onclick="selectFollower(\'0x00000007\')"><span class="follower-name">Player Character</span></div>';
         return;
     }
 
@@ -1102,7 +1183,8 @@ function renderFollowersStrip() {
         const isActive = (fID === activeTarget);
         const item = document.createElement('div');
         item.className = 'follower-tab-item ' + (isActive ? 'active' : '');
-        item.innerHTML = '<div class="follower-avatar">' + (f.avatar || 'F') + '</div><span class="follower-name">' + f.name + '</span>';
+        item.setAttribute('data-actor-id', f.id);
+        item.innerHTML = '<span class="follower-name">' + f.name + '</span>';
         item.onclick = (e) => {
             e.stopPropagation();
             selectFollower(f.id);
@@ -1119,17 +1201,17 @@ function selectFollower(targetId) {
 
 function getInventorySourcesList() {
     const sources = [];
-    sources.push({ id: "0x00000007", type: "PLAYER", name: "🎒 Player" });
+    sources.push({ id: "0x00000007", type: "PLAYER", name: "Player" });
 
     const followers = currentWheelData.followers || [];
     followers.forEach(f => {
         const fID = (f.id || '').toUpperCase();
         if (fID !== "0X00000007" && fID !== "0X00000014") {
-            sources.push({ id: f.id, type: "FOLLOWER", name: "👤 " + (f.name || 'Follower') });
+            sources.push({ id: f.id, type: "FOLLOWER", name: (f.name || 'Follower') });
         }
     });
 
-    sources.push({ id: "CLOUD", type: "CLOUD", name: "☁️ Cloud" });
+    sources.push({ id: "CLOUD", type: "CLOUD", name: "Cloud Wardrobe" });
     return sources;
 }
 
@@ -1258,9 +1340,6 @@ function renderInventoryList() {
         const card = document.createElement('div');
         card.className = 'item-row-card ' + (item.equipped ? 'is-equipped-item' : '');
 
-        let iconClass = 'icon-armor';
-        if (item.category === 'JEWELRY') iconClass = 'icon-jewelry';
-
         let badgeTagsHtml = '';
         if (item.source === 'CLOUD') badgeTagsHtml += '<span class="badge-tag" style="background:rgba(82,165,245,0.2); color:#52a5f5; border:1px solid #52a5f5;">CLOUD</span>';
         if (item.tags && item.tags.includes('enchanted')) badgeTagsHtml += '<span class="badge-tag tag-enchanted">ENCH</span>';
@@ -1268,7 +1347,18 @@ function renderInventoryList() {
 
         let statPillText = 'ARM ' + (item.armor || 0);
 
-        card.innerHTML = '<div class="item-left-info"><div class="item-icon-box ' + iconClass + '">' + (item.icon || '🛡️') + '</div><div class="item-meta-titles"><span class="item-name-text">' + item.name + '</span><span class="item-sub-desc">' + (item.type || 'Apparel') + ' • Wt ' + Number(item.weight || 0).toFixed(1) + ' • ' + (item.value || 0) + 'g</span></div></div><div class="item-right-stats"><div class="item-badges-strip">' + badgeTagsHtml + '</div><span class="item-stat-pill">' + statPillText + '</span></div>';
+        card.innerHTML = `
+            <div class="item-left-info">
+                <div class="item-meta-titles">
+                    <span class="item-name-text">${item.name}</span>
+                    <span class="item-sub-desc">${item.type || 'Apparel'} • Wt ${Number(item.weight || 0).toFixed(1)} • ${item.value || 0}g</span>
+                </div>
+            </div>
+            <div class="item-right-stats">
+                <div class="item-badges-strip">${badgeTagsHtml}</div>
+                <span class="item-stat-pill">${statPillText}</span>
+            </div>
+        `;
 
         card.onpointerenter = () => inspectItem(item);
         card.onclick = () => {
@@ -1329,9 +1419,16 @@ function renderSlotsRail() {
         if (s.isAddon) pipHtml = '<span class="slot-status-pip pip-addon">ADDON</span>';
         else if (s.isEquipped) pipHtml = '<span class="slot-status-pip pip-equipped">EQUIPPED</span>';
 
-        let icon = s.isAddon ? '✨' : (s.hasOutfit ? '🛡️' : '➕');
+        const outfitName = (s.hasOutfit && s.name) ? s.name : 'Empty Slot';
+        const subText = s.hasOutfit ? ((s.count || 0) + ' items') : '';
 
-        card.innerHTML = '<div class="slot-card-icon">' + icon + '</div><div class="slot-card-texts"><span class="slot-card-name">' + (s.hasOutfit ? s.name : 'Empty Slot') + '</span><span class="slot-card-sub">Slot ' + (realIdx + 1) + ' • ' + (s.count || 0) + ' pcs</span></div>' + pipHtml;
+        card.innerHTML = `
+            <div class="slot-card-texts">
+                <span class="slot-card-name">${outfitName}</span>
+                ${subText ? `<span class="slot-card-sub">${subText}</span>` : ''}
+            </div>
+            ${pipHtml}
+        `;
 
         card.onclick = () => {
             selectedSlotIndex = realIdx;
@@ -1344,4 +1441,159 @@ function renderSlotsRail() {
 
         rail.appendChild(card);
     });
+}
+
+function renderDrawerDetails() {
+    const badge = document.getElementById('drawer-slot-badge');
+    const nameEl = document.getElementById('drawer-outfit-name');
+    const statusContainer = document.getElementById('drawer-slot-status');
+    const btnFull = document.getElementById('btn-type-full');
+    const btnAddon = document.getElementById('btn-type-addon');
+
+    if (!badge || !nameEl || !currentWheelData || !currentWheelData.slots) return;
+
+    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+    if (!slot) return;
+
+    badge.innerText = 'SLOT ' + (selectedSlotIndex + 1);
+    nameEl.innerText = slot.hasOutfit ? slot.name : 'Empty Slot';
+
+    if (statusContainer) {
+        if (slot.isAddon) {
+            statusContainer.style.display = 'inline-block';
+            statusContainer.className = 'status-chip chip-addon';
+            statusContainer.innerText = 'ADDON';
+        } else if (slot.isWorn || slot.isEquipped) {
+            statusContainer.style.display = 'inline-block';
+            statusContainer.className = 'status-chip chip-equipped';
+            statusContainer.innerText = 'EQUIPPED';
+        } else {
+            statusContainer.style.display = 'none';
+        }
+    }
+
+    if (btnFull && btnAddon) {
+        if (slot.isAddon) {
+            btnFull.classList.remove('active');
+            btnAddon.classList.add('active');
+        } else {
+            btnFull.classList.add('active');
+            btnAddon.classList.remove('active');
+        }
+    }
+
+    const currentStars = (slot && slot.preferenceStars !== undefined) ? slot.preferenceStars : 3;
+    const stars = document.querySelectorAll('#stars-widget .star-icon');
+    stars.forEach((s, idx) => {
+        if (idx < currentStars) s.classList.add('active');
+        else s.classList.remove('active');
+    });
+
+    const currentTag = (slot && slot.contextTag) ? slot.contextTag.toLowerCase() : '';
+
+    const actionsGroup = document.getElementById('inspector-actions-group');
+    const locsGroup = document.getElementById('inspector-locations-group');
+    const modGroup = document.getElementById('inspector-modifiers-group');
+
+    if (actionsGroup && locsGroup && modGroup && typeof ALL_CONDITIONS_LIST !== 'undefined') {
+        actionsGroup.innerHTML = '';
+        locsGroup.innerHTML = '';
+        modGroup.innerHTML = '';
+
+        ALL_CONDITIONS_LIST.forEach(cond => {
+            const chip = document.createElement('span');
+            const isActive = currentTag.includes(cond.id.toLowerCase());
+            chip.className = 'ctx-toggle-chip ' + (isActive ? 'active' : '');
+            chip.innerText = cond.label;
+            chip.title = cond.label;
+            chip.onclick = () => toggleContextTagDirect(cond.id);
+
+            if (cond.cat === 'action') actionsGroup.appendChild(chip);
+            else if (cond.cat === 'generic' || cond.cat === 'unique') locsGroup.appendChild(chip);
+            else if (cond.cat === 'modifier') modGroup.appendChild(chip);
+        });
+    }
+
+    renderDrawerItemsList(slot);
+}
+
+function renderDrawerItemsList(slot) {
+    const list = document.getElementById('drawer-items-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    const items = slot.items || slot.itemIDs || [];
+    if (!slot.hasOutfit || items.length === 0) {
+        list.innerHTML = '<div style="font-size:10px; color:#64748b; text-align:center; padding:16px;">No items saved in this slot. Click \'Save Current Gear\' to assign loadout.</div>';
+        return;
+    }
+
+    items.forEach(itemEntry => {
+        let itemObj = null;
+        if (typeof itemEntry === 'object' && itemEntry.name) {
+            itemObj = itemEntry;
+        } else {
+            const formIdStr = (typeof itemEntry === 'number') ? ('0x' + itemEntry.toString(16).toUpperCase()) : String(itemEntry);
+            itemObj = (currentWheelData.inventory || []).find(x => x.id === formIdStr || x.rawID === itemEntry) || {
+                name: 'Apparel Item (' + formIdStr + ')',
+                type: 'Armor'
+            };
+        }
+        const row = document.createElement('div');
+        row.className = 'drawer-item-row';
+        row.innerHTML = `
+            <span class="drawer-item-title">${itemObj.name}</span>
+            <span class="drawer-item-slot-tag">${itemObj.type || 'Apparel'}</span>
+        `;
+        list.appendChild(row);
+    });
+}
+
+function toggleSlotAddonType(isAddon) {
+    if (typeof window.SetSlotType === 'function' && currentWheelData) {
+        window.SetSlotType(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex,
+            isAddon: isAddon
+        }));
+    }
+}
+
+function setSlotRatingDirect(num) {
+    if (typeof window.SetSlotRating === 'function' && currentWheelData) {
+        window.SetSlotRating(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex,
+            ratingStars: num
+        }));
+    }
+}
+
+function toggleContextTagDirect(ctxKey) {
+    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+    if (!slot) return;
+
+    let currentTags = (slot.contextTag || '').split(',').map(x => x.trim()).filter(x => x.length > 0);
+    if (currentTags.includes(ctxKey)) {
+        currentTags = currentTags.filter(x => x !== ctxKey);
+    } else {
+        currentTags.push(ctxKey);
+    }
+
+    const newTagStr = currentTags.join(', ');
+    if (typeof window.SetSlotContext === 'function' && currentWheelData) {
+        window.SetSlotContext(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex,
+            slotIndex: selectedSlotIndex,
+            contextTag: newTagStr
+        }));
+    }
+}
+
+function saveCurrentEquippedToSlot() {
+    saveOutfit(selectedSlotIndex);
+}
+
+function clearSelectedSlot() {
+    ctxClearSlot();
 }

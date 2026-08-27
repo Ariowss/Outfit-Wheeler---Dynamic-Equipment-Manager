@@ -6,6 +6,7 @@
 
 extern std::atomic<bool> isMenuOpen;
 extern std::atomic<bool> g_isTyping;
+extern std::atomic<bool> g_isEditModeOpen;
 extern std::atomic<bool> g_gameFullyLoaded;
 extern bool g_inputRegistered;
 

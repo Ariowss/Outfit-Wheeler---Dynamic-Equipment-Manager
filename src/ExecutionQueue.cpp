@@ -25,17 +25,29 @@ static std::atomic<uint64_t> g_lastEvalTick{ 0 };
 static RE::BGSKeyword* g_locTypePlayerHouse = nullptr;
 static RE::BGSKeyword* g_locTypeCity = nullptr;
 static RE::BGSKeyword* g_locTypeTown = nullptr;
+static RE::BGSKeyword* g_locTypeDungeon = nullptr;
+static RE::BGSKeyword* g_locTypeInn = nullptr;
+static RE::BGSKeyword* g_locTypeStore = nullptr;
+static RE::BGSKeyword* g_locTypeGuild = nullptr;
+static RE::BGSKeyword* g_locTypeCastle = nullptr;
+static RE::BGSKeyword* g_locTypeTemple = nullptr;
+static RE::BGSKeyword* g_locTypeFarm = nullptr;
+static RE::BGSKeyword* g_locTypeJail = nullptr;
+static RE::BGSKeyword* g_locTypeMilitary = nullptr;
 
-static void CacheLocationKeywords() {
-    if (!g_locTypePlayerHouse) {
-        g_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
-    }
-    if (!g_locTypeCity) {
-        g_locTypeCity = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeCity");
-    }
-    if (!g_locTypeTown) {
-        g_locTypeTown = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTown");
-    }
+static void CacheKeywordsAndForms() {
+    if (!g_locTypePlayerHouse) g_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
+    if (!g_locTypeCity) g_locTypeCity = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeCity");
+    if (!g_locTypeTown) g_locTypeTown = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTown");
+    if (!g_locTypeDungeon) g_locTypeDungeon = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeDungeon");
+    if (!g_locTypeInn) g_locTypeInn = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeInn");
+    if (!g_locTypeStore) g_locTypeStore = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeStore");
+    if (!g_locTypeGuild) g_locTypeGuild = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeGuild");
+    if (!g_locTypeCastle) g_locTypeCastle = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeCastle");
+    if (!g_locTypeTemple) g_locTypeTemple = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTemple");
+    if (!g_locTypeFarm) g_locTypeFarm = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeFarm");
+    if (!g_locTypeJail) g_locTypeJail = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeJail");
+    if (!g_locTypeMilitary) g_locTypeMilitary = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeMilitaryCamp");
 }
 
 ExecutionQueue* ExecutionQueue::GetSingleton() {
@@ -52,7 +64,7 @@ void ExecutionQueue::RegisterEventsInternal() {
 
     if (!scriptSource || !player || !ui) return;
 
-    CacheLocationKeywords();
+    CacheKeywordsAndForms();
 
     scriptSource->AddEventSink<RE::TESCombatEvent>(this);
     scriptSource->AddEventSink<RE::TESActorLocationChangeEvent>(this);
@@ -78,16 +90,28 @@ void ExecutionQueue::ResetEnvironmentState() {
 }
 
 ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, RE::TESObjectCELL* cell) {
-    CacheLocationKeywords();
+    CacheKeywordsAndForms();
+    ContextFlags flags = ContextFlags::None;
 
     if (location) {
         auto* curLoc = location;
         while (curLoc) {
-            if (g_locTypePlayerHouse && curLoc->HasKeyword(g_locTypePlayerHouse)) {
-                return ContextFlags::PlayerHome;
+            if (g_locTypePlayerHouse && curLoc->HasKeyword(g_locTypePlayerHouse)) return ContextFlags::PlayerHome;
+            if (g_locTypeDungeon && curLoc->HasKeyword(g_locTypeDungeon)) return ContextFlags::Dungeon;
+            if (g_locTypeInn && curLoc->HasKeyword(g_locTypeInn)) return ContextFlags::Inn;
+            if (g_locTypeStore && curLoc->HasKeyword(g_locTypeStore)) return ContextFlags::Store;
+            if (g_locTypeGuild && curLoc->HasKeyword(g_locTypeGuild)) return ContextFlags::GuildHall;
+            if (g_locTypeCastle && curLoc->HasKeyword(g_locTypeCastle)) return ContextFlags::Castle;
+            if (g_locTypeTemple && curLoc->HasKeyword(g_locTypeTemple)) return ContextFlags::Temple;
+            if (g_locTypeFarm && curLoc->HasKeyword(g_locTypeFarm)) return ContextFlags::Farm;
+            if (g_locTypeJail && curLoc->HasKeyword(g_locTypeJail)) return ContextFlags::Jail;
+            if (g_locTypeMilitary && curLoc->HasKeyword(g_locTypeMilitary)) return ContextFlags::Military;
+
+            if (g_locTypeCity && curLoc->HasKeyword(g_locTypeCity)) {
+                flags |= ContextFlags::City;
             }
-            if ((g_locTypeCity && curLoc->HasKeyword(g_locTypeCity)) || (g_locTypeTown && curLoc->HasKeyword(g_locTypeTown))) {
-                return ContextFlags::CityTown;
+            if (g_locTypeTown && curLoc->HasKeyword(g_locTypeTown)) {
+                flags |= ContextFlags::Town;
             }
             curLoc = curLoc->parentLoc;
         }
@@ -98,17 +122,29 @@ ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, R
         if (cellLoc) {
             auto* curLoc = cellLoc;
             while (curLoc) {
-                if (g_locTypePlayerHouse && curLoc->HasKeyword(g_locTypePlayerHouse)) {
-                    return ContextFlags::PlayerHome;
+                if (g_locTypePlayerHouse && curLoc->HasKeyword(g_locTypePlayerHouse)) return ContextFlags::PlayerHome;
+                if (g_locTypeDungeon && curLoc->HasKeyword(g_locTypeDungeon)) return ContextFlags::Dungeon;
+                if (g_locTypeInn && curLoc->HasKeyword(g_locTypeInn)) return ContextFlags::Inn;
+                if (g_locTypeStore && curLoc->HasKeyword(g_locTypeStore)) return ContextFlags::Store;
+                if (g_locTypeGuild && curLoc->HasKeyword(g_locTypeGuild)) return ContextFlags::GuildHall;
+                if (g_locTypeCastle && curLoc->HasKeyword(g_locTypeCastle)) return ContextFlags::Castle;
+                if (g_locTypeTemple && curLoc->HasKeyword(g_locTypeTemple)) return ContextFlags::Temple;
+                if (g_locTypeFarm && curLoc->HasKeyword(g_locTypeFarm)) return ContextFlags::Farm;
+                if (g_locTypeJail && curLoc->HasKeyword(g_locTypeJail)) return ContextFlags::Jail;
+                if (g_locTypeMilitary && curLoc->HasKeyword(g_locTypeMilitary)) return ContextFlags::Military;
+
+                if (g_locTypeCity && curLoc->HasKeyword(g_locTypeCity)) {
+                    flags |= ContextFlags::City;
                 }
-                if ((g_locTypeCity && curLoc->HasKeyword(g_locTypeCity)) || (g_locTypeTown && curLoc->HasKeyword(g_locTypeTown))) {
-                    return ContextFlags::CityTown;
+                if (g_locTypeTown && curLoc->HasKeyword(g_locTypeTown)) {
+                    flags |= ContextFlags::Town;
                 }
                 curLoc = curLoc->parentLoc;
             }
         }
 
         if (cell->IsInteriorCell()) {
+            flags |= ContextFlags::Interior;
             auto owner = cell->GetOwner();
             if (owner) {
                 if (owner->Is(RE::FormType::NPC) && (owner->GetFormID() == 0x00000007 || owner->GetFormID() == 0x00000014)) {
@@ -124,11 +160,27 @@ ContextFlags ExecutionQueue::ResolveLocationContext(RE::BGSLocation* location, R
         }
     }
 
-    return ContextFlags::None;
+    if (!HasContext(flags, ContextFlags::City) && !HasContext(flags, ContextFlags::Town)) {
+        flags |= ContextFlags::World;
+    }
+
+    return flags;
 }
 
 ContextFlags ExecutionQueue::GatherActorContext(RE::Actor* a_actor, bool a_isPlayer) {
     if (!a_actor || !g_autoSystemEnabled) return ContextFlags::Default;
+
+    auto actorState = a_actor->AsActorState();
+    if (actorState) {
+        auto sitSleep = actorState->GetSitSleepState();
+        if (sitSleep == RE::SIT_SLEEP_STATE::kIsSleeping || sitSleep == RE::SIT_SLEEP_STATE::kWantToSleep) {
+            return ContextFlags::Sleep;
+        }
+    }
+
+    if (a_actor->IsOnMount()) {
+        return ContextFlags::Mount;
+    }
 
     auto player = RE::PlayerCharacter::GetSingleton();
     bool isInCombat = a_actor->IsInCombat() || (a_isPlayer ? false : (player && player->IsInCombat()));
@@ -136,25 +188,36 @@ ContextFlags ExecutionQueue::GatherActorContext(RE::Actor* a_actor, bool a_isPla
         return ContextFlags::Combat;
     }
 
-    auto actorState = a_actor->AsActorState();
     float waterHeight = a_actor->GetWaterHeight();
     float posZ = a_actor->GetPositionZ();
-    if (((actorState && actorState->IsSwimming()) || (waterHeight > posZ + 80.0f)) && g_autoSwimEnabled) {
+    if (actorState && actorState->IsSwimming()) {
         return ContextFlags::Swim;
+    }
+    if (waterHeight > posZ + 15.0f && waterHeight < posZ + 80.0f) {
+        return ContextFlags::InWater;
     }
 
     auto parentCell = a_actor->GetParentCell();
     auto loc = a_actor->GetCurrentLocation();
-
     ContextFlags locFlags = ResolveLocationContext(loc, parentCell);
-    if (HasContext(locFlags, ContextFlags::PlayerHome) && g_autoHomeEnabled) {
-        return ContextFlags::PlayerHome;
-    }
-    if (HasContext(locFlags, ContextFlags::CityTown) && g_autoCityEnabled) {
-        return ContextFlags::CityTown;
+
+    auto* cal = RE::Calendar::GetSingleton();
+    float hour = cal ? cal->GetHour() : 12.0f;
+    if (hour < 6.0f || hour >= 20.0f) {
+        locFlags |= ContextFlags::Night;
     }
 
-    return ContextFlags::Default;
+    auto* sky = RE::Sky::GetSingleton();
+    if (sky && sky->currentWeather) {
+        auto flags = sky->currentWeather->data.flags;
+        if (flags.any(RE::TESWeather::WeatherDataFlag::kRainy)) {
+            locFlags |= ContextFlags::Rain;
+        } else if (flags.any(RE::TESWeather::WeatherDataFlag::kSnow)) {
+            locFlags |= ContextFlags::Snow;
+        }
+    }
+
+    return locFlags;
 }
 
 ContextFlags ExecutionQueue::GatherCurrentContext() {
@@ -166,7 +229,6 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* 
     if (!a_event) return RE::BSEventNotifyControl::kContinue;
 
     bool involvesPlayerOrTeammate = false;
-
     if (a_event->actor) {
         auto* act = a_event->actor->As<RE::Actor>();
         if (act && (act->IsPlayerRef() || act->IsPlayerTeammate())) {
@@ -233,7 +295,7 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
 
     uint64_t currentTick = GetTickCount64();
     uint64_t lastTick = g_lastEvalTick.load(std::memory_order_acquire);
-    if (!isEmergency && (currentTick - lastTick < 800)) {
+    if (!isEmergency && (currentTick - lastTick < 600)) {
         return;
     }
     g_lastEvalTick.store(currentTick, std::memory_order_release);

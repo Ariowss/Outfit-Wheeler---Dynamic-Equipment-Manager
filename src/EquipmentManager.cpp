@@ -1,5 +1,9 @@
 #include "pch.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #ifdef max
 #undef max
 #endif
@@ -29,13 +33,12 @@ bool IsPureApparel(RE::TESForm* a_form) noexcept {
     auto* armor = a_form->As<RE::TESObjectARMO>();
     if (!armor) return false;
 
-    if ((armor->formFlags & 0x00000004) || !armor->GetPlayable()) {
-        return false;
-    }
+    if (!armor->GetPlayable()) return false;
+    if ((armor->formFlags & 0x00000004) != 0) return false;
 
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kShield)) {
-        return false;
-    }
+    const char* name = armor->GetName();
+    if (!name || name[0] == '\0') return false;
+
     return true;
 }
 
@@ -152,16 +155,22 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
         }
     }
 
+    bool unequippedAny = false;
     for (const auto& entry : currentlyWornEntries) {
         if (entry.object && IsPureApparel(entry.object)) {
             RE::FormID formID = entry.object->GetFormID();
             if (std::find(targetList.begin(), targetList.end(), formID) == targetList.end()) {
                 equipManager->UnequipObject(targetActor, entry.object, entry.extraList, 1, nullptr, false, false, true, true);
+                unequippedAny = true;
                 if (g_autoStashEnabled && wardrobe && IsItemInAnyWheelOutfit(formID)) {
                     targetActor->RemoveItem(entry.object, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, wardrobe);
                 }
             }
         }
+    }
+
+    if (unequippedAny) {
+        targetActor->Update3DModel();
     }
 
     if (wardrobe) {
@@ -211,6 +220,8 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
             }
         }
     }
+
+    targetActor->Update3DModel();
 }
 
 void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
@@ -250,6 +261,7 @@ void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
                 }
             }
         }
+
         wheels[wheelIdx].slots[slotIdx].outfit = outfit;
         savedName = outfit.name;
         SaveDataInternal();
@@ -288,7 +300,7 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
     auto equipManager = RE::ActorEquipManager::GetSingleton();
     if (!targetActor || !equipManager) return;
 
-    RE::FormID targetActorID = (targetActor->IsPlayerRef() || targetActor == RE::PlayerCharacter::GetSingleton()) ? 0x00000007 : targetActor->GetFormID();
+    RE::FormID targetActorID = targetActor->GetFormID();
 
     std::vector<RE::FormID> sanitizedTargetIDs;
     sanitizedTargetIDs.reserve(targetOutfit.itemIDs.size());
@@ -330,6 +342,7 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
                 }
             }
         }
+        targetActor->Update3DModel();
         AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID(targetActorID, "");
         RE::DebugNotification(("Unequipped " + targetOutfit.name).c_str());
         return;
@@ -354,6 +367,7 @@ void RetrieveAllOutfitsToPlayer() {
         }
     }
 
+    targetActor->Update3DModel();
     RE::DebugNotification("All outfits retrieved to character inventory!");
 }
 
@@ -413,6 +427,7 @@ void StashAllOutfitsToWardrobe() {
         }
     }
 
+    targetActor->Update3DModel();
     RE::DebugNotification("All inactive outfits stored in wardrobe!");
 }
 
@@ -471,6 +486,7 @@ void StashSlotOutfit(size_t wheelIdx, size_t slotIdx) {
         }
     }
 
+    targetActor->Update3DModel();
     RE::DebugNotification(("Stored " + outfitName + " in wardrobe!").c_str());
 }
 
@@ -518,6 +534,7 @@ void RetrieveSlotOutfit(size_t wheelIdx, size_t slotIdx) {
         }
     }
 
+    targetActor->Update3DModel();
     RE::DebugNotification(("Retrieved " + outfitName + " to inventory!").c_str());
 }
 
@@ -579,6 +596,7 @@ void StashWheelOutfits(size_t wheelIdx) {
         }
     }
 
+    targetActor->Update3DModel();
     RE::DebugNotification("Wheel outfits stored in wardrobe!");
 }
 
@@ -628,5 +646,6 @@ void RetrieveWheelOutfits(size_t wheelIdx) {
         }
     }
 
+    targetActor->Update3DModel();
     RE::DebugNotification("Retrieved wheel outfits to inventory!");
 }

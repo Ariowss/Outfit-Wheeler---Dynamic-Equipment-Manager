@@ -35,6 +35,69 @@ function describeArc(x, y, innerRadius, outerRadius, startAngle, endAngle) {
     ].join(" ");
 }
 
+function resolveIconFileName(slot) {
+    if (!slot) return 'world';
+
+    if (slot.icon && slot.icon.length > 0) {
+        return slot.icon.replace(/\.[^/.]+$/, "");
+    }
+
+    if (slot.contextTag && slot.contextTag.length > 0) {
+        const tag = slot.contextTag.toLowerCase();
+        if (tag.includes('combat') || tag.includes('fight')) return 'action_combat';
+        if (tag.includes('mount') || tag.includes('horse')) return 'action_mount';
+        if (tag.includes('sleep') || tag.includes('bed')) return 'action_sleep';
+        if (tag.includes('swim') || tag.includes('water')) return 'action_swim';
+
+        if (tag.includes('castle') || tag.includes('palace')) return 'location_castles';
+        if (tag.includes('dung') || tag.includes('tomb') || tag.includes('ruin')) return 'location_dungeons';
+        if (tag.includes('farm') || tag.includes('mill')) return 'location_farms';
+        if (tag.includes('guild') || tag.includes('thief') || tag.includes('brotherhood')) return 'location_guilds';
+        if (tag.includes('home') || tag.includes('house')) return 'location_homes';
+        if (tag.includes('inn') || tag.includes('tavern')) return 'location_inns';
+        if (tag.includes('jail') || tag.includes('prison')) return 'location_jails';
+        if (tag.includes('military') || tag.includes('camp') || tag.includes('war')) return 'location_military';
+        if (tag.includes('store') || tag.includes('shop') || tag.includes('market')) return 'location_stores';
+        if (tag.includes('temple') || tag.includes('shrine') || tag.includes('talos')) return 'location_temples';
+
+        if (tag.includes('city')) return 'city';
+        if (tag.includes('town') || tag.includes('village')) return 'town';
+        if (tag.includes('world') || tag.includes('adventure') || tag.includes('nature')) return 'world';
+    }
+
+    return 'world';
+}
+
+function renderSlotIconHtml(slot) {
+    if (!slot || !slot.hasOutfit) {
+        return '<span class="slot-fallback-icon">' + svgPlusIcon + '</span>';
+    }
+
+    const baseName = resolveIconFileName(slot);
+    const mainIconSrc = 'icons/' + baseName + '.png';
+
+    let badgesHtml = '';
+    const tag = (slot.contextTag || '').toLowerCase();
+
+    if (tag.includes('rain')) {
+        badgesHtml += '<img class="corner-badge corner-top-right" src="icons/rain.png" alt="" />';
+    } else if (tag.includes('snow')) {
+        badgesHtml += '<img class="corner-badge corner-top-right" src="icons/badge_snow.png" alt="" />';
+    }
+
+    if (tag.includes('night')) {
+        badgesHtml += '<img class="corner-badge corner-top-left" src="icons/badge_night.png" alt="" />';
+    } else if (tag.includes('day')) {
+        badgesHtml += '<img class="corner-badge corner-top-left" src="icons/day.png" alt="" />';
+    }
+
+    return '<div class="slot-icon-wrapper">' +
+        '<img class="slot-icon-img" src="' + mainIconSrc + '" onerror="this.style.display=\'none\'; if(this.nextElementSibling) this.nextElementSibling.style.display=\'inline-flex\';" style="display:block;" />' +
+        '<span class="slot-fallback-icon" style="display:none;">' + svgOutfitIcon + '</span>' +
+        badgesHtml +
+        '</div>';
+}
+
 function updateWheelUI() {
     if (updateWheelRafId) {
         window.cancelAnimationFrame(updateWheelRafId);
@@ -217,12 +280,12 @@ function updateWheelUI() {
             }
 
             if (hasOutfit) {
-                labelEl.innerHTML = `<div class="slot-icon">${svgOutfitIcon}</div>` +
-                    `<div class="slot-title">${escapeHtml(slot.name)}</div>` +
-                    `<div class="slot-subtitle">${(slot.count || 0) + ' items'}</div>` +
+                labelEl.innerHTML = '<div class="slot-icon">' + renderSlotIconHtml(slot) + '</div>' +
+                    '<div class="slot-title">' + escapeHtml(slot.name) + '</div>' +
+                    '<div class="slot-subtitle">' + ((slot.count || 0) + ' items') + '</div>' +
                     badgeHtml;
             } else {
-                labelEl.innerHTML = `<div class="slot-icon">${svgPlusIcon}</div>` +
+                labelEl.innerHTML = '<div class="slot-icon"><span class="slot-fallback-icon">' + svgPlusIcon + '</span></div>' +
                     '<div class="slot-title">Empty</div>';
             }
 

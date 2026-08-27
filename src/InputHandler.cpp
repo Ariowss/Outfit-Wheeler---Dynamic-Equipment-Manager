@@ -2,6 +2,7 @@
 #include "InputHandler.h"
 #include "Settings.h"
 #include "OutfitManager.h"
+#include "EquipmentManager.h"
 #include "PrismaUI_API.h"
 #include "JSInterop.h"
 #include "ExecutionQueue.h"

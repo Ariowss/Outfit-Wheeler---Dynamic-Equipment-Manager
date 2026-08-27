@@ -13,22 +13,43 @@
 
 using json = nlohmann::json;
 
-enum class ContextFlags : uint32_t {
-    None        = 0,
-    Default     = 1 << 0,
-    CityTown    = 1 << 1,
-    PlayerHome  = 1 << 2,
-    Combat      = 1 << 3,
-    Swim        = 1 << 4,
-    Inn         = 1 << 5
+enum class ContextFlags : uint64_t {
+    None            = 0,
+    Default         = 1ULL << 0,
+
+    Combat          = 1ULL << 1,
+    InWater         = 1ULL << 2,
+    Swim            = 1ULL << 3,
+    Sleep           = 1ULL << 4,
+    Mount           = 1ULL << 5,
+
+    Dungeon         = 1ULL << 10,
+    PlayerHome      = 1ULL << 11,
+    Inn             = 1ULL << 12,
+    Store           = 1ULL << 13,
+    GuildHall       = 1ULL << 14,
+    Castle          = 1ULL << 15,
+    Temple          = 1ULL << 16,
+    Farm            = 1ULL << 17,
+    Jail            = 1ULL << 18,
+    Military        = 1ULL << 19,
+
+    World           = 1ULL << 25,
+    Town            = 1ULL << 26,
+    City            = 1ULL << 27,
+
+    Night           = 1ULL << 30,
+    Rain            = 1ULL << 31,
+    Snow            = 1ULL << 32,
+    Interior        = 1ULL << 33
 };
 
 inline ContextFlags operator|(ContextFlags a, ContextFlags b) {
-    return static_cast<ContextFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+    return static_cast<ContextFlags>(static_cast<uint64_t>(a) | static_cast<uint64_t>(b));
 }
 
 inline ContextFlags operator&(ContextFlags a, ContextFlags b) {
-    return static_cast<ContextFlags>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+    return static_cast<ContextFlags>(static_cast<uint64_t>(a) & static_cast<uint64_t>(b));
 }
 
 inline ContextFlags& operator|=(ContextFlags& a, ContextFlags b) {
@@ -37,7 +58,7 @@ inline ContextFlags& operator|=(ContextFlags& a, ContextFlags b) {
 }
 
 inline bool HasContext(ContextFlags mask, ContextFlags flag) {
-    return (static_cast<uint32_t>(mask) & static_cast<uint32_t>(flag)) != 0;
+    return (static_cast<uint64_t>(mask) & static_cast<uint64_t>(flag)) != 0;
 }
 
 enum class ControlState : uint8_t {

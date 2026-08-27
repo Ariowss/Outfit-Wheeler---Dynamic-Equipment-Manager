@@ -37,3 +37,4 @@ void StashSlotOutfitListener(const char* data);
 void RetrieveSlotOutfitListener(const char* data);
 void StashWheelOutfitsListener(const char* data);
 void RetrieveWheelOutfitsListener(const char* data);
+

@@ -1,5 +1,9 @@
 #include "pch.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #ifdef max
 #undef max
 #endif
@@ -64,21 +68,31 @@ static ContextFlags ParseContextTagToFlags(const std::string& tag) {
     std::string lower = ToLowerString(tag);
     ContextFlags flags = ContextFlags::None;
 
-    if (lower.find("city") != std::string::npos || lower.find("town") != std::string::npos) {
-        flags = flags | ContextFlags::CityTown;
-    }
-    if (lower.find("home") != std::string::npos || lower.find("house") != std::string::npos) {
-        flags = flags | ContextFlags::PlayerHome;
-    }
-    if (lower.find("combat") != std::string::npos || lower.find("fight") != std::string::npos) {
-        flags = flags | ContextFlags::Combat;
-    }
-    if (lower.find("swim") != std::string::npos || lower.find("water") != std::string::npos) {
-        flags = flags | ContextFlags::Swim;
-    }
-    if (lower.find("inn") != std::string::npos || lower.find("tavern") != std::string::npos) {
-        flags = flags | ContextFlags::CityTown;
-    }
+    if (lower.find("combat") != std::string::npos || lower.find("fight") != std::string::npos) flags |= ContextFlags::Combat;
+    if (lower.find("swim") != std::string::npos) flags |= ContextFlags::Swim;
+    if (lower.find("in_water") != std::string::npos || lower.find("water") != std::string::npos) flags |= ContextFlags::InWater;
+    if (lower.find("sleep") != std::string::npos || lower.find("bed") != std::string::npos) flags |= ContextFlags::Sleep;
+    if (lower.find("mount") != std::string::npos || lower.find("horse") != std::string::npos) flags |= ContextFlags::Mount;
+
+    if (lower.find("dungeon") != std::string::npos || lower.find("tomb") != std::string::npos || lower.find("ruin") != std::string::npos) flags |= ContextFlags::Dungeon;
+    if (lower.find("home") != std::string::npos || lower.find("house") != std::string::npos) flags |= ContextFlags::PlayerHome;
+    if (lower.find("inn") != std::string::npos || lower.find("tavern") != std::string::npos) flags |= ContextFlags::Inn;
+    if (lower.find("store") != std::string::npos || lower.find("shop") != std::string::npos || lower.find("market") != std::string::npos) flags |= ContextFlags::Store;
+    if (lower.find("guild") != std::string::npos || lower.find("thief") != std::string::npos || lower.find("brotherhood") != std::string::npos) flags |= ContextFlags::GuildHall;
+    if (lower.find("castle") != std::string::npos || lower.find("palace") != std::string::npos) flags |= ContextFlags::Castle;
+    if (lower.find("temple") != std::string::npos || lower.find("shrine") != std::string::npos || lower.find("talos") != std::string::npos) flags |= ContextFlags::Temple;
+    if (lower.find("farm") != std::string::npos || lower.find("mill") != std::string::npos) flags |= ContextFlags::Farm;
+    if (lower.find("jail") != std::string::npos || lower.find("prison") != std::string::npos) flags |= ContextFlags::Jail;
+    if (lower.find("military") != std::string::npos || lower.find("camp") != std::string::npos || lower.find("war") != std::string::npos) flags |= ContextFlags::Military;
+
+    if (lower.find("city") != std::string::npos) flags |= ContextFlags::City;
+    if (lower.find("town") != std::string::npos || lower.find("village") != std::string::npos) flags |= ContextFlags::Town;
+    if (lower.find("world") != std::string::npos || lower.find("adventure") != std::string::npos || lower.find("mountain") != std::string::npos || lower.find("nature") != std::string::npos) flags |= ContextFlags::World;
+
+    if (lower.find("night") != std::string::npos) flags |= ContextFlags::Night;
+    if (lower.find("rain") != std::string::npos) flags |= ContextFlags::Rain;
+    if (lower.find("snow") != std::string::npos) flags |= ContextFlags::Snow;
+    if (lower.find("interior") != std::string::npos) flags |= ContextFlags::Interior;
 
     if (flags == ContextFlags::None) {
         flags = ContextFlags::Default;
@@ -455,20 +469,34 @@ static json GetDynamicFollowersList() {
     std::stringstream pSs;
     pSs << static_cast<int>(pCurWeight) << " / " << static_cast<int>(pMaxWeight);
 
-    std::string pName = player->GetName() ? player->GetName() : "Player Character";
+    std::string pName = (player->GetActorBase() && player->GetActorBase()->GetName()) ? player->GetActorBase()->GetName() : "Player Character";
     arr.push_back(json{
         {"id", "0x00000007"},
         {"name", SanitizeUtf8(pName)},
         {"type", "PLAYER"},
         {"avatar", "D"},
+        {"avatarUrl", ""},
         {"weight", pSs.str()}
     });
 
     auto processLists = RE::ProcessLists::GetSingleton();
     if (processLists) {
+        std::set<RE::FormID> addedActors;
+        addedActors.insert(0x00000007);
+        addedActors.insert(0x00000014);
+
         for (auto& handle : processLists->highActorHandles) {
             auto actor = handle.get();
-            if (actor && actor.get() != player && actor->IsPlayerTeammate() && !actor->IsDead()) {
+            if (!actor || actor.get() == player || actor->IsDead()) continue;
+
+            if (actor->IsPlayerTeammate() || actor->IsPlayerRef()) {
+                RE::FormID fID = actor->GetFormID();
+                if (addedActors.find(fID) != addedActors.end()) continue;
+                addedActors.insert(fID);
+
+                auto* base = actor->GetActorBase();
+                if (!base) continue;
+
                 auto* aAvOwner = actor->AsActorValueOwner();
                 float curW = aAvOwner ? aAvOwner->GetActorValue(RE::ActorValue::kInventoryWeight) : 0.0f;
                 float maxW = aAvOwner ? aAvOwner->GetActorValue(RE::ActorValue::kCarryWeight) : 300.0f;
@@ -476,9 +504,9 @@ static json GetDynamicFollowersList() {
                 ssW << static_cast<int>(curW) << " / " << static_cast<int>(maxW);
 
                 std::stringstream ssID;
-                ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << actor->GetFormID();
+                ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << fID;
 
-                std::string aName = actor->GetDisplayFullName();
+                std::string aName = base->GetName() ? base->GetName() : "Follower";
                 std::string safeAName = SanitizeUtf8(aName);
                 std::string av = safeAName.empty() ? "F" : std::string(1, safeAName[0]);
 
@@ -487,6 +515,7 @@ static json GetDynamicFollowersList() {
                     {"name", safeAName},
                     {"type", "FOLLOWER"},
                     {"avatar", av},
+                    {"avatarUrl", ""},
                     {"weight", ssW.str()}
                 });
             }
@@ -523,7 +552,7 @@ static std::string GetApparelTypeString(RE::TESObjectARMO* armor) {
 
 static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& sourceTag) {
     json arr = json::array();
-    if (!actor) return arr;
+    if (!actor || !actor->GetActorBase()) return arr;
 
     auto inv = actor->GetInventory();
     for (const auto& [item, data] : inv) {
@@ -531,21 +560,15 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
         if (!IsPureApparel(item)) continue;
 
         auto* armor = item->As<RE::TESObjectARMO>();
+        if (!armor) continue;
+
         std::stringstream ssID;
         ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << item->GetFormID();
 
         std::string typeStr = GetApparelTypeString(armor);
         std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
 
-        std::string icon = "🛡️";
-        if (typeStr == "Helmet") icon = "🪖";
-        else if (typeStr == "Amulet") icon = "📿";
-        else if (typeStr == "Ring") icon = "💍";
-        else if (typeStr == "Gauntlets") icon = "🧤";
-        else if (typeStr == "Boots") icon = "👢";
-        else if (typeStr == "Shield") icon = "🛡️";
-
-        float armRating = armor ? static_cast<float>(armor->GetArmorRating()) : 0.0f;
+        float armRating = static_cast<float>(armor->GetArmorRating());
         float wt = item->GetWeight();
         int val = item->GetGoldValue();
 
@@ -555,7 +578,7 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
         std::string enchName = "";
         std::vector<std::string> tags;
 
-        if (armor && armor->formEnchanting) {
+        if (armor->formEnchanting) {
             enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
             tags.push_back("enchanted");
         }
@@ -584,7 +607,6 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
             {"name", safeName},
             {"category", catStr},
             {"type", typeStr},
-            {"icon", icon},
             {"damage", 0},
             {"armor", static_cast<int>(armRating)},
             {"weight", wt},
@@ -610,21 +632,15 @@ static json GetCloudWardrobeInventoryJson() {
         if (!IsPureApparel(item)) continue;
 
         auto* armor = item->As<RE::TESObjectARMO>();
+        if (!armor) continue;
+
         std::stringstream ssID;
         ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << item->GetFormID();
 
         std::string typeStr = GetApparelTypeString(armor);
         std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
 
-        std::string icon = "🛡️";
-        if (typeStr == "Helmet") icon = "🪖";
-        else if (typeStr == "Amulet") icon = "📿";
-        else if (typeStr == "Ring") icon = "💍";
-        else if (typeStr == "Gauntlets") icon = "🧤";
-        else if (typeStr == "Boots") icon = "👢";
-        else if (typeStr == "Shield") icon = "🛡️";
-
-        float armRating = armor ? static_cast<float>(armor->GetArmorRating()) : 0.0f;
+        float armRating = static_cast<float>(armor->GetArmorRating());
         float wt = item->GetWeight();
         int val = item->GetGoldValue();
 
@@ -634,7 +650,7 @@ static json GetCloudWardrobeInventoryJson() {
         std::string enchName = "";
         std::vector<std::string> tags;
 
-        if (armor && armor->formEnchanting) {
+        if (armor->formEnchanting) {
             enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
             tags.push_back("enchanted");
         }
@@ -645,7 +661,6 @@ static json GetCloudWardrobeInventoryJson() {
             {"name", safeName},
             {"category", catStr},
             {"type", typeStr},
-            {"icon", icon},
             {"damage", 0},
             {"armor", static_cast<int>(armRating)},
             {"weight", wt},
@@ -678,11 +693,13 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 
     auto activeActor = ResolveActiveTargetActor();
     std::vector<RE::FormID> currentlyWornList;
-    auto equippedEntries = GetEquippedInventoryEntries(activeActor);
-    currentlyWornList.reserve(equippedEntries.size());
-    for (const auto& entry : equippedEntries) {
-        if (entry.object && IsPureApparel(entry.object)) {
-            currentlyWornList.push_back(entry.object->GetFormID());
+    if (activeActor && activeActor->GetActorBase()) {
+        auto equippedEntries = GetEquippedInventoryEntries(activeActor);
+        currentlyWornList.reserve(equippedEntries.size());
+        for (const auto& entry : equippedEntries) {
+            if (entry.object && IsPureApparel(entry.object)) {
+                currentlyWornList.push_back(entry.object->GetFormID());
+            }
         }
     }
 
@@ -738,7 +755,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         if (processLists) {
             for (auto& handle : processLists->highActorHandles) {
                 auto actor = handle.get();
-                if (actor && actor.get() != player && actor->IsPlayerTeammate() && !actor->IsDead()) {
+                if (actor && actor.get() != player && actor->IsPlayerTeammate() && !actor->IsDead() && actor->GetActorBase()) {
                     std::stringstream ssID;
                     ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << actor->GetFormID();
                     actorInvs[ssID.str()] = GetActorApparelInventoryJson(actor.get(), "FOLLOWER");
@@ -766,7 +783,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         json sJson;
         sJson["index"] = slotIdx;
         sJson["hasOutfit"] = slot.outfit.has_value();
-        sJson["name"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->name) : "Empty";
+        sJson["name"] = slot.outfit.has_value() ? slot.outfit->name : "";
         sJson["count"] = slot.outfit.has_value() ? slot.outfit->itemIDs.size() : 0;
         sJson["contextTag"] = slot.outfit.has_value() ? slot.outfit->contextTag : "";
         sJson["preferenceStars"] = slot.outfit.has_value() ? slot.outfit->preferenceStars : 3;
@@ -782,20 +799,12 @@ std::string GetWheelJsonInternal(bool isEditMode) {
                     sID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << fID;
                     auto* arm = f->As<RE::TESObjectARMO>();
                     std::string tStr = GetApparelTypeString(arm);
-                    std::string icon = "🛡️";
-                    if (tStr == "Helmet") icon = "🪖";
-                    else if (tStr == "Amulet") icon = "📿";
-                    else if (tStr == "Ring") icon = "💍";
-                    else if (tStr == "Gauntlets") icon = "🧤";
-                    else if (tStr == "Boots") icon = "👢";
-                    else if (tStr == "Shield") icon = "🛡️";
 
                     itemObjects.push_back(json{
                         {"id", sID.str()},
                         {"rawID", static_cast<uint32_t>(fID)},
                         {"name", SanitizeUtf8(f->GetName() ? f->GetName() : "Apparel")},
-                        {"type", tStr},
-                        {"icon", icon}
+                        {"type", tStr}
                     });
                 }
             }

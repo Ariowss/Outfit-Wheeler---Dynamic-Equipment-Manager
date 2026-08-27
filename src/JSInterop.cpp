@@ -209,10 +209,7 @@ void SelectTargetActorListener(const char* data) {
                             actorState->actorState1.sitSleepState = RE::SIT_SLEEP_STATE::kNormal;
                         }
 
-                        follower->NotifyAnimationGraph("ForceDefaultState");
-                        follower->NotifyAnimationGraph("IdleStop_Instant");
-                        follower->NotifyAnimationGraph("IdleForceDefaultState");
-
+                        follower->NotifyAnimationGraph("IdleStop");
                         follower->SetPosition(g_stagePosition, true);
                         follower->data.angle.z = g_stageAngleZ;
 
@@ -685,6 +682,8 @@ void ToggleItemEquipListener(const char* data) {
                     }
                 }
             }
+
+            targetActor->Update3DModel();
 
             if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);

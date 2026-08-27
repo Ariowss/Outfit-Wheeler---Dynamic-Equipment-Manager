@@ -40,10 +40,47 @@ std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe(RE::FormID a_ac
 }
 
 ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const noexcept {
+    if (HasContext(activeContext, ContextFlags::Sleep)) return ContextFlags::Sleep;
     if (HasContext(activeContext, ContextFlags::Combat)) return ContextFlags::Combat;
     if (HasContext(activeContext, ContextFlags::Swim)) return ContextFlags::Swim;
+    if (HasContext(activeContext, ContextFlags::InWater)) return ContextFlags::InWater;
+    if (HasContext(activeContext, ContextFlags::Mount)) return ContextFlags::Mount;
+
+    if (HasContext(activeContext, ContextFlags::Dungeon)) return ContextFlags::Dungeon;
+    if (HasContext(activeContext, ContextFlags::Jail)) return ContextFlags::Jail;
+    if (HasContext(activeContext, ContextFlags::Castle)) return ContextFlags::Castle;
+    if (HasContext(activeContext, ContextFlags::GuildHall)) return ContextFlags::GuildHall;
+    if (HasContext(activeContext, ContextFlags::Temple)) return ContextFlags::Temple;
+    if (HasContext(activeContext, ContextFlags::Store)) return ContextFlags::Store;
+    if (HasContext(activeContext, ContextFlags::Inn)) return ContextFlags::Inn;
+    if (HasContext(activeContext, ContextFlags::Farm)) return ContextFlags::Farm;
+    if (HasContext(activeContext, ContextFlags::Military)) return ContextFlags::Military;
     if (HasContext(activeContext, ContextFlags::PlayerHome)) return ContextFlags::PlayerHome;
-    if (HasContext(activeContext, ContextFlags::CityTown)) return ContextFlags::CityTown;
+
+    if (HasContext(activeContext, ContextFlags::City)) {
+        if (HasContext(activeContext, ContextFlags::Interior)) return ContextFlags::City | ContextFlags::Interior;
+        if (HasContext(activeContext, ContextFlags::Rain)) return ContextFlags::City | ContextFlags::Rain;
+        if (HasContext(activeContext, ContextFlags::Snow)) return ContextFlags::City | ContextFlags::Snow;
+        if (HasContext(activeContext, ContextFlags::Night)) return ContextFlags::City | ContextFlags::Night;
+        return ContextFlags::City;
+    }
+
+    if (HasContext(activeContext, ContextFlags::Town)) {
+        if (HasContext(activeContext, ContextFlags::Interior)) return ContextFlags::Town | ContextFlags::Interior;
+        if (HasContext(activeContext, ContextFlags::Rain)) return ContextFlags::Town | ContextFlags::Rain;
+        if (HasContext(activeContext, ContextFlags::Snow)) return ContextFlags::Town | ContextFlags::Snow;
+        if (HasContext(activeContext, ContextFlags::Night)) return ContextFlags::Town | ContextFlags::Night;
+        return ContextFlags::Town;
+    }
+
+    if (HasContext(activeContext, ContextFlags::World)) {
+        if (HasContext(activeContext, ContextFlags::Interior)) return ContextFlags::World | ContextFlags::Interior;
+        if (HasContext(activeContext, ContextFlags::Rain)) return ContextFlags::World | ContextFlags::Rain;
+        if (HasContext(activeContext, ContextFlags::Snow)) return ContextFlags::World | ContextFlags::Snow;
+        if (HasContext(activeContext, ContextFlags::Night)) return ContextFlags::World | ContextFlags::Night;
+        return ContextFlags::World;
+    }
+
     return ContextFlags::Default;
 }
 
@@ -78,7 +115,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
         for (const auto& outfit : data.wardrobe) {
             if (outfit.id == data.currentOutfitID && outfit.controlState != ControlState::Excluded) {
                 for (const auto& rule : outfit.suitabilities) {
-                    if (HasContext(rule.contextMask, targetContext)) {
+                    if (HasContext(rule.contextMask, targetContext) || rule.contextMask == targetContext) {
                         SelectionResult res;
                         res.selectedOutfit = outfit;
                         res.reasonCode = "Current Outfit Already Suitable";
@@ -96,14 +133,50 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
     for (const auto& outfit : data.wardrobe) {
         if (outfit.controlState == ControlState::Excluded) continue;
         for (const auto& rule : outfit.suitabilities) {
-            if (HasContext(rule.contextMask, targetContext)) {
+            if (HasContext(rule.contextMask, targetContext) || (rule.contextMask & targetContext) != ContextFlags::None) {
                 candidates.push_back(&outfit);
                 break;
             }
         }
     }
 
-    if (candidates.empty() && targetContext == ContextFlags::Default) {
+    if (candidates.empty() && HasContext(targetContext, ContextFlags::City)) {
+        for (const auto& outfit : data.wardrobe) {
+            if (outfit.controlState == ControlState::Excluded) continue;
+            for (const auto& rule : outfit.suitabilities) {
+                if (HasContext(rule.contextMask, ContextFlags::City)) {
+                    candidates.push_back(&outfit);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (candidates.empty() && HasContext(targetContext, ContextFlags::Town)) {
+        for (const auto& outfit : data.wardrobe) {
+            if (outfit.controlState == ControlState::Excluded) continue;
+            for (const auto& rule : outfit.suitabilities) {
+                if (HasContext(rule.contextMask, ContextFlags::Town)) {
+                    candidates.push_back(&outfit);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (candidates.empty() && HasContext(targetContext, ContextFlags::World)) {
+        for (const auto& outfit : data.wardrobe) {
+            if (outfit.controlState == ControlState::Excluded) continue;
+            for (const auto& rule : outfit.suitabilities) {
+                if (HasContext(rule.contextMask, ContextFlags::World)) {
+                    candidates.push_back(&outfit);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (candidates.empty()) {
         for (const auto& outfit : data.wardrobe) {
             if (outfit.controlState != ControlState::Excluded) {
                 candidates.push_back(&outfit);
@@ -154,7 +227,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
 
     SelectionResult result;
     result.selectedOutfit = *candidates[selectedIndex];
-    result.reasonCode = "Weighted Random Selection";
+    result.reasonCode = "Weighted Selection";
     result.calculatedWeight = weights[selectedIndex];
     return result;
 }

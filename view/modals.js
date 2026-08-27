@@ -6,6 +6,33 @@ var toastTimeout = null;
 var modNameMap = { 0: 'None', 42: 'Shift', 29: 'Ctrl', 56: 'Alt' };
 var gpModNameMap = { 0: 'None', 256: 'LB', 512: 'RB', 9: 'LT', 10: 'RT' };
 
+const ALL_CONDITIONS_LIST = [
+    { id: "combat", label: "Combat", cat: "action" },
+    { id: "in_water", label: "In Water", cat: "action" },
+    { id: "swim", label: "Swimming", cat: "action" },
+    { id: "sleep", label: "Sleeping", cat: "action" },
+    { id: "mount", label: "Mounting", cat: "action" },
+
+    { id: "world", label: "World", cat: "generic" },
+    { id: "town", label: "Town", cat: "generic" },
+    { id: "city", label: "City", cat: "generic" },
+    { id: "night", label: "Night", cat: "modifier" },
+    { id: "rain", label: "Rain", cat: "modifier" },
+    { id: "snow", label: "Snow", cat: "modifier" },
+    { id: "interior", label: "Interior", cat: "modifier" },
+
+    { id: "dungeon", label: "Dungeon", cat: "unique" },
+    { id: "home", label: "Player Home", cat: "unique" },
+    { id: "inn", label: "Inn & Tavern", cat: "unique" },
+    { id: "store", label: "Store", cat: "unique" },
+    { id: "guild", label: "Guild Hall", cat: "unique" },
+    { id: "castle", label: "Castle", cat: "unique" },
+    { id: "temple", label: "Temple", cat: "unique" },
+    { id: "farm", label: "Farm", cat: "unique" },
+    { id: "jail", label: "Jail", cat: "unique" },
+    { id: "military", label: "Military", cat: "unique" }
+];
+
 function showSaveToast(text) {
     const toast = document.getElementById('save-toast');
     if (!toast) return;
@@ -327,15 +354,17 @@ function openContextModal(e) {
     const currentTag = (currentSlot && currentSlot.contextTag) ? currentSlot.contextTag.toLowerCase() : "";
     const currentRating = (currentSlot && currentSlot.preferenceStars !== undefined) ? currentSlot.preferenceStars : 3;
 
-    const chkCity = document.getElementById('chk-city');
-    const chkHome = document.getElementById('chk-home');
-    const chkCombat = document.getElementById('chk-combat');
-    const chkSwim = document.getElementById('chk-swim');
-
-    if (chkCity) chkCity.checked = currentTag.includes("city") || currentTag.includes("town");
-    if (chkHome) chkHome.checked = currentTag.includes("home") || currentTag.includes("house");
-    if (chkCombat) chkCombat.checked = currentTag.includes("combat") || currentTag.includes("fight");
-    if (chkSwim) chkSwim.checked = currentTag.includes("swim") || currentTag.includes("water");
+    const container = document.getElementById('modal-conditions-checkboxes-container');
+    if (container) {
+        container.innerHTML = '';
+        ALL_CONDITIONS_LIST.forEach(cond => {
+            const isChecked = currentTag.includes(cond.id.toLowerCase());
+            const row = document.createElement('div');
+            row.className = 'checkbox-row';
+            row.innerHTML = '<input type="checkbox" id="chk-' + cond.id + '" ' + (isChecked ? 'checked' : '') + '><label for="chk-' + cond.id + '">' + cond.label + '</label>';
+            container.appendChild(row);
+        });
+    }
 
     setStarRating(currentRating);
 
@@ -360,16 +389,13 @@ function setStarRating(num) {
 function saveSlotContextAndRating() {
     if (selectedSlotIndex === null) return;
 
-    const chkCity = document.getElementById('chk-city');
-    const chkHome = document.getElementById('chk-home');
-    const chkCombat = document.getElementById('chk-combat');
-    const chkSwim = document.getElementById('chk-swim');
-
     let tags = [];
-    if (chkCity && chkCity.checked) tags.push("City");
-    if (chkHome && chkHome.checked) tags.push("Home");
-    if (chkCombat && chkCombat.checked) tags.push("Combat");
-    if (chkSwim && chkSwim.checked) tags.push("Swim");
+    ALL_CONDITIONS_LIST.forEach(cond => {
+        const chk = document.getElementById('chk-' + cond.id);
+        if (chk && chk.checked) {
+            tags.push(cond.id);
+        }
+    });
 
     const contextString = tags.length > 0 ? tags.join(", ") : "";
 
@@ -389,7 +415,7 @@ function saveSlotContextAndRating() {
         }));
     }
 
-    showSaveToast("Context & Rating Saved!");
+    showSaveToast("Contexts & Rating Saved!");
     hideContextModal();
 }
 
@@ -648,147 +674,48 @@ function selectMod(type, val, text, e) {
     }
     closeAllDropdowns();
 }
+function handleModalResizeStart(e, modalCardId, dir) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
 
+    const card = document.getElementById(modalCardId);
+    if (!card) return;
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = card.offsetWidth;
+    const startH = card.offsetHeight;
+
+    function onMouseMove(moveEvt) {
+        const dx = moveEvt.clientX - startX;
+        const dy = moveEvt.clientY - startY;
+
+        if (dir.includes('r')) {
+            card.style.width = Math.max(300, startW + dx) + 'px';
+        }
+        if (dir.includes('l')) {
+            card.style.width = Math.max(300, startW - dx) + 'px';
+        }
+        if (dir.includes('b')) {
+            card.style.height = Math.max(220, startH + dy) + 'px';
+        }
+        if (dir.includes('t')) {
+            card.style.height = Math.max(220, startH - dy) + 'px';
+        }
+    }
+
+    function onMouseUp() {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+    }
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+}
 function closeAllDropdowns() {
     ['dd-edit-list', 'dd-play-list', 'dd-gp-play-list'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
-}
-
-function renderDrawerDetails() {
-    const badge = document.getElementById('drawer-slot-badge');
-    const nameEl = document.getElementById('drawer-outfit-name');
-    const statusContainer = document.getElementById('drawer-slot-status');
-    const btnFull = document.getElementById('btn-type-full');
-    const btnAddon = document.getElementById('btn-type-addon');
-
-    if (!badge || !nameEl || !currentWheelData || !currentWheelData.slots) return;
-
-    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
-    if (!slot) return;
-
-    badge.innerText = 'SLOT ' + (selectedSlotIndex + 1);
-    nameEl.innerText = slot.hasOutfit ? slot.name : 'Empty Slot';
-
-    if (statusContainer) {
-        if (slot.isAddon) {
-            statusContainer.style.display = 'inline-block';
-            statusContainer.className = 'status-chip chip-addon';
-            statusContainer.innerText = 'ADDON';
-        } else if (slot.isWorn || slot.isEquipped) {
-            statusContainer.style.display = 'inline-block';
-            statusContainer.className = 'status-chip chip-equipped';
-            statusContainer.innerText = 'EQUIPPED';
-        } else {
-            statusContainer.style.display = 'none';
-        }
-    }
-
-    if (btnFull && btnAddon) {
-        if (slot.isAddon) {
-            btnFull.classList.remove('active');
-            btnAddon.classList.add('active');
-        } else {
-            btnFull.classList.add('active');
-            btnAddon.classList.remove('active');
-        }
-    }
-
-    const currentStars = (slot && slot.preferenceStars !== undefined) ? slot.preferenceStars : 3;
-    const stars = document.querySelectorAll('#stars-widget .star-icon');
-    stars.forEach((s, idx) => {
-        if (idx < currentStars) s.classList.add('active');
-        else s.classList.remove('active');
-    });
-
-    const currentTag = (slot && slot.contextTag) ? slot.contextTag.toLowerCase() : '';
-    ['combat', 'city', 'home', 'swim'].forEach(t => {
-        const chip = document.getElementById('ctx-chip-' + t);
-        if (chip) {
-            if (currentTag.includes(t)) chip.classList.add('active');
-            else chip.classList.remove('active');
-        }
-    });
-
-    renderDrawerItemsList(slot);
-}
-
-function renderDrawerItemsList(slot) {
-    const list = document.getElementById('drawer-items-list');
-    if (!list) return;
-    list.innerHTML = '';
-
-    const items = slot.items || slot.itemIDs || [];
-    if (!slot.hasOutfit || items.length === 0) {
-        list.innerHTML = '<div style="font-size:10px; color:#64748b; text-align:center; padding:16px;">No items saved in this slot. Click \'Save Current Gear\' to assign loadout.</div>';
-        return;
-    }
-
-    items.forEach(itemEntry => {
-        let itemObj = null;
-        if (typeof itemEntry === 'object' && itemEntry.name) {
-            itemObj = itemEntry;
-        } else {
-            const formIdStr = (typeof itemEntry === 'number') ? ('0x' + itemEntry.toString(16).toUpperCase()) : String(itemEntry);
-            itemObj = (currentWheelData.inventory || []).find(x => x.id === formIdStr || x.rawID === itemEntry) || {
-                name: 'Apparel Item (' + formIdStr + ')',
-                type: 'Armor',
-                icon: '🛡️'
-            };
-        }
-        const row = document.createElement('div');
-        row.className = 'drawer-item-row';
-        row.innerHTML = '<div class="drawer-item-info"><span>' + (itemObj.icon || '🛡️') + '</span><span>' + itemObj.name + '</span></div><span class="drawer-item-slot-tag">' + (itemObj.type || 'Apparel') + '</span>';
-        list.appendChild(row);
-    });
-}
-
-function toggleSlotAddonType(isAddon) {
-    if (typeof window.SetSlotType === 'function' && currentWheelData) {
-        window.SetSlotType(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex,
-            isAddon: isAddon
-        }));
-    }
-}
-
-function setSlotRatingDirect(num) {
-    if (typeof window.SetSlotRating === 'function' && currentWheelData) {
-        window.SetSlotRating(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex,
-            ratingStars: num
-        }));
-    }
-}
-
-function toggleContextTagDirect(ctxKey) {
-    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
-    if (!slot) return;
-
-    let currentTags = (slot.contextTag || '').split(',').map(x => x.trim()).filter(x => x.length > 0);
-    if (currentTags.includes(ctxKey)) {
-        currentTags = currentTags.filter(x => x !== ctxKey);
-    } else {
-        currentTags.push(ctxKey);
-    }
-
-    const newTagStr = currentTags.join(', ');
-    if (typeof window.SetSlotContext === 'function' && currentWheelData) {
-        window.SetSlotContext(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex,
-            contextTag: newTagStr
-        }));
-    }
-}
-
-function saveCurrentEquippedToSlot() {
-    saveOutfit(selectedSlotIndex);
-}
-
-function clearSelectedSlot() {
-    ctxClearSlot();
 }

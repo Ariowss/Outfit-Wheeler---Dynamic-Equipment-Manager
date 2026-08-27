@@ -56,4 +56,3 @@ void SaveDataInternal();
 std::string GetWheelJson(bool isEditMode);
 std::string GetWheelJsonInternal(bool isEditMode);
 void SyncWheelOutfitsToAdaptiveWardrobe();
-RE::Actor* GetActiveTargetActor();

@@ -24,7 +24,7 @@
     </div>
 
     <main id="studio-main-stage">
-        <section id="panel-inventory" class="glass-panel draggable-panel edit-only" data-panel="inventory">
+        <section id="panel-inventory" class="glass-panel draggable-panel edit-only" data-panel="panel-inventory">
             <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-inventory')">
                 <span class="drag-title">APPAREL INVENTORY</span>
                 <span class="drag-hint">RMB to move</span>
@@ -146,7 +146,7 @@
         </div>
 
         <div class="right-unified-studio-container edit-only" id="right-dock-container">
-            <section id="panel-slots-rail" class="glass-panel draggable-panel" data-panel="slots-rail">
+            <section id="panel-slots-rail" class="glass-panel draggable-panel" data-panel="panel-slots-rail">
                 <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-slots-rail')">
                     <span class="drag-title">SLOTS RAIL</span>
                     <span class="drag-hint">RMB to move</span>
@@ -168,7 +168,7 @@
                 <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'br')"></div>
             </section>
 
-            <section id="panel-slot-details" class="glass-panel draggable-panel" data-panel="slot-details">
+            <section id="panel-slot-details" class="glass-panel draggable-panel" data-panel="panel-slot-details">
                 <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-slot-details')">
                     <span class="drag-title">SLOT INSPECTOR</span>
                     <span class="drag-hint">RMB to move</span>
@@ -209,12 +209,18 @@
                         <span class="star-icon" onclick="setSlotRatingDirect(4)">★</span>
                         <span class="star-icon" onclick="setSlotRatingDirect(5)">★</span>
                     </div>
-                    <div class="context-chips-group">
-                        <span class="ctx-toggle-chip" id="ctx-chip-combat" onclick="toggleContextTagDirect('Combat')">Combat</span>
-                        <span class="ctx-toggle-chip" id="ctx-chip-city" onclick="toggleContextTagDirect('City')">City</span>
-                        <span class="ctx-toggle-chip" id="ctx-chip-home" onclick="toggleContextTagDirect('Home')">Home</span>
-                        <span class="ctx-toggle-chip" id="ctx-chip-swim" onclick="toggleContextTagDirect('Swim')">Swim</span>
-                    </div>
+                    <button class="toolbar-btn" onclick="openContextModal(event)">Rules Manager</button>
+                </div>
+
+                <div class="inspector-conditions-wrapper">
+                    <div class="cond-group-title">ACTIONS</div>
+                    <div class="context-chips-group" id="inspector-actions-group"></div>
+
+                    <div class="cond-group-title">LOCATIONS</div>
+                    <div class="context-chips-group" id="inspector-locations-group"></div>
+
+                    <div class="cond-group-title">WEATHER & TIME</div>
+                    <div class="context-chips-group" id="inspector-modifiers-group"></div>
                 </div>
 
                 <div class="drawer-items-list" id="drawer-items-list"></div>
@@ -272,8 +278,8 @@
     </div>
 
     <div id="settings-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card">
-            <div class="modal-header">
+        <div class="modal-card draggable-panel" id="settings-modal-card" data-panel="settings-modal-card">
+            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'settings-modal-card')">
                 <h3>Wheel Settings</h3>
                 <button class="modal-close" onclick="hideSettingsModal()">✕</button>
             </div>
@@ -346,12 +352,21 @@
                 <button class="btn-secondary" onclick="hideSettingsModal()">Cancel</button>
                 <button class="btn-primary" onclick="saveSettings()">Save Settings</button>
             </div>
+
+            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 't')"></div>
+            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'b')"></div>
+            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'l')"></div>
+            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'r')"></div>
+            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'tl')"></div>
+            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'tr')"></div>
+            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'bl')"></div>
+            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'br')"></div>
         </div>
     </div>
 
     <div id="keyboard-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card">
-            <div class="modal-header">
+        <div class="modal-card draggable-panel" id="keyboard-modal-card" data-panel="keyboard-modal-card">
+            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'keyboard-modal-card')">
                 <h3>Keyboard Controls</h3>
                 <button class="modal-close" onclick="hideKeyboardModal()">✕</button>
             </div>
@@ -393,12 +408,21 @@
                 <button class="btn-secondary" onclick="hideKeyboardModal()">Back</button>
                 <button class="btn-primary" onclick="saveKeyboardSettings()">Save</button>
             </div>
+
+            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 't')"></div>
+            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'b')"></div>
+            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'l')"></div>
+            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'r')"></div>
+            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'tl')"></div>
+            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'tr')"></div>
+            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'bl')"></div>
+            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'br')"></div>
         </div>
     </div>
 
     <div id="gamepad-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card">
-            <div class="modal-header">
+        <div class="modal-card draggable-panel" id="gamepad-modal-card" data-panel="gamepad-modal-card">
+            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'gamepad-modal-card')">
                 <h3>Gamepad Controls</h3>
                 <button class="modal-close" onclick="hideGamepadModal()">✕</button>
             </div>
@@ -425,6 +449,15 @@
                 <button class="btn-secondary" onclick="hideGamepadModal()">Back</button>
                 <button class="btn-primary" onclick="saveGamepadSettings()">Save</button>
             </div>
+
+            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 't')"></div>
+            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'b')"></div>
+            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'l')"></div>
+            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'r')"></div>
+            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'tl')"></div>
+            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'tr')"></div>
+            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'bl')"></div>
+            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'br')"></div>
         </div>
     </div>
 
@@ -445,33 +478,18 @@
     </div>
 
     <div id="context-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3>Slot Context & Preference</h3>
+        <div class="modal-card draggable-panel" id="context-modal-card" data-panel="context-modal-card" style="width: 540px; max-height: 85vh;">
+            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'context-modal-card')">
+                <h3>Slot Auto-Switch Rules & Preferences</h3>
                 <button class="modal-close" onclick="hideContextModal()">✕</button>
             </div>
-            <div class="modal-body settings-grid">
+            <div class="modal-body settings-grid" style="overflow-y: auto;">
                 <div class="settings-section">
-                    <h4>Environmental Contexts</h4>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-city">
-                        <label for="chk-city">City & Towns</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-home">
-                        <label for="chk-home">Player Home</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-combat">
-                        <label for="chk-combat">Combat</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-swim">
-                        <label for="chk-swim">Swimming</label>
-                    </div>
+                    <h4>Active Trigger Conditions</h4>
+                    <div id="modal-conditions-checkboxes-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"></div>
                 </div>
                 <div class="settings-section">
-                    <h4>Preference Rating</h4>
+                    <h4>Preference Rating (Selection Weight)</h4>
                     <div class="star-rating" id="modal-star-rating">
                         <span class="star" onclick="setStarRating(1)">★</span>
                         <span class="star" onclick="setStarRating(2)">★</span>
@@ -483,8 +501,17 @@
             </div>
             <div class="modal-footer">
                 <button class="btn-secondary" onclick="hideContextModal()">Cancel</button>
-                <button class="btn-primary" onclick="saveSlotContextAndRating()">Save</button>
+                <button class="btn-primary" onclick="saveSlotContextAndRating()">Save Rules</button>
             </div>
+
+            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 't')"></div>
+            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'b')"></div>
+            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'l')"></div>
+            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'r')"></div>
+            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'tl')"></div>
+            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'tr')"></div>
+            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'bl')"></div>
+            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'br')"></div>
         </div>
     </div>
 </div>
