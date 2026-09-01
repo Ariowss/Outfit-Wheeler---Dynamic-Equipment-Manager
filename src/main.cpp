@@ -27,7 +27,6 @@ static void InitLog() {
 
 static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
     if (!message) return;
-    SKSE::log::info("Received SKSE message type: {}", message->type);
 
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         SKSE::log::info("Processing kDataLoaded event");
@@ -39,7 +38,9 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             PrismaUI = PRISMA_UI_API::RequestPluginAPI<PRISMA_UI_API::IVPrismaUI2>();
             if (!PrismaUI) {
                 SKSE::log::warn("IVPrismaUI2 request failed, trying IVPrismaUI1");
-                PrismaUI = static_cast<PRISMA_UI_API::IVPrismaUI2*>(PRISMA_UI_API::RequestPluginAPI(PRISMA_UI_API::InterfaceVersion::V1));
+                PrismaUI = static_cast<PRISMA_UI_API::IVPrismaUI2*>(
+                    PRISMA_UI_API::RequestPluginAPI(PRISMA_UI_API::InterfaceVersion::V1)
+                );
             }
             SKSE::log::info("PrismaUI API pointer: {}", static_cast<void*>(PrismaUI));
         }
@@ -51,69 +52,72 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
             view = PrismaUI->CreateView(viewPath, OnDomReadyCallbackFunc);
             SKSE::log::info("CreateView returned View ID: {}", view);
 
-            PrismaUI->Hide(view);
-            isMenuOpen.store(false, std::memory_order_release);
+            if (view != 0) {
+                PrismaUI->Hide(view);
+                isMenuOpen.store(false, std::memory_order_release);
 
-            PrismaUI->RegisterConsoleCallback(view, OnConsoleMessageCallbackFunc);
-            PrismaUI->RegisterJSListener(view, "SaveSettings", SaveSettingsListener);
-            PrismaUI->RegisterJSListener(view, "SetTypingMode", SetTypingModeListener);
-            PrismaUI->RegisterJSListener(view, "SaveOutfit", SaveOutfitListener);
-            PrismaUI->RegisterJSListener(view, "SaveOutfitToSlot", SaveOutfitListener);
-            PrismaUI->RegisterJSListener(view, "RenameSlot", RenameSlotListener);
-            PrismaUI->RegisterJSListener(view, "RenameWheel", RenameWheelListener);
-            PrismaUI->RegisterJSListener(view, "ClearSlot", ClearSlotListener);
-            PrismaUI->RegisterJSListener(view, "EquipSlot", EquipSlotListener);
-            PrismaUI->RegisterJSListener(view, "OnCloseWheel", OnCloseWheelListener);
-            PrismaUI->RegisterJSListener(view, "ChangeWheel", ChangeWheelListener);
-            PrismaUI->RegisterJSListener(view, "AddWheel", AddWheelListener);
-            PrismaUI->RegisterJSListener(view, "AddSlot", AddSlotListener);
-            PrismaUI->RegisterJSListener(view, "DeleteSlot", DeleteSlotListener);
-            PrismaUI->RegisterJSListener(view, "DeleteWheel", DeleteWheelListener);
-            PrismaUI->RegisterJSListener(view, "SetSlotContext", SetSlotContextListener);
-            PrismaUI->RegisterJSListener(view, "SetSlotRating", SetSlotRatingListener);
-            PrismaUI->RegisterJSListener(view, "SetSlotType", SetSlotTypeListener);
-            PrismaUI->RegisterJSListener(view, "ToggleItemEquip", ToggleItemEquipListener);
-            PrismaUI->RegisterJSListener(view, "OrbitCamera", OrbitCameraListener);
-            PrismaUI->RegisterJSListener(view, "ZoomCamera", ZoomCameraListener);
-            PrismaUI->RegisterJSListener(view, "PanCamera", PanCameraListener);
-            PrismaUI->RegisterJSListener(view, "SelectTargetActor", SelectTargetActorListener);
-            PrismaUI->RegisterJSListener(view, "RetrieveAllOutfits", RetrieveAllOutfitsListener);
-            PrismaUI->RegisterJSListener(view, "StashAllOutfits", StashAllOutfitsListener);
-            PrismaUI->RegisterJSListener(view, "StashSlotOutfit", StashSlotOutfitListener);
-            PrismaUI->RegisterJSListener(view, "RetrieveSlotOutfit", RetrieveSlotOutfitListener);
-            PrismaUI->RegisterJSListener(view, "StashWheelOutfits", StashWheelOutfitsListener);
-            PrismaUI->RegisterJSListener(view, "RetrieveWheelOutfits", RetrieveWheelOutfitsListener);
-            SKSE::log::info("Registered all JS listeners");
+                PrismaUI->RegisterConsoleCallback(view, OnConsoleMessageCallbackFunc);
+                PrismaUI->RegisterJSListener(view, "SaveSettings", SaveSettingsListener);
+                PrismaUI->RegisterJSListener(view, "SetTypingMode", SetTypingModeListener);
+                PrismaUI->RegisterJSListener(view, "SaveOutfit", SaveOutfitListener);
+                PrismaUI->RegisterJSListener(view, "SaveOutfitToSlot", SaveOutfitListener);
+                PrismaUI->RegisterJSListener(view, "RenameSlot", RenameSlotListener);
+                PrismaUI->RegisterJSListener(view, "RenameWheel", RenameWheelListener);
+                PrismaUI->RegisterJSListener(view, "ClearSlot", ClearSlotListener);
+                PrismaUI->RegisterJSListener(view, "DeleteSlot", DeleteSlotListener);
+                PrismaUI->RegisterJSListener(view, "EquipSlot", EquipSlotListener);
+                PrismaUI->RegisterJSListener(view, "OnCloseWheel", OnCloseWheelListener);
+                PrismaUI->RegisterJSListener(view, "ChangeWheel", ChangeWheelListener);
+                PrismaUI->RegisterJSListener(view, "AddWheel", AddWheelListener);
+                PrismaUI->RegisterJSListener(view, "AddSlot", AddSlotListener);
+                PrismaUI->RegisterJSListener(view, "DeleteWheel", DeleteWheelListener);
+                PrismaUI->RegisterJSListener(view, "SetSlotContext", SetSlotContextListener);
+                PrismaUI->RegisterJSListener(view, "SetSlotRating", SetSlotRatingListener);
+                PrismaUI->RegisterJSListener(view, "SetSlotType", SetSlotTypeListener);
+                PrismaUI->RegisterJSListener(view, "ToggleItemEquip", ToggleItemEquipListener);
+                PrismaUI->RegisterJSListener(view, "TransferItem", TransferItemListener);
+                PrismaUI->RegisterJSListener(view, "TransferAllInventory", TransferAllInventoryListener);
+                PrismaUI->RegisterJSListener(view, "OrbitCamera", OrbitCameraListener);
+                PrismaUI->RegisterJSListener(view, "ZoomCamera", ZoomCameraListener);
+                PrismaUI->RegisterJSListener(view, "PanCamera", PanCameraListener);
+                PrismaUI->RegisterJSListener(view, "SelectTargetActor", SelectTargetActorListener);
+                PrismaUI->RegisterJSListener(view, "RetrieveAllOutfits", RetrieveAllOutfitsListener);
+                PrismaUI->RegisterJSListener(view, "StashAllOutfits", StashAllOutfitsListener);
+                PrismaUI->RegisterJSListener(view, "StashSlotOutfit", StashSlotOutfitListener);
+                PrismaUI->RegisterJSListener(view, "RetrieveSlotOutfit", RetrieveSlotOutfitListener);
+                PrismaUI->RegisterJSListener(view, "StashWheelOutfits", StashWheelOutfitsListener);
+                PrismaUI->RegisterJSListener(view, "RetrieveWheelOutfits", RetrieveWheelOutfitsListener);
+                PrismaUI->RegisterJSListener(view, "AddItemToSlot", AddItemToSlotListener);
+                PrismaUI->RegisterJSListener(view, "RemoveItemFromSlot", RemoveItemFromSlotListener);
+                PrismaUI->RegisterJSListener(view, "MoveSlot", MoveSlotListener);
+                PrismaUI->RegisterJSListener(view, "MoveWheel", MoveWheelListener);
+                SKSE::log::info("Registered all JS listeners successfully");
+            }
         }
 
         WheelInputHandler::Register();
     } else if (message->type == SKSE::MessagingInterface::kPreLoadGame) {
-        SKSE::log::info("PreLoadGame message received - invalidating pending tasks and resetting fully loaded flag");
         g_gameFullyLoaded.store(false, std::memory_order_release);
         g_gameSessionGeneration.fetch_add(1, std::memory_order_acq_rel);
     } else if (message->type == SKSE::MessagingInterface::kPostLoadGame || message->type == SKSE::MessagingInterface::kNewGame) {
-        SKSE::log::info("Player loaded into game world - enabling adaptive wardrobe auto-system");
         LoadData();
         g_gameFullyLoaded.store(true, std::memory_order_release);
         ExecutionQueue::GetSingleton()->RegisterEvents();
     }
 }
 
-extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse) {
+SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     InitLog();
-    SKSE::log::info("SKSEPlugin_Load called");
+    SKSE::log::info("OutfitWheeler SKSEPluginLoad initialized");
 
-    REL::Module::reset();
-    auto g_messaging = reinterpret_cast<SKSE::MessagingInterface*>(a_skse->QueryInterface(SKSE::LoadInterface::kMessaging));
-    if (!g_messaging) {
-        SKSE::log::error("Failed to query SKSE MessagingInterface");
+    SKSE::Init(a_skse);
+
+    auto messaging = SKSE::GetMessagingInterface();
+    if (!messaging) {
+        SKSE::log::error("Failed to acquire SKSE MessagingInterface");
         return false;
     }
 
-    SKSE::Init(a_skse);
-    SKSE::AllocTrampoline(1 << 10);
-    g_messaging->RegisterListener("SKSE", SKSEMessageHandler);
-    SKSE::log::info("SKSE message listener registered successfully");
-
+    messaging->RegisterListener(SKSEMessageHandler);
     return true;
 }

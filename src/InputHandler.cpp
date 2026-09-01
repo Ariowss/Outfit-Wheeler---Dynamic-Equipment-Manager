@@ -28,7 +28,6 @@ bool g_inputRegistered = false;
 static std::chrono::steady_clock::time_point g_lastToggleTime{};
 static std::chrono::steady_clock::time_point g_lastFilterTime{};
 static std::chrono::steady_clock::time_point g_lastWheelTime{};
-static std::chrono::steady_clock::time_point g_lastPeriodicEvalTime{};
 static uint32_t g_currentGamepadMask = 0;
 static float g_lastSentAngle = -999.0f;
 
@@ -63,51 +62,6 @@ static bool GetActiveGamepadState(XINPUT_STATE* outState) {
         }
     }
     return false;
-}
-
-static void SetupStudioCameraAndControls(bool enableStudio) {
-    auto controlMap = RE::ControlMap::GetSingleton();
-    if (controlMap) {
-        using UEFlag = RE::ControlMap::UEFlag;
-        uint32_t flags = static_cast<uint32_t>(UEFlag::kFighting) |
-                         static_cast<uint32_t>(UEFlag::kMovement) |
-                         static_cast<uint32_t>(UEFlag::kJumping) |
-                         static_cast<uint32_t>(UEFlag::kSneaking) |
-                         static_cast<uint32_t>(UEFlag::kActivate);
-        controlMap->ToggleControls(static_cast<UEFlag>(flags), !enableStudio);
-    }
-
-    auto player = RE::PlayerCharacter::GetSingleton();
-    if (player && enableStudio) {
-        auto actorState = player->AsActorState();
-        if (actorState && actorState->GetWeaponState() != RE::WEAPON_STATE::kSheathed) {
-            player->DrawWeaponMagicHands(false);
-        }
-    }
-
-    auto cam = RE::PlayerCamera::GetSingleton();
-    if (cam) {
-        if (enableStudio) {
-            if (cam->currentState && cam->currentState->id == RE::CameraState::kFirstPerson) {
-                cam->ForceThirdPerson();
-            }
-            if (player) {
-                cam->cameraTarget = player->GetHandle();
-            }
-            if (cam->currentState && (cam->currentState->id == RE::CameraState::kThirdPerson || cam->currentState->id == RE::CameraState::kAutoVanity)) {
-                auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
-                if (tpState) {
-                    tpState->freeRotation.x = 3.14159265f;
-                    tpState->freeRotation.y = 0.0f;
-                    tpState->targetZoomOffset = 0.45f;
-                }
-            }
-        } else {
-            if (player) {
-                cam->cameraTarget = player->GetHandle();
-            }
-        }
-    }
 }
 
 void OpenWheel(bool isEditMode) {
@@ -168,8 +122,12 @@ void HideWheel() {
     SKSE::GetTaskInterface()->AddTask([]() {
         if (!PrismaUI || view == 0) return;
 
-        RestoreStudioActors();
-        SetupStudioCameraAndControls(false);
+        bool wasEditMode = g_isEditModeOpen.load(std::memory_order_acquire);
+        if (wasEditMode) {
+            RestoreStudioActors();
+            SetupStudioCameraAndControls(false);
+        }
+
         PrismaUI->Unfocus(view);
         PrismaUI->Hide(view);
 
@@ -205,21 +163,15 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     if (!a_event || !*a_event) return RE::BSEventNotifyControl::kContinue;
     if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return RE::BSEventNotifyControl::kContinue;
 
-    auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastPeriodicEvalTime).count() > 1500) {
-        g_lastPeriodicEvalTime = now;
-        ExecutionQueue::GetSingleton()->EvaluateAndQueueChange(false);
-    }
+    bool currentlyOpen = isMenuOpen.load(std::memory_order_acquire);
+    bool isEditMode = g_isEditModeOpen.load(std::memory_order_acquire);
+    bool isTypingActive = g_isTyping.load(std::memory_order_acquire);
 
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player || !player->Is3DLoaded() || player->IsDead()) return RE::BSEventNotifyControl::kContinue;
 
     auto ui = RE::UI::GetSingleton();
     if (!ui) return RE::BSEventNotifyControl::kContinue;
-
-    bool currentlyOpen = isMenuOpen.load(std::memory_order_acquire);
-    bool isEditMode = g_isEditModeOpen.load(std::memory_order_acquire);
-    bool isTypingActive = g_isTyping.load(std::memory_order_acquire);
 
     if (!currentlyOpen) {
         if (isTypingActive) return RE::BSEventNotifyControl::kContinue;
@@ -282,6 +234,8 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0 || (GetKeyState(VK_LSHIFT) & 0x8000) != 0 || (GetKeyState(VK_RSHIFT) & 0x8000) != 0;
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0 || (GetKeyState(VK_LCONTROL) & 0x8000) != 0 || (GetKeyState(VK_RCONTROL) & 0x8000) != 0;
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0 || (GetKeyState(VK_LMENU) & 0x8000) != 0 || (GetKeyState(VK_RMENU) & 0x8000) != 0;
+
+    auto now = std::chrono::steady_clock::now();
 
     for (auto event = *a_event; event; event = event->next) {
         if (event->eventType == RE::INPUT_EVENT_TYPE::kButton) {

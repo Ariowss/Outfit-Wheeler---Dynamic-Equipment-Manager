@@ -1,8 +1,9 @@
-#ifndef SETTINGS_H
-#define SETTINGS_H
+#pragma once
+#include <stdint.h>
 
-#include <cstdint>
-#include <string>
+extern float g_wheelScale;
+extern float g_wheelOffsetX;
+extern float g_wheelOffsetY;
 
 extern uint32_t g_editKey;
 extern uint32_t g_editModifierKey;
@@ -13,10 +14,7 @@ extern uint32_t g_gamepadPlayKey;
 extern uint32_t g_gamepadPlayModifier;
 extern float g_thumbstickDeadzone;
 
-extern float g_wheelScale;
-extern float g_wheelOffsetX;
-extern float g_wheelOffsetY;
-
+extern bool g_autoCloseOnEquip;
 extern bool g_autoStashEnabled;
 extern bool g_autoSystemEnabled;
 extern bool g_autoCityEnabled;
@@ -26,5 +24,3 @@ extern bool g_autoSwimEnabled;
 
 void LoadINI();
 void SaveINI();
-
-#endif

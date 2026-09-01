@@ -18,11 +18,39 @@ struct StudioActorTransform {
     float angleZ{ 0.0f };
 };
 
-static RE::NiPoint3 g_stagePosition;
-static float g_stageAngleZ = 0.0f;
-static RE::FormID g_currentStudioActorID = 0x00000007;
+RE::NiPoint3 g_stagePosition;
+float g_stageAngleZ = 0.0f;
+RE::FormID g_currentStudioActorID = 0x00000007;
 static std::unordered_map<RE::FormID, StudioActorTransform> g_originalFollowerTransforms;
-static bool g_isPlayerHidden = false;
+
+static float g_savedFreeRotationX = 0.0f;
+static float g_savedFreeRotationY = 0.0f;
+static float g_savedZoomOffset = 1.0f;
+static bool g_wasFirstPerson = false;
+static bool g_hasSavedCameraState = false;
+
+static void SetActorRestrainedAndDontMove(RE::Actor* a_actor, bool a_enable) {
+    if (!a_actor) return;
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    if (!vm) return;
+    auto* handlePolicy = vm->GetObjectHandlePolicy();
+    if (!handlePolicy) return;
+    RE::VMHandle handle = handlePolicy->GetHandleForObject(RE::Actor::FORMTYPE, a_actor);
+    if (handle == handlePolicy->EmptyHandle()) return;
+
+    auto args1 = RE::MakeFunctionArguments<bool>(std::move(a_enable));
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback1;
+    vm->DispatchMethodCall(handle, "Actor", "SetRestrained", args1, callback1);
+
+    auto args2 = RE::MakeFunctionArguments<bool>(std::move(a_enable));
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback2;
+    vm->DispatchMethodCall(handle, "Actor", "SetDontMove", args2, callback2);
+
+    bool aiEnabled = !a_enable;
+    auto args3 = RE::MakeFunctionArguments<bool>(std::move(aiEnabled));
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback3;
+    vm->DispatchMethodCall(handle, "Actor", "EnableAI", args3, callback3);
+}
 
 void OnDomReadyCallbackFunc(PrismaView v) {
     SKSE::log::info("OnDomReadyCallbackFunc fired for View ID: {}", v);
@@ -36,40 +64,115 @@ void InitializeStudioStage() {
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
 
-    g_stagePosition = player->GetPosition();
-    g_stageAngleZ = player->GetAngleZ();
+    float playerAngleZ = player->GetAngleZ();
+    RE::NiPoint3 playerPos = player->GetPosition();
+
+    float forwardOffset = 150.0f;
+    g_stagePosition.x = playerPos.x + forwardOffset * std::sin(playerAngleZ);
+    g_stagePosition.y = playerPos.y + forwardOffset * std::cos(playerAngleZ);
+    g_stagePosition.z = playerPos.z;
+    g_stageAngleZ = playerAngleZ + 3.14159265f;
+    if (g_stageAngleZ > 6.2831853f) {
+        g_stageAngleZ -= 6.2831853f;
+    }
+
     g_currentStudioActorID = 0x00000007;
     g_originalFollowerTransforms.clear();
-    g_isPlayerHidden = false;
+}
 
-    auto* root = player->Get3D();
-    if (root) {
-        root->CullNode(false);
+void SetupStudioCameraAndControls(bool enableStudio) {
+    auto controlMap = RE::ControlMap::GetSingleton();
+    if (controlMap) {
+        using UEFlag = RE::ControlMap::UEFlag;
+        uint32_t flags = static_cast<uint32_t>(UEFlag::kFighting) |
+                         static_cast<uint32_t>(UEFlag::kMovement) |
+                         static_cast<uint32_t>(UEFlag::kJumping) |
+                         static_cast<uint32_t>(UEFlag::kSneaking) |
+                         static_cast<uint32_t>(UEFlag::kActivate);
+        controlMap->ToggleControls(static_cast<UEFlag>(flags), !enableStudio);
+    }
+
+    auto player = RE::PlayerCharacter::GetSingleton();
+    auto cam = RE::PlayerCamera::GetSingleton();
+    if (cam) {
+        if (enableStudio) {
+            if (cam->currentState) {
+                if (cam->currentState->id == RE::CameraState::kFirstPerson) {
+                    g_wasFirstPerson = true;
+                    cam->ForceThirdPerson();
+                } else {
+                    g_wasFirstPerson = false;
+                }
+
+                if (cam->currentState->id == RE::CameraState::kThirdPerson || cam->currentState->id == RE::CameraState::kAutoVanity) {
+                    auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
+                    if (tpState) {
+                        if (!g_hasSavedCameraState) {
+                            g_savedFreeRotationX = tpState->freeRotation.x;
+                            g_savedFreeRotationY = tpState->freeRotation.y;
+                            g_savedZoomOffset = tpState->targetZoomOffset;
+                            g_hasSavedCameraState = true;
+                        }
+                        tpState->freeRotation.x = 3.14159265f;
+                        tpState->freeRotation.y = 0.0f;
+                        tpState->targetZoomOffset = 0.45f;
+                    }
+                }
+            }
+            if (player) {
+                cam->cameraTarget = player->GetHandle();
+            }
+        } else {
+            if (cam->currentState && (cam->currentState->id == RE::CameraState::kThirdPerson || cam->currentState->id == RE::CameraState::kAutoVanity)) {
+                auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
+                if (tpState && g_hasSavedCameraState) {
+                    tpState->freeRotation.x = g_savedFreeRotationX;
+                    tpState->freeRotation.y = g_savedFreeRotationY;
+                    tpState->targetZoomOffset = g_savedZoomOffset;
+                }
+            }
+            if (g_wasFirstPerson) {
+                cam->ForceFirstPerson();
+                g_wasFirstPerson = false;
+            }
+            g_hasSavedCameraState = false;
+
+            if (player) {
+                cam->cameraTarget = player->GetHandle();
+            }
+        }
     }
 }
 
 void RestoreStudioActors() {
     auto player = RE::PlayerCharacter::GetSingleton();
-    if (player) {
-        auto* root = player->Get3D();
-        if (root) {
-            root->CullNode(false);
-        }
-    }
-    g_isPlayerHidden = false;
 
     for (const auto& [actorID, transform] : g_originalFollowerTransforms) {
         auto* form = RE::TESForm::LookupByID(actorID);
         auto* actor = form ? form->As<RE::Actor>() : nullptr;
         if (actor) {
+            SetActorRestrainedAndDontMove(actor, false);
+            actor->SetGraphVariableFloat("Speed", 0.0f);
+            actor->SetGraphVariableFloat("Direction", 0.0f);
+            actor->SetGraphVariableBool("bIsMoving", false);
+            actor->SetGraphVariableBool("bIsWalking", false);
+            actor->SetGraphVariableBool("bIsRunning", false);
+            actor->SetGraphVariableBool("bIsSprinting", false);
+            actor->SetGraphVariableBool("IsMoving", false);
             actor->SetPosition(transform.position, true);
             actor->data.angle.z = transform.angleZ;
-            actor->NotifyAnimationGraph("IdleStop");
+            actor->StopMoving(0.0f);
+            actor->NotifyAnimationGraph("IdleForceDefaultState");
         }
     }
 
     g_originalFollowerTransforms.clear();
     g_currentStudioActorID = 0x00000007;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        g_manager.activeTargetActorID = 0x00000007;
+    }
 
     auto cam = RE::PlayerCamera::GetSingleton();
     if (cam && player) {
@@ -123,7 +226,7 @@ void PanCameraListener(const char* data) {
             auto tpState = skyrim_cast<RE::ThirdPersonState*>(cam->currentState.get());
             if (tpState) {
                 tpState->freeRotation.x += (moveX * 0.05f);
-                tpState->freeRotation.y = std::clamp(tpState->freeRotation.y + (moveY * 0.05f), -1.2f, 1.2f);
+                tpState->freeRotation.y = std::clamp(tpState->freeRotation.y - (moveY * 0.05f), -1.2f, 1.2f);
             }
         });
     } catch (...) {}
@@ -159,20 +262,23 @@ void SelectTargetActorListener(const char* data) {
                         auto* prevForm = RE::TESForm::LookupByID(g_currentStudioActorID);
                         auto* prevActor = prevForm ? prevForm->As<RE::Actor>() : nullptr;
                         if (prevActor) {
+                            SetActorRestrainedAndDontMove(prevActor, false);
+                            prevActor->SetGraphVariableFloat("Speed", 0.0f);
+                            prevActor->SetGraphVariableFloat("Direction", 0.0f);
+                            prevActor->SetGraphVariableBool("bIsMoving", false);
+                            prevActor->SetGraphVariableBool("bIsWalking", false);
+                            prevActor->SetGraphVariableBool("bIsRunning", false);
+                            prevActor->SetGraphVariableBool("bIsSprinting", false);
+                            prevActor->SetGraphVariableBool("IsMoving", false);
                             prevActor->SetPosition(it->second.position, true);
                             prevActor->data.angle.z = it->second.angleZ;
-                            prevActor->NotifyAnimationGraph("IdleStop");
+                            prevActor->StopMoving(0.0f);
+                            prevActor->NotifyAnimationGraph("IdleForceDefaultState");
                         }
                     }
                 }
 
                 if (targetID == 0x00000007 || targetID == 0 || targetID == 0x00000014) {
-                    auto* root = player->Get3D();
-                    if (root) {
-                        root->CullNode(false);
-                    }
-                    g_isPlayerHidden = false;
-
                     auto cam = RE::PlayerCamera::GetSingleton();
                     if (cam) {
                         cam->cameraTarget = player->GetHandle();
@@ -191,12 +297,6 @@ void SelectTargetActorListener(const char* data) {
                     auto* follower = form ? form->As<RE::Actor>() : nullptr;
 
                     if (follower) {
-                        auto* pRoot = player->Get3D();
-                        if (pRoot) {
-                            pRoot->CullNode(true);
-                        }
-                        g_isPlayerHidden = true;
-
                         if (g_originalFollowerTransforms.find(targetID) == g_originalFollowerTransforms.end()) {
                             StudioActorTransform tf;
                             tf.position = follower->GetPosition();
@@ -209,7 +309,18 @@ void SelectTargetActorListener(const char* data) {
                             actorState->actorState1.sitSleepState = RE::SIT_SLEEP_STATE::kNormal;
                         }
 
+                        SetActorRestrainedAndDontMove(follower, true);
+                        follower->StopCombat();
+                        follower->StopMoving(0.0f);
+                        follower->SetGraphVariableFloat("Speed", 0.0f);
+                        follower->SetGraphVariableFloat("Direction", 0.0f);
+                        follower->SetGraphVariableBool("bIsMoving", false);
+                        follower->SetGraphVariableBool("bIsWalking", false);
+                        follower->SetGraphVariableBool("bIsRunning", false);
+                        follower->SetGraphVariableBool("bIsSprinting", false);
+                        follower->SetGraphVariableBool("IsMoving", false);
                         follower->NotifyAnimationGraph("IdleStop");
+                        follower->NotifyAnimationGraph("IdleForceDefaultState");
                         follower->SetPosition(g_stagePosition, true);
                         follower->data.angle.z = g_stageAngleZ;
 
@@ -254,6 +365,7 @@ void SaveSettingsListener(const char* data) {
         if (req.contains("gamepadPlayModifier")) g_gamepadPlayModifier = req.value("gamepadPlayModifier", 0x0100);
         if (req.contains("thumbstickDeadzone")) g_thumbstickDeadzone = req.value("thumbstickDeadzone", 0.25f);
 
+        if (req.contains("autoCloseOnEquip")) g_autoCloseOnEquip = req.value("autoCloseOnEquip", true);
         if (req.contains("autoStashEnabled")) g_autoStashEnabled = req.value("autoStashEnabled", false);
         if (req.contains("autoSystemEnabled")) g_autoSystemEnabled = req.value("autoSystemEnabled", true);
         if (req.contains("autoCityEnabled")) g_autoCityEnabled = req.value("autoCityEnabled", true);
@@ -307,11 +419,21 @@ void RenameSlotListener(const char* data) {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
             if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                if (wheels[wheelIdx].slots[slotIdx].outfit.has_value() && !newName.empty()) {
+                if (!wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                    Outfit o;
+                    o.name = newName.empty() ? ("Outfit " + std::to_string(slotIdx + 1)) : newName;
+                    o.contextTag = "";
+                    o.preferenceStars = 3;
+                    o.controlState = ControlState::Normal;
+                    o.isAddon = false;
+                    wheels[wheelIdx].slots[slotIdx].outfit = o;
+                } else if (!newName.empty()) {
                     wheels[wheelIdx].slots[slotIdx].outfit->name = newName;
-                    SaveDataInternal();
-                    RE::DebugNotification(("Renamed outfit to " + newName).c_str());
                 }
+
+                SaveDataInternal();
+                RE::DebugNotification(("Renamed outfit to " + newName).c_str());
+
                 if (PrismaUI && view != 0) {
                     std::string jsCmd = GetWheelJsonInternal(true);
                     PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
@@ -355,7 +477,13 @@ void ClearSlotListener(const char* data) {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
             if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                wheels[wheelIdx].slots[slotIdx].outfit.reset();
+                Outfit o;
+                o.name = "Outfit " + std::to_string(slotIdx + 1);
+                o.contextTag = "";
+                o.preferenceStars = 3;
+                o.controlState = ControlState::Normal;
+                o.isAddon = false;
+                wheels[wheelIdx].slots[slotIdx].outfit = o;
 
                 RE::FormID canonicalID = (g_manager.activeTargetActorID == 0x00000014 || g_manager.activeTargetActorID == 0) ? 0x00000007 : g_manager.activeTargetActorID;
                 std::string thisSlotID = std::to_string(wheelIdx) + "_" + std::to_string(slotIdx);
@@ -387,11 +515,7 @@ void DeleteSlotListener(const char* data) {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
             if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                if (wheels[wheelIdx].slots.size() > 1) {
-                    wheels[wheelIdx].slots.erase(wheels[wheelIdx].slots.begin() + slotIdx);
-                } else {
-                    wheels[wheelIdx].slots[0].outfit.reset();
-                }
+                wheels[wheelIdx].slots.erase(wheels[wheelIdx].slots.begin() + slotIdx);
 
                 RE::FormID canonicalID = (g_manager.activeTargetActorID == 0x00000014 || g_manager.activeTargetActorID == 0) ? 0x00000007 : g_manager.activeTargetActorID;
                 AdaptiveWardrobeManager::GetSingleton()->SetCurrentOutfitID(canonicalID, "");
@@ -414,8 +538,9 @@ void EquipSlotListener(const char* data) {
         size_t wheelIdx = req.value("wheelIndex", 0);
         size_t slotIdx = req.value("slotIndex", 0);
         bool editMode = req.value("editMode", false);
+        bool keepOpen = req.value("keepOpen", false);
 
-        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, editMode]() {
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, editMode, keepOpen]() {
             EquipSlotImpl(wheelIdx, slotIdx);
 
             if (PrismaUI && view != 0) {
@@ -423,7 +548,12 @@ void EquipSlotListener(const char* data) {
                     std::string jsCmd = GetWheelJson(true);
                     PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
                 } else {
-                    HideWheel();
+                    if (g_autoCloseOnEquip && !keepOpen) {
+                        HideWheel();
+                    } else {
+                        std::string jsCmd = GetWheelJson(false);
+                        PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                    }
                 }
             }
         });
@@ -476,10 +606,6 @@ void AddWheelListener(const char* data) {
         auto& wheels = g_manager.GetActiveWheels();
         Wheel w;
         w.name = "Wheel " + std::to_string(wheels.size() + 1);
-        for (size_t i = 0; i < 4; ++i) {
-            Slot s;
-            w.slots.push_back(s);
-        }
         wheels.push_back(w);
         g_manager.GetActiveWheelIndex() = wheels.size() - 1;
         SaveDataInternal();
@@ -507,6 +633,13 @@ void AddSlotListener(const char* data) {
         size_t activeIdx = g_manager.GetActiveWheelIndex();
         if (!wheels.empty() && activeIdx < wheels.size()) {
             Slot s;
+            Outfit o;
+            o.name = "Outfit " + std::to_string(wheels[activeIdx].slots.size() + 1);
+            o.contextTag = "";
+            o.preferenceStars = 3;
+            o.controlState = ControlState::Normal;
+            o.isAddon = false;
+            s.outfit = o;
             wheels[activeIdx].slots.push_back(s);
             SaveDataInternal();
 
@@ -558,11 +691,21 @@ void SetSlotContextListener(const char* data) {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
             if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                if (wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                if (!wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                    Outfit o;
+                    o.name = "Outfit " + std::to_string(slotIdx + 1);
+                    o.contextTag = tag;
+                    o.preferenceStars = 3;
+                    o.controlState = ControlState::Normal;
+                    o.isAddon = false;
+                    wheels[wheelIdx].slots[slotIdx].outfit = o;
+                } else {
                     wheels[wheelIdx].slots[slotIdx].outfit->contextTag = tag;
-                    SaveDataInternal();
-                    RE::DebugNotification(("Context Tag set to: " + (tag.empty() ? "None" : tag)).c_str());
                 }
+
+                SaveDataInternal();
+                RE::DebugNotification(("Context Tag set to: " + (tag.empty() ? "None" : tag)).c_str());
+
                 if (PrismaUI && view != 0) {
                     std::string jsCmd = GetWheelJsonInternal(true);
                     PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
@@ -583,11 +726,21 @@ void SetSlotRatingListener(const char* data) {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
             if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                if (wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                if (!wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                    Outfit o;
+                    o.name = "Outfit " + std::to_string(slotIdx + 1);
+                    o.contextTag = "";
+                    o.preferenceStars = stars;
+                    o.controlState = ControlState::Normal;
+                    o.isAddon = false;
+                    wheels[wheelIdx].slots[slotIdx].outfit = o;
+                } else {
                     wheels[wheelIdx].slots[slotIdx].outfit->preferenceStars = stars;
-                    SaveDataInternal();
-                    RE::DebugNotification(("Rating set to " + std::to_string(stars) + " Stars").c_str());
                 }
+
+                SaveDataInternal();
+                RE::DebugNotification(("Rating set to " + std::to_string(stars) + " Stars").c_str());
+
                 if (PrismaUI && view != 0) {
                     std::string jsCmd = GetWheelJsonInternal(true);
                     PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
@@ -608,11 +761,21 @@ void SetSlotTypeListener(const char* data) {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
             if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                if (wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                if (!wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                    Outfit o;
+                    o.name = "Outfit " + std::to_string(slotIdx + 1);
+                    o.contextTag = "";
+                    o.preferenceStars = 3;
+                    o.controlState = ControlState::Normal;
+                    o.isAddon = isAddon;
+                    wheels[wheelIdx].slots[slotIdx].outfit = o;
+                } else {
                     wheels[wheelIdx].slots[slotIdx].outfit->isAddon = isAddon;
-                    SaveDataInternal();
-                    RE::DebugNotification(("Slot set to " + std::string(isAddon ? "Addon" : "Full Outfit")).c_str());
                 }
+
+                SaveDataInternal();
+                RE::DebugNotification(("Slot set to " + std::string(isAddon ? "Addon" : "Full Outfit")).c_str());
+
                 if (PrismaUI && view != 0) {
                     std::string jsCmd = GetWheelJsonInternal(true);
                     PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
@@ -636,6 +799,7 @@ void ToggleItemEquipListener(const char* data) {
 
         SKSE::GetTaskInterface()->AddTask([rawID]() {
             RE::Actor* targetActor = ResolveActiveTargetActor();
+            auto* player = RE::PlayerCharacter::GetSingleton();
             auto equipManager = RE::ActorEquipManager::GetSingleton();
             if (!targetActor || !equipManager) return;
 
@@ -646,6 +810,7 @@ void ToggleItemEquipListener(const char* data) {
 
             auto inv = targetActor->GetInventory();
             auto it = inv.find(bound);
+
             if (it != inv.end() && it->second.first > 0) {
                 auto* entryData = it->second.second.get();
                 bool isWorn = false;
@@ -667,23 +832,185 @@ void ToggleItemEquipListener(const char* data) {
                     equipManager->UnequipObject(targetActor, bound, targetExtra, 1, nullptr, false, false, true, true);
                     RE::DebugNotification(("Unequipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
                 } else {
-                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
+                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
                     RE::DebugNotification(("Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
                 }
             } else {
                 auto* wardrobe = GetWardrobeContainer();
+                bool transferred = false;
+
                 if (wardrobe) {
                     auto wInv = wardrobe->GetInventory();
                     auto wIt = wInv.find(bound);
                     if (wIt != wInv.end() && wIt->second.first > 0) {
                         wardrobe->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
-                        equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
-                        RE::DebugNotification(("Transferred & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                        equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
+                        RE::DebugNotification(("Transferred from Wardrobe Chest & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                        transferred = true;
+                    }
+                }
+
+                if (!transferred && targetActor != player && player) {
+                    auto pInv = player->GetInventory();
+                    auto pIt = pInv.find(bound);
+                    if (pIt != pInv.end() && pIt->second.first > 0) {
+                        player->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
+                        equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
+                        RE::DebugNotification(("Transferred from Player & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                        transferred = true;
+                    }
+                }
+
+                if (!transferred) {
+                    auto processLists = RE::ProcessLists::GetSingleton();
+                    if (processLists) {
+                        for (auto& handle : processLists->highActorHandles) {
+                            auto otherActor = handle.get();
+                            if (otherActor && otherActor.get() != targetActor && otherActor->IsPlayerTeammate() && !otherActor->IsDead()) {
+                                auto oInv = otherActor->GetInventory();
+                                auto oIt = oInv.find(bound);
+                                if (oIt != oInv.end() && oIt->second.first > 0) {
+                                    otherActor->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
+                                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
+                                    RE::DebugNotification(("Transferred & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                                    transferred = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            targetActor->Update3DModel();
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (...) {}
+}
+
+void TransferItemListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        RE::FormID rawID = req.value("rawID", static_cast<RE::FormID>(0));
+        if (rawID == 0) {
+            std::string idStr = req.value("id", "");
+            if (idStr.rfind("0x", 0) == 0 || idStr.rfind("0X", 0) == 0) {
+                try { rawID = static_cast<RE::FormID>(std::stoul(idStr.substr(2), nullptr, 16)); } catch (...) { rawID = 0; }
+            }
+        }
+        if (rawID == 0) return;
+
+        std::string fromSource = req.value("fromSource", "");
+        std::string toTarget = req.value("toTarget", "");
+
+        SKSE::GetTaskInterface()->AddTask([rawID, fromSource, toTarget]() {
+            auto* form = RE::TESForm::LookupByID(rawID);
+            if (!form || !IsPureApparel(form)) return;
+            auto* bound = form->As<RE::TESBoundObject>();
+            if (!bound) return;
+
+            RE::TESObjectREFR* srcContainer = nullptr;
+            RE::TESObjectREFR* dstContainer = nullptr;
+            std::string dstName = "Target";
+
+            if (fromSource == "CLOUD") {
+                srcContainer = GetWardrobeContainer();
+            } else if (fromSource == "0x00000007" || fromSource == "0x00000014" || fromSource == "PLAYER") {
+                srcContainer = RE::PlayerCharacter::GetSingleton();
+            } else {
+                RE::FormID sID = 0;
+                try { sID = static_cast<RE::FormID>(std::stoul(fromSource.substr(2), nullptr, 16)); } catch (...) {}
+                auto* f = RE::TESForm::LookupByID(sID);
+                srcContainer = f ? f->As<RE::TESObjectREFR>() : nullptr;
+            }
+
+            if (toTarget == "CLOUD") {
+                dstContainer = GetWardrobeContainer();
+                dstName = "Wardrobe Chest";
+            } else if (toTarget == "0x00000007" || toTarget == "0x00000014" || toTarget == "PLAYER") {
+                dstContainer = RE::PlayerCharacter::GetSingleton();
+                dstName = "Player";
+            } else {
+                RE::FormID dID = 0;
+                try { dID = static_cast<RE::FormID>(std::stoul(toTarget.substr(2), nullptr, 16)); } catch (...) {}
+                auto* f = RE::TESForm::LookupByID(dID);
+                dstContainer = f ? f->As<RE::TESObjectREFR>() : nullptr;
+                if (dstContainer) {
+                    dstName = dstContainer->GetName() ? dstContainer->GetName() : "Follower";
+                }
+            }
+
+            if (srcContainer && dstContainer && srcContainer != dstContainer) {
+                auto srcInv = srcContainer->GetInventory();
+                auto it = srcInv.find(bound);
+                if (it != srcInv.end() && it->second.first > 0) {
+                    srcContainer->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, dstContainer);
+                    RE::DebugNotification(("Transferred " + std::string(bound->GetName() ? bound->GetName() : "item") + " to " + dstName).c_str());
+                }
+            }
+
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (...) {}
+}
+
+void TransferAllInventoryListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        std::string fromSource = req.value("fromSource", "");
+        std::string toTarget = req.value("toTarget", "");
+
+        SKSE::GetTaskInterface()->AddTask([fromSource, toTarget]() {
+            RE::TESObjectREFR* srcContainer = nullptr;
+            RE::TESObjectREFR* dstContainer = nullptr;
+            std::string dstName = "Target";
+
+            if (fromSource == "CLOUD") {
+                srcContainer = GetWardrobeContainer();
+            } else if (fromSource == "0x00000007" || fromSource == "0x00000014" || fromSource == "PLAYER") {
+                srcContainer = RE::PlayerCharacter::GetSingleton();
+            } else {
+                RE::FormID sID = 0;
+                try { sID = static_cast<RE::FormID>(std::stoul(fromSource.substr(2), nullptr, 16)); } catch (...) {}
+                auto* f = RE::TESForm::LookupByID(sID);
+                srcContainer = f ? f->As<RE::TESObjectREFR>() : nullptr;
+            }
+
+            if (toTarget == "CLOUD") {
+                dstContainer = GetWardrobeContainer();
+                dstName = "Wardrobe Chest";
+            } else if (toTarget == "0x00000007" || toTarget == "0x00000014" || toTarget == "PLAYER") {
+                dstContainer = RE::PlayerCharacter::GetSingleton();
+                dstName = "Player";
+            } else {
+                RE::FormID dID = 0;
+                try { dID = static_cast<RE::FormID>(std::stoul(toTarget.substr(2), nullptr, 16)); } catch (...) {}
+                auto* f = RE::TESForm::LookupByID(dID);
+                dstContainer = f ? f->As<RE::TESObjectREFR>() : nullptr;
+                if (dstContainer) {
+                    dstName = dstContainer->GetName() ? dstContainer->GetName() : "Follower";
+                }
+            }
+
+            if (srcContainer && dstContainer && srcContainer != dstContainer) {
+                auto srcInv = srcContainer->GetInventory();
+                size_t totalCount = 0;
+                for (const auto& [item, data] : srcInv) {
+                    if (item && data.first > 0 && IsPureApparel(item)) {
+                        auto* bound = item->As<RE::TESBoundObject>();
+                        if (bound) {
+                            srcContainer->RemoveItem(bound, data.first, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, dstContainer);
+                            totalCount += data.first;
+                        }
+                    }
+                }
+                RE::DebugNotification(("Transferred " + std::to_string(totalCount) + " apparel items to " + dstName).c_str());
+            }
 
             if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
@@ -769,6 +1096,143 @@ void RetrieveWheelOutfitsListener(const char* data) {
             RetrieveWheelOutfits(wheelIdx);
             if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (...) {}
+}
+
+void AddItemToSlotListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+        size_t slotIdx = req.value("slotIndex", 0);
+        RE::FormID rawID = req.value("rawID", static_cast<RE::FormID>(0));
+
+        if (rawID == 0) {
+            std::string idStr = req.value("id", "");
+            if (idStr.rfind("0x", 0) == 0 || idStr.rfind("0X", 0) == 0) {
+                try { rawID = static_cast<RE::FormID>(std::stoul(idStr.substr(2), nullptr, 16)); } catch (...) { rawID = 0; }
+            }
+        }
+
+        if (rawID == 0) return;
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, rawID]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            auto& wheels = g_manager.GetActiveWheels();
+            if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
+                if (!wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                    Outfit o;
+                    o.name = "Outfit " + std::to_string(slotIdx + 1);
+                    o.contextTag = "";
+                    o.preferenceStars = 3;
+                    o.controlState = ControlState::Normal;
+                    o.isAddon = false;
+                    wheels[wheelIdx].slots[slotIdx].outfit = o;
+                }
+
+                auto& itemVec = wheels[wheelIdx].slots[slotIdx].outfit->itemIDs;
+                if (std::find(itemVec.begin(), itemVec.end(), rawID) == itemVec.end()) {
+                    itemVec.push_back(rawID);
+                    SaveDataInternal();
+                    RE::DebugNotification("Item added to outfit!");
+                }
+
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
+            }
+        });
+    } catch (...) {}
+}
+
+void RemoveItemFromSlotListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+        size_t slotIdx = req.value("slotIndex", 0);
+        RE::FormID rawID = req.value("rawID", static_cast<RE::FormID>(0));
+
+        if (rawID == 0) {
+            std::string idStr = req.value("id", "");
+            if (idStr.rfind("0x", 0) == 0 || idStr.rfind("0X", 0) == 0) {
+                try { rawID = static_cast<RE::FormID>(std::stoul(idStr.substr(2), nullptr, 16)); } catch (...) { rawID = 0; }
+            }
+        }
+
+        if (rawID == 0) return;
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, rawID]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            auto& wheels = g_manager.GetActiveWheels();
+            if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
+                if (wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
+                    auto& itemVec = wheels[wheelIdx].slots[slotIdx].outfit->itemIDs;
+                    itemVec.erase(std::remove(itemVec.begin(), itemVec.end(), rawID), itemVec.end());
+                    SaveDataInternal();
+                    RE::DebugNotification("Item removed from outfit!");
+                }
+
+                if (PrismaUI && view != 0) {
+                    std::string jsCmd = GetWheelJsonInternal(true);
+                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+                }
+            }
+        });
+    } catch (...) {}
+}
+
+void MoveSlotListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t wheelIdx = req.value("wheelIndex", 0);
+        size_t fromIdx = req.value("fromIndex", 0);
+        size_t toIdx = req.value("toIndex", 0);
+        bool editMode = req.value("editMode", true);
+
+        SKSE::GetTaskInterface()->AddTask([wheelIdx, fromIdx, toIdx, editMode]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            auto& wheels = g_manager.GetActiveWheels();
+            if (wheelIdx < wheels.size()) {
+                auto& slots = wheels[wheelIdx].slots;
+                if (fromIdx < slots.size() && toIdx < slots.size() && fromIdx != toIdx) {
+                    auto slotItem = slots[fromIdx];
+                    slots.erase(slots.begin() + fromIdx);
+                    slots.insert(slots.begin() + toIdx, slotItem);
+                    SaveDataInternal();
+                    RE::DebugNotification("Reordered slots!");
+                }
+            }
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(editMode);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (...) {}
+}
+
+void MoveWheelListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        size_t fromIdx = req.value("fromIndex", 0);
+        size_t toIdx = req.value("toIndex", 0);
+        bool editMode = req.value("editMode", true);
+
+        SKSE::GetTaskInterface()->AddTask([fromIdx, toIdx, editMode]() {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            auto& wheels = g_manager.GetActiveWheels();
+            if (fromIdx < wheels.size() && toIdx < wheels.size() && fromIdx != toIdx) {
+                auto wheelItem = wheels[fromIdx];
+                wheels.erase(wheels.begin() + fromIdx);
+                wheels.insert(wheels.begin() + toIdx, wheelItem);
+                g_manager.GetActiveWheelIndex() = toIdx;
+                SaveDataInternal();
+                RE::DebugNotification("Reordered wheels!");
+            }
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(editMode);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });

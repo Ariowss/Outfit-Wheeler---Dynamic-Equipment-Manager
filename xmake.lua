@@ -5,7 +5,7 @@ add_requires("nlohmann_json")
 includes("lib/commonlibsse-ng")
 
 set_project("OutfitWheeler-DynamicEquipmentManager")
-set_version("2.7")
+set_version("3.0")
 set_license("GPL-3.0")
 
 set_languages("c++23")

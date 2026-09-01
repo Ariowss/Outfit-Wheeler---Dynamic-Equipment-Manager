@@ -45,6 +45,7 @@ var currentWheelData = {
     gamepadPlayKey: 0x0008,
     gamepadPlayModifier: 0x0100,
     gamepadConnected: false,
+    autoCloseOnEquip: true,
     autoStashEnabled: false,
     autoSystemEnabled: true,
     autoCityEnabled: true,
@@ -61,9 +62,11 @@ var currentWheelData = {
 };
 
 var selectedSlotIndex = 0;
+var inspectedItemObject = null;
 var activeCategoryFilter = 'ALL';
 var activeWheelContextFilter = 'ALL';
-var activeInventorySort = 'name';
+var activeInspectorContextTab = 'action';
+var activeInventorySort = 'name_asc';
 var activeInventorySource = '0x00000007';
 var inventorySearchQuery = '';
 var lastEquippedSlotIndex = null;
@@ -111,7 +114,20 @@ var resizeStartY = 0;
 var panelStartWidth = 0;
 var panelStartHeight = 0;
 
+var activeDraggedItem = null;
+var isItemDragging = false;
+var dragGhostElement = null;
+var dragItemStartX = 0;
+var dragItemStartY = 0;
+
+var activeDraggedSlotIndex = null;
+var isSlotDragging = false;
+var slotDragGhostElement = null;
+var slotDragStartX = 0;
+var slotDragStartY = 0;
+
 document.addEventListener('DOMContentLoaded', () => {
+    applyAutoResolutionScale();
     loadWheelPositionFromStorage();
     applyModeLayout();
     loadPanelsLayout();
@@ -121,8 +137,22 @@ document.addEventListener('DOMContentLoaded', () => {
     initGlobalInputHandlers();
     initCarouselScrollHandlers();
     initWheelCenterInteraction();
+    initCustomItemDragDrop();
     if (typeof updateWheelUI === 'function') updateWheelUI();
 });
+
+window.addEventListener('resize', () => {
+    applyAutoResolutionScale();
+    loadPanelsLayout();
+    if (typeof updateWheelUI === 'function') updateWheelUI();
+});
+
+function applyAutoResolutionScale() {
+    const h = window.innerHeight || 1080;
+    const rawScale = h / 1080;
+    const autoScale = Math.max(0.65, Math.min(2.5, rawScale));
+    document.documentElement.style.setProperty('--auto-ui-scale', String(autoScale));
+}
 
 function loadWheelPositionFromStorage() {
     try {
@@ -197,15 +227,28 @@ function getKeyName(dxCode) {
     return '0x' + dxCode.toString(16).toUpperCase();
 }
 
+function hideAllMenus() {
+    const menus = ['slot-context-menu', 'wheel-context-menu', 'item-context-menu', 'transfer-all-context-menu'];
+    menus.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+}
+
 function isAnyModalOpen() {
-    const modalIds = ['rename-modal', 'context-modal', 'settings-modal', 'keyboard-modal', 'gamepad-modal'];
+    const modalIds = ['rename-modal', 'context-modal'];
     for (let id of modalIds) {
         const el = document.getElementById(id);
         if (el && el.style.display === 'flex') return true;
     }
+    const panelSettings = document.getElementById('panel-settings');
+    if (panelSettings && panelSettings.style.display !== 'none') return true;
+
     const slotCtx = document.getElementById('slot-context-menu');
     const wheelCtx = document.getElementById('wheel-context-menu');
-    if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) return true;
+    const itemCtx = document.getElementById('item-context-menu');
+    const transferAllCtx = document.getElementById('transfer-all-context-menu');
+    if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex') || (itemCtx && itemCtx.style.display === 'flex') || (transferAllCtx && transferAllCtx.style.display === 'flex')) return true;
     return false;
 }
 
@@ -232,14 +275,23 @@ function updateGamepadHintsVisibility() {
 }
 
 window.openWheel = function(argument) {
+    applyAutoResolutionScale();
+
     var previousOffsetX = currentWheelData.wheelOffsetX;
     var previousOffsetY = currentWheelData.wheelOffsetY;
     var previousScale = currentWheelData.wheelScale;
 
     try {
-        if (typeof argument === 'string') currentWheelData = JSON.parse(argument);
-        else if (typeof argument === 'object' && argument !== null) currentWheelData = argument;
+        if (typeof argument === 'string' && argument.trim().length > 0) {
+            currentWheelData = JSON.parse(argument);
+        } else if (typeof argument === 'object' && argument !== null) {
+            currentWheelData = argument;
+        }
     } catch (e) {}
+
+    if (!currentWheelData || typeof currentWheelData !== 'object') {
+        currentWheelData = { slots: [], followers: [], inventory: [] };
+    }
 
     if (currentWheelData.wheelOffsetX === undefined || (currentWheelData.wheelOffsetX === 0 && previousOffsetX !== undefined && previousOffsetX !== 0)) {
         currentWheelData.wheelOffsetX = previousOffsetX !== undefined ? previousOffsetX : tempOffsetX;
@@ -265,7 +317,21 @@ window.openWheel = function(argument) {
         else tab.classList.remove('active');
     });
 
-    if (typeof hideAllMenus === 'function') hideAllMenus();
+    if (isEditModeActive()) {
+        const slots = currentWheelData.slots || [];
+        const equippedSlot = slots.find(s => s.isEquipped === true || s.isWorn === true);
+        if (equippedSlot && equippedSlot.index !== undefined) {
+            selectedSlotIndex = equippedSlot.index;
+        } else if (equippedSlot) {
+            selectedSlotIndex = slots.indexOf(equippedSlot);
+        } else if (slots.length > 0) {
+            selectedSlotIndex = Math.max(0, Math.min(selectedSlotIndex, slots.length - 1));
+        } else {
+            selectedSlotIndex = 0;
+        }
+    }
+
+    hideAllMenus();
     if (typeof hideAllModals === 'function') hideAllModals();
     setTyping(false);
     applyModeLayout();
@@ -341,7 +407,7 @@ window.gamepadConfirm = function() {
             const realIdx = parseInt(targetPath.getAttribute('data-slot-index'));
             if (!isNaN(realIdx)) {
                 if (isEditModeActive()) saveOutfit(realIdx);
-                else equipOutfit(realIdx);
+                else equipOutfit(realIdx, currentWheelData.autoCloseOnEquip === false);
             }
         }
     }
@@ -401,17 +467,9 @@ function applyModeLayout() {
 }
 
 function handleWrapperClick(e) {
-    if (e.button !== 0) return;
-    if (e.target.closest('.context-menu-popup') || e.target.closest('.modal-card') || e.target.closest('[data-slot-index]')) return;
-
+    if (e.target.closest('.context-menu-popup') || e.target.closest('.custom-sort-dropdown')) return;
+    hideAllMenus();
     if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
-    if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || e.target.id === 'studio-main-stage' || e.target.id === 'panel-viewport') {
-        const slotCtx = document.getElementById('slot-context-menu');
-        const wheelCtx = document.getElementById('wheel-context-menu');
-        if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) {
-            if (typeof hideAllMenus === 'function') hideAllMenus();
-        }
-    }
 }
 
 function handleEscClose(e) {
@@ -447,22 +505,18 @@ function handleEscClose(e) {
         const ddEdit = document.getElementById('dd-edit-list');
         const ddPlay = document.getElementById('dd-play-list');
         const ddGpPlay = document.getElementById('dd-gp-play-list');
+        const sortList = document.getElementById('custom-sort-list');
         if ((ddEdit && ddEdit.style.display === 'flex') ||
             (ddPlay && ddPlay.style.display === 'flex') ||
-            (ddGpPlay && ddGpPlay.style.display === 'flex')) {
+            (ddGpPlay && ddGpPlay.style.display === 'flex') ||
+            (sortList && sortList.style.display === 'flex')) {
             if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
             return true;
         }
 
-        const kbModal = document.getElementById('keyboard-modal');
-        if (kbModal && kbModal.style.display === 'flex') {
-            if (typeof hideKeyboardModal === 'function') hideKeyboardModal();
-            return true;
-        }
-
-        const gpModal = document.getElementById('gamepad-modal');
-        if (gpModal && gpModal.style.display === 'flex') {
-            if (typeof hideGamepadModal === 'function') hideGamepadModal();
+        const panelSettings = document.getElementById('panel-settings');
+        if (panelSettings && panelSettings.style.display !== 'none') {
+            if (typeof hideSettingsModal === 'function') hideSettingsModal();
             return true;
         }
 
@@ -478,16 +532,12 @@ function handleEscClose(e) {
             return true;
         }
 
-        const settingsModal = document.getElementById('settings-modal');
-        if (settingsModal && settingsModal.style.display === 'flex') {
-            if (typeof hideSettingsModal === 'function') hideSettingsModal();
-            return true;
-        }
-
         const slotCtx = document.getElementById('slot-context-menu');
         const wheelCtx = document.getElementById('wheel-context-menu');
-        if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex')) {
-            if (typeof hideAllMenus === 'function') hideAllMenus();
+        const itemCtx = document.getElementById('item-context-menu');
+        const transferAllCtx = document.getElementById('transfer-all-context-menu');
+        if ((slotCtx && slotCtx.style.display === 'flex') || (wheelCtx && wheelCtx.style.display === 'flex') || (itemCtx && itemCtx.style.display === 'flex') || (transferAllCtx && transferAllCtx.style.display === 'flex')) {
+            hideAllMenus();
             return true;
         }
 
@@ -500,9 +550,21 @@ function handleEscClose(e) {
 function initGlobalInputHandlers() {
     window.addEventListener('keydown', handleEscClose, true);
 
+    document.addEventListener('focusin', (e) => {
+        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
+            setTyping(true);
+        }
+    });
+
+    document.addEventListener('focusout', (e) => {
+        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
+            setTyping(false);
+        }
+    });
+
     document.addEventListener('wheel', (e) => {
         if (isEditModeActive()) return;
-        if (e.target.closest('#settings-modal') || e.target.closest('#keyboard-modal') || e.target.closest('#gamepad-modal') || e.target.closest('.modal-card') || e.target.closest('.wheel-center')) return;
+        if (e.target.closest('#panel-settings') || e.target.closest('.modal-card') || e.target.closest('.wheel-center')) return;
         const now = Date.now();
         if (now - lastWheelScrollTimestamp < 150) return;
         lastWheelScrollTimestamp = now;
@@ -540,7 +602,9 @@ function initGlobalInputHandlers() {
             return;
         }
 
-        if (isTyping) return;
+        if (isTyping || (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable))) {
+            return;
+        }
 
         const pressedScanCode = getScanCode(e);
         const editKey = currentWheelData.editKey || 0x31;
@@ -575,8 +639,57 @@ function initGlobalInputHandlers() {
     });
 
     document.addEventListener('mousedown', (e) => {
+        const isInsideMenu = !!e.target.closest('.context-menu-popup');
+        const isInsideSort = !!e.target.closest('.custom-sort-dropdown');
+
+        if (e.button === 0) {
+            if (!isInsideMenu) {
+                hideAllMenus();
+            }
+            if (!isInsideSort) {
+                closeAllDropdowns();
+            }
+            return;
+        }
+
         if (e.button === 2 || e.which === 3) {
-            if (e.target.closest('.context-menu-popup') || e.target.closest('.modal-card')) return;
+            activeDraggedItem = null;
+            isItemDragging = false;
+            if (dragGhostElement) {
+                dragGhostElement.remove();
+                dragGhostElement = null;
+            }
+
+            if (isInsideMenu || e.target.closest('.modal-card') || e.target.closest('#panel-settings')) return;
+
+            const itemElem = e.target.closest('.item-row-card');
+            if (itemElem) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const itemMenu = document.getElementById('item-context-menu');
+                const itemNameEl = itemElem.querySelector('.item-name-text');
+                const itemName = itemNameEl ? itemNameEl.innerText.trim() : '';
+
+                let inv = [];
+                const srcUpper = (activeInventorySource || '0x00000007').toUpperCase();
+                if (srcUpper === 'CLOUD') inv = currentWheelData.cloudInventory || [];
+                else if (currentWheelData.actorInventories && currentWheelData.actorInventories[activeInventorySource]) inv = currentWheelData.actorInventories[activeInventorySource];
+                else if (srcUpper === '0X00000007' || srcUpper === '0X00000014') inv = currentWheelData.playerInventory || currentWheelData.inventory || [];
+                else inv = currentWheelData.followerInventory || [];
+
+                const matchedItem = inv.find(x => x.name === itemName) || inspectedItemObject;
+
+                if (itemMenu && itemMenu.style.display === 'flex' && inspectedItemObject && (inspectedItemObject.name === itemName || (matchedItem && inspectedItemObject.rawID === matchedItem.rawID))) {
+                    hideAllMenus();
+                    return;
+                }
+
+                if (matchedItem) {
+                    showItemContextMenu(e.clientX, e.clientY, matchedItem);
+                }
+                return;
+            }
 
             const slotElem = e.target.closest('[data-slot-index]');
             if (slotElem) {
@@ -584,6 +697,13 @@ function initGlobalInputHandlers() {
                 if (!isNaN(idx)) {
                     e.preventDefault();
                     e.stopPropagation();
+
+                    const slotMenu = document.getElementById('slot-context-menu');
+                    if (slotMenu && slotMenu.style.display === 'flex' && selectedSlotIndex === idx) {
+                        hideAllMenus();
+                        return;
+                    }
+
                     const rect = slotElem.getBoundingClientRect();
                     const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (rect.left + rect.width / 2);
                     const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (rect.top + rect.height / 2);
@@ -595,15 +715,60 @@ function initGlobalInputHandlers() {
             if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || e.target.closest('.wheel-center')) {
                 e.preventDefault();
                 e.stopPropagation();
+
+                const wheelMenu = document.getElementById('wheel-context-menu');
+                if (wheelMenu && wheelMenu.style.display === 'flex') {
+                    hideAllMenus();
+                    return;
+                }
+
                 const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
                 const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
                 if (typeof showWheelContextMenu === 'function') showWheelContextMenu(clickX, clickY);
             }
         }
-    }, true);
+    }, false);
 
     window.addEventListener('gamepadconnected', () => { updateGamepadHintsVisibility(); });
     window.addEventListener('gamepaddisconnected', () => { updateGamepadHintsVisibility(); });
+}
+
+function toggleSortDropdown(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    const list = document.getElementById('custom-sort-list');
+    const dropdown = document.getElementById('custom-sort-dropdown');
+    if (!list || !dropdown) return;
+
+    const isOpen = list.style.display === 'flex';
+    closeAllDropdowns();
+    if (!isOpen) {
+        list.style.display = 'flex';
+        dropdown.classList.add('open');
+    } else {
+        list.style.display = 'none';
+        dropdown.classList.remove('open');
+    }
+}
+
+function selectSortOption(val, labelText, e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    activeInventorySort = val;
+
+    const labelEl = document.getElementById('custom-sort-label');
+    if (labelEl) labelEl.innerText = labelText;
+
+    const items = document.querySelectorAll('.custom-sort-list .sort-item');
+    items.forEach(it => it.classList.remove('active'));
+    if (e && e.target) e.target.classList.add('active');
+
+    closeAllDropdowns();
+    renderInventoryList();
 }
 
 function initWheelCenterInteraction() {
@@ -617,6 +782,8 @@ function initWheelCenterInteraction() {
                 wheelStartOffsetX = (currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0;
                 wheelStartOffsetY = (currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0;
                 centerEl.classList.add('is-dragging');
+                const wheelContainer = document.getElementById('wheel-container');
+                if (wheelContainer) wheelContainer.style.transition = 'none';
                 e.stopPropagation();
             }
         });
@@ -629,9 +796,6 @@ function initWheelCenterInteraction() {
             let newScale = Math.max(0.1, currentScale + delta);
             currentWheelData.wheelScale = newScale;
             tempScale = newScale;
-
-            const scaleInp = document.getElementById('scale-input');
-            if (scaleInp) scaleInp.value = Math.round(newScale * 100) + '%';
 
             saveWheelPositionToStorage();
             if (typeof applyTransform === 'function') applyTransform();
@@ -652,19 +816,22 @@ function initWheelCenterInteraction() {
         tempOffsetX = newOffsetX;
         tempOffsetY = newOffsetY;
 
-        const offsetInpX = document.getElementById('offsetx-input');
-        if (offsetInpX) offsetInpX.value = Math.round(newOffsetX) + 'px';
-
-        const offsetInpY = document.getElementById('offsety-input');
-        if (offsetInpY) offsetInpY.value = Math.round(newOffsetY) + 'px';
-
-        if (typeof applyTransform === 'function') applyTransform();
+        const container = document.getElementById('wheel-container');
+        if (container) {
+            const isEdit = isEditModeActive();
+            const baseScale = isEdit ? 0.65 : 1.0;
+            const userScale = currentWheelData.wheelScale || 1.0;
+            const autoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
+            container.style.transform = `translate3d(${newOffsetX}px, ${newOffsetY}px, 0) scale(${baseScale * userScale * autoScale})`;
+        }
     });
 
     window.addEventListener('mouseup', () => {
         if (isDraggingWheelCenter) {
             isDraggingWheelCenter = false;
             document.querySelectorAll('.wheel-center').forEach(el => el.classList.remove('is-dragging'));
+            const wheelContainer = document.getElementById('wheel-container');
+            if (wheelContainer) wheelContainer.style.transition = '';
             if (wheelDragMoved) {
                 saveWheelPositionToStorage();
                 persistWheelSettings();
@@ -687,6 +854,7 @@ function persistWheelSettings() {
             playModifierKey: currentWheelData.playModifierKey || 0,
             gamepadPlayKey: currentWheelData.gamepadPlayKey || 0x0008,
             gamepadPlayModifier: currentWheelData.gamepadPlayModifier || 0x0100,
+            autoCloseOnEquip: currentWheelData.autoCloseOnEquip !== false,
             autoStashEnabled: currentWheelData.autoStashEnabled === true,
             autoSystemEnabled: currentWheelData.autoSystemEnabled !== false,
             autoCityEnabled: currentWheelData.autoCityEnabled !== false,
@@ -712,7 +880,7 @@ function saveOutfit(slotIndex) {
     }
 }
 
-function equipOutfit(slotIndex) {
+function equipOutfit(slotIndex, keepOpen) {
     const now = Date.now();
     if (now - lastEquipCallTimestamp < 350) return;
     lastEquipCallTimestamp = now;
@@ -723,7 +891,8 @@ function equipOutfit(slotIndex) {
         window.EquipSlot(JSON.stringify({
             wheelIndex: currentWheelData.wheelIndex,
             slotIndex: slotIndex,
-            editMode: isEditModeActive()
+            editMode: isEditModeActive(),
+            keepOpen: keepOpen === true
         }));
     }
 }
@@ -754,7 +923,7 @@ function addSlot() {
 }
 
 function closeWheel() {
-    if (typeof hideAllMenus === 'function') hideAllMenus();
+    hideAllMenus();
     if (typeof hideAllModals === 'function') hideAllModals();
     if (typeof window.OnCloseWheel === 'function') {
         window.OnCloseWheel("");
@@ -788,7 +957,7 @@ function setCategoryFilter(cat, e) {
 }
 
 function savePanelsLayout() {
-    const panelIds = ['panel-inventory', 'panel-slots-rail', 'panel-slot-details'];
+    const panelIds = ['panel-inventory', 'panel-slots-rail', 'panel-slot-details', 'panel-settings'];
     const layout = {};
     panelIds.forEach(id => {
         const el = document.getElementById(id);
@@ -810,31 +979,46 @@ function savePanelsLayout() {
 function loadPanelsLayout() {
     try {
         const raw = localStorage.getItem('outfit_wheeler_panel_layout');
-        if (!raw) return;
-        const layout = JSON.parse(raw);
         const screenW = window.innerWidth;
         const screenH = window.innerHeight;
+        const autoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
 
-        Object.keys(layout).forEach(id => {
-            const data = layout[id];
-            const el = document.getElementById(id);
-            if (el && data) {
-                let l = Math.max(12, Math.min(data.left, screenW - 100));
-                let t = Math.max(12, Math.min(data.top, screenH - 80));
-                let w = Math.max(180, Math.min(data.width, screenW - 24));
-                let h = Math.max(150, Math.min(data.height, screenH - 24));
+        if (raw) {
+            const layout = JSON.parse(raw);
+            Object.keys(layout).forEach(id => {
+                const data = layout[id];
+                const el = document.getElementById(id);
+                if (el && data) {
+                    let l = Math.max(10, Math.min(data.left, screenW - 80));
+                    let t = Math.max(10, Math.min(data.top, screenH - 60));
+                    let w = Math.max(180, Math.min(data.width, screenW - 20));
+                    let h = Math.max(140, Math.min(data.height, screenH - 20));
 
-                el.style.position = 'fixed';
-                el.style.left = l + 'px';
-                el.style.top = t + 'px';
-                el.style.width = w + 'px';
-                el.style.height = h + 'px';
-                el.style.right = 'auto';
-                el.style.bottom = 'auto';
-                el.style.maxWidth = 'none';
-                el.style.maxHeight = 'none';
-            }
-        });
+                    el.style.position = 'fixed';
+                    el.style.left = l + 'px';
+                    el.style.top = t + 'px';
+                    el.style.width = w + 'px';
+                    el.style.height = h + 'px';
+                    el.style.right = 'auto';
+                    el.style.bottom = 'auto';
+                    el.style.maxWidth = 'none';
+                    el.style.maxHeight = 'none';
+                }
+            });
+        } else {
+            const defaultConfigs = [
+                { id: 'panel-inventory', w: 330, h: 720 },
+                { id: 'panel-slots-rail', w: 200, h: 720 },
+                { id: 'panel-slot-details', w: 330, h: 720 }
+            ];
+            defaultConfigs.forEach(cfg => {
+                const el = document.getElementById(cfg.id);
+                if (el) {
+                    el.style.width = Math.round(cfg.w * autoScale) + 'px';
+                    el.style.height = Math.round(cfg.h * autoScale) + 'px';
+                }
+            });
+        }
     } catch (err) {}
 }
 
@@ -953,6 +1137,17 @@ function initDraggablePanels() {
         let rawLeft = panelStartLeft + (e.clientX - dragStartX);
         let rawTop = panelStartTop + (e.clientY - dragStartY);
 
+        if (activeDragPanelId === 'panel-settings') {
+            let directLeft = Math.max(10, Math.min(rawLeft, screenW - panelW - 10));
+            let directTop = Math.max(10, Math.min(rawTop, screenH - panelH - 10));
+            panel.style.position = 'fixed';
+            panel.style.left = directLeft + 'px';
+            panel.style.top = directTop + 'px';
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            return;
+        }
+
         const SNAP_THRESHOLD = 18;
         const SCREEN_MARGIN = 14;
         const PANEL_GAP = 12;
@@ -973,7 +1168,7 @@ function initDraggablePanels() {
         }
 
         document.querySelectorAll('.draggable-panel').forEach(other => {
-            if (other.id === activeDragPanelId || other.style.display === 'none') return;
+            if (other.id === activeDragPanelId || other.id === 'panel-settings' || other.style.display === 'none') return;
             const oRect = other.getBoundingClientRect();
 
             if (Math.abs(snappedLeft - oRect.left) < SNAP_THRESHOLD) {
@@ -1031,11 +1226,6 @@ function startPanelDrag(e, panelId) {
         const rect = panel.getBoundingClientRect();
         panelStartLeft = rect.left;
         panelStartTop = rect.top;
-        panel.style.position = 'fixed';
-        panel.style.left = panelStartLeft + 'px';
-        panel.style.top = panelStartTop + 'px';
-        panel.style.margin = '0';
-        panel.style.transform = 'none';
         panel.style.maxWidth = 'none';
         panel.style.maxHeight = 'none';
     }
@@ -1124,8 +1314,8 @@ function handlePanelResizeStart(e, panelId, dir) {
     panel.style.position = 'fixed';
     panel.style.left = panelStartLeft + 'px';
     panel.style.top = panelStartTop + 'px';
-    panel.style.margin = '0';
-    panel.style.transform = 'none';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
     panel.style.maxWidth = 'none';
     panel.style.maxHeight = 'none';
 
@@ -1133,6 +1323,288 @@ function handlePanelResizeStart(e, panelId, dir) {
     resizeDirection = dir;
     resizeStartX = e.clientX;
     resizeStartY = e.clientY;
+}
+
+function initCustomItemDragDrop() {
+    window.addEventListener('mousemove', (e) => {
+        if (activeDraggedItem) {
+            if (e.buttons !== 1) {
+                if (dragGhostElement) {
+                    dragGhostElement.remove();
+                    dragGhostElement = null;
+                }
+                activeDraggedItem = null;
+                isItemDragging = false;
+                document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
+                return;
+            }
+
+            const dx = e.clientX - dragItemStartX;
+            const dy = e.clientY - dragItemStartY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > 5 && !isItemDragging) {
+                isItemDragging = true;
+                if (!dragGhostElement) {
+                    dragGhostElement = document.createElement('div');
+                    dragGhostElement.id = 'dragged-item-ghost';
+                    dragGhostElement.style.pointerEvents = 'none';
+                    dragGhostElement.innerHTML = '<span class="ghost-type-badge">' + (activeDraggedItem.type || 'Armor') + '</span><span>' + activeDraggedItem.name + '</span>';
+                    document.body.appendChild(dragGhostElement);
+                }
+            }
+
+            if (isItemDragging && dragGhostElement) {
+                dragGhostElement.style.left = e.clientX + 'px';
+                dragGhostElement.style.top = e.clientY + 'px';
+
+                document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
+
+                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                if (elemBelow) {
+                    const targetSlotCard = elemBelow.closest('.vertical-slot-card');
+                    const targetSlicePath = elemBelow.closest('.slice-path');
+                    const targetLabel = elemBelow.closest('.wheel-slot-label');
+                    const targetInspector = elemBelow.closest('#panel-slot-details');
+
+                    if (targetSlotCard) targetSlotCard.classList.add('drag-hover-target');
+                    else if (targetSlicePath) targetSlicePath.classList.add('drag-hover-target');
+                    else if (targetLabel) targetLabel.classList.add('drag-hover-target');
+                    else if (targetInspector) targetInspector.classList.add('drag-hover-target');
+                }
+            }
+        }
+
+        if (activeDraggedSlotIndex !== null) {
+            if (e.buttons !== 1) {
+                if (slotDragGhostElement) {
+                    slotDragGhostElement.remove();
+                    slotDragGhostElement = null;
+                }
+                activeDraggedSlotIndex = null;
+                isSlotDragging = false;
+                document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
+                return;
+            }
+
+            const dx = e.clientX - slotDragStartX;
+            const dy = e.clientY - slotDragStartY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > 6 && !isSlotDragging) {
+                isSlotDragging = true;
+                if (!slotDragGhostElement) {
+                    slotDragGhostElement = document.createElement('div');
+                    slotDragGhostElement.id = 'dragged-slot-ghost';
+                    slotDragGhostElement.style.pointerEvents = 'none';
+                    const slotObj = (currentWheelData.slots || [])[activeDraggedSlotIndex];
+                    const slotName = slotObj && slotObj.name ? slotObj.name : ('Slot ' + (activeDraggedSlotIndex + 1));
+                    slotDragGhostElement.innerHTML = '<span class="ghost-slot-badge">SLOT ' + (activeDraggedSlotIndex + 1) + '</span><span>' + slotName + '</span>';
+                    document.body.appendChild(slotDragGhostElement);
+                }
+            }
+
+            if (isSlotDragging && slotDragGhostElement) {
+                slotDragGhostElement.style.left = e.clientX + 'px';
+                slotDragGhostElement.style.top = e.clientY + 'px';
+
+                document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
+
+                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                if (elemBelow) {
+                    const targetCard = elemBelow.closest('.vertical-slot-card');
+                    if (targetCard) {
+                        const targetIdx = parseInt(targetCard.getAttribute('data-slot-index'), 10);
+                        if (!isNaN(targetIdx) && targetIdx !== activeDraggedSlotIndex && currentWheelData && currentWheelData.slots) {
+                            const fromIdx = activeDraggedSlotIndex;
+                            const toIdx = targetIdx;
+
+                            if (typeof window.MoveSlot === 'function') {
+                                window.MoveSlot(JSON.stringify({
+                                    wheelIndex: currentWheelData.wheelIndex || 0,
+                                    fromIndex: fromIdx,
+                                    toIndex: toIdx,
+                                    editMode: isEditModeActive()
+                                }));
+                            }
+
+                            const movedSlot = currentWheelData.slots.splice(fromIdx, 1)[0];
+                            currentWheelData.slots.splice(toIdx, 0, movedSlot);
+                            currentWheelData.slots.forEach((s, i) => s.index = i);
+
+                            selectedSlotIndex = toIdx;
+                            renderSlotsRail();
+                            renderDrawerDetails();
+                            if (typeof updateWheelUI === 'function') updateWheelUI();
+                            showSaveToast("Slot Moved to Position " + (toIdx + 1));
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (activeDraggedItem) {
+            if (isItemDragging) {
+                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                if (elemBelow) {
+                    const targetSlotCard = elemBelow.closest('.vertical-slot-card');
+                    const targetSlicePath = elemBelow.closest('.slice-path');
+                    const targetLabel = elemBelow.closest('.wheel-slot-label');
+                    const targetInspector = elemBelow.closest('#panel-slot-details');
+
+                    let targetSlotIdx = selectedSlotIndex;
+                    let foundTarget = false;
+
+                    if (targetSlotCard) {
+                        const idx = parseInt(targetSlotCard.getAttribute('data-slot-index'), 10);
+                        if (!isNaN(idx)) {
+                            targetSlotIdx = idx;
+                            foundTarget = true;
+                        }
+                    } else if (targetSlicePath) {
+                        const idx = parseInt(targetSlicePath.getAttribute('data-slot-index'), 10);
+                        if (!isNaN(idx)) {
+                            targetSlotIdx = idx;
+                            foundTarget = true;
+                        }
+                    } else if (targetLabel) {
+                        const idx = parseInt(targetLabel.getAttribute('data-slot-index'), 10);
+                        if (!isNaN(idx)) {
+                            targetSlotIdx = idx;
+                            foundTarget = true;
+                        }
+                    } else if (targetInspector) {
+                        foundTarget = true;
+                    }
+
+                    if (foundTarget) {
+                        const rawIdVal = activeDraggedItem.rawID || activeDraggedItem.formID || parseInt(activeDraggedItem.id, 16) || 0;
+                        const idStrVal = activeDraggedItem.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
+
+                        if (typeof window.AddItemToSlot === 'function' && currentWheelData) {
+                            window.AddItemToSlot(JSON.stringify({
+                                wheelIndex: currentWheelData.wheelIndex || 0,
+                                slotIndex: targetSlotIdx,
+                                rawID: rawIdVal,
+                                id: idStrVal
+                            }));
+                        }
+
+                        if (currentWheelData && currentWheelData.slots) {
+                            let targetSlot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === targetSlotIdx);
+                            if (!targetSlot && currentWheelData.slots[targetSlotIdx]) {
+                                targetSlot = currentWheelData.slots[targetSlotIdx];
+                            }
+
+                            if (targetSlot) {
+                                if (!targetSlot.items) targetSlot.items = [];
+
+                                const alreadyExists = targetSlot.items.some(it => {
+                                    const itRaw = (typeof it === 'object') ? (it.rawID || it.formID || parseInt(it.id, 16)) : (typeof it === 'number' ? it : parseInt(it, 16));
+                                    return itRaw === rawIdVal;
+                                });
+
+                                if (!alreadyExists) {
+                                    targetSlot.items.push({
+                                        name: activeDraggedItem.name,
+                                        rawID: rawIdVal,
+                                        id: idStrVal,
+                                        type: activeDraggedItem.type || 'Armor'
+                                    });
+                                }
+
+                                targetSlot.hasOutfit = true;
+                                targetSlot.count = targetSlot.items.length;
+                                if (!targetSlot.name || targetSlot.name === 'Empty Slot') {
+                                    targetSlot.name = 'Outfit ' + (targetSlotIdx + 1);
+                                }
+
+                                selectedSlotIndex = targetSlotIdx;
+                                renderSlotsRail();
+                                renderDrawerDetails();
+                                if (typeof updateWheelUI === 'function') updateWheelUI();
+                            }
+                        }
+
+                        if (typeof showSaveToast === 'function') {
+                            showSaveToast('Added ' + activeDraggedItem.name + ' to Slot ' + (targetSlotIdx + 1));
+                        }
+                    }
+                }
+            }
+
+            document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
+            if (dragGhostElement) {
+                dragGhostElement.remove();
+                dragGhostElement = null;
+            }
+            activeDraggedItem = null;
+            isItemDragging = false;
+        }
+
+        if (activeDraggedSlotIndex !== null) {
+            if (isSlotDragging) {
+                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                if (elemBelow) {
+                    const targetCard = elemBelow.closest('.vertical-slot-card');
+                    if (targetCard) {
+                        const targetIdx = parseInt(targetCard.getAttribute('data-slot-index'), 10);
+                        if (!isNaN(targetIdx) && targetIdx !== activeDraggedSlotIndex && currentWheelData && currentWheelData.slots) {
+                            const fromIdx = activeDraggedSlotIndex;
+                            const toIdx = targetIdx;
+
+                            if (typeof window.MoveSlot === 'function') {
+                                window.MoveSlot(JSON.stringify({
+                                    wheelIndex: currentWheelData.wheelIndex || 0,
+                                    fromIndex: fromIdx,
+                                    toIndex: toIdx,
+                                    editMode: isEditModeActive()
+                                }));
+                            }
+
+                            const movedSlot = currentWheelData.slots.splice(fromIdx, 1)[0];
+                            currentWheelData.slots.splice(toIdx, 0, movedSlot);
+                            currentWheelData.slots.forEach((s, i) => s.index = i);
+
+                            selectedSlotIndex = toIdx;
+                            renderSlotsRail();
+                            renderDrawerDetails();
+                            if (typeof updateWheelUI === 'function') updateWheelUI();
+                            showSaveToast("Slot Moved to Position " + (toIdx + 1));
+                        }
+                    }
+                }
+            }
+
+            document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
+            if (slotDragGhostElement) {
+                slotDragGhostElement.remove();
+                slotDragGhostElement = null;
+            }
+            activeDraggedSlotIndex = null;
+            isSlotDragging = false;
+        }
+    });
+
+    window.addEventListener('blur', () => {
+        if (dragGhostElement) {
+            dragGhostElement.remove();
+            dragGhostElement = null;
+        }
+        activeDraggedItem = null;
+        isItemDragging = false;
+        document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
+
+        if (slotDragGhostElement) {
+            slotDragGhostElement.remove();
+            slotDragGhostElement = null;
+        }
+        activeDraggedSlotIndex = null;
+        isSlotDragging = false;
+        document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
+    });
 }
 
 function cycleFollowerCarousel(delta) {
@@ -1211,7 +1683,7 @@ function getInventorySourcesList() {
         }
     });
 
-    sources.push({ id: "CLOUD", type: "CLOUD", name: "Cloud Wardrobe" });
+    sources.push({ id: "CLOUD", type: "CLOUD", name: "Wardrobe Chest" });
     return sources;
 }
 
@@ -1286,6 +1758,27 @@ function handleSortChange(val) {
     renderInventoryList();
 }
 
+function getSlotOrderWeight(typeStr) {
+    const t = (typeStr || '').toLowerCase();
+    if (t.includes('head') || t.includes('helm') || t.includes('circlet') || t.includes('hood')) return 0;
+    if (t.includes('cuirass') || t.includes('armor') || t.includes('robe') || t.includes('torso') || t.includes('body')) return 1;
+    if (t.includes('gauntlet') || t.includes('glove') || t.includes('hand') || t.includes('bracer')) return 2;
+    if (t.includes('boot') || t.includes('shoe') || t.includes('foot') || t.includes('feet')) return 3;
+    if (t.includes('shield')) return 4;
+    if (t.includes('amulet') || t.includes('necklace')) return 5;
+    if (t.includes('ring')) return 6;
+    return 7;
+}
+
+function getClassOrderWeight(typeStr) {
+    const t = (typeStr || '').toLowerCase();
+    if (t.includes('heavy')) return 0;
+    if (t.includes('light')) return 1;
+    if (t.includes('cloth') || t.includes('robe')) return 2;
+    if (t.includes('jewel') || t.includes('ring') || t.includes('amulet') || t.includes('circlet')) return 3;
+    return 4;
+}
+
 function renderInventoryList() {
     const grid = document.getElementById('inventory-items-grid');
     if (!grid) return;
@@ -1305,6 +1798,7 @@ function renderInventoryList() {
     }
 
     let items = inv.filter(item => {
+        if (!item.name || item.name.trim().length === 0) return false;
         if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
         if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
         if (inventorySearchQuery) {
@@ -1314,10 +1808,26 @@ function renderInventoryList() {
     });
 
     items.sort((a, b) => {
-        if (activeInventorySort === 'name') return (a.name || '').localeCompare(b.name || '');
-        if (activeInventorySort === 'rating') return (b.armor || 0) - (a.armor || 0);
-        if (activeInventorySort === 'weight') return (a.weight || 0) - (b.weight || 0);
-        if (activeInventorySort === 'value') return (b.value || 0) - (a.value || 0);
+        if (activeInventorySort === 'name_asc') return (a.name || '').localeCompare(b.name || '');
+        if (activeInventorySort === 'name_desc') return (b.name || '').localeCompare(a.name || '');
+        if (activeInventorySort === 'rating_desc') return (b.armor || 0) - (a.armor || 0);
+        if (activeInventorySort === 'rating_asc') return (a.armor || 0) - (b.armor || 0);
+        if (activeInventorySort === 'weight_asc') return (a.weight || 0) - (b.weight || 0);
+        if (activeInventorySort === 'weight_desc') return (b.weight || 0) - (a.weight || 0);
+        if (activeInventorySort === 'value_desc') return (b.value || 0) - (a.value || 0);
+        if (activeInventorySort === 'value_asc') return (a.value || 0) - (b.value || 0);
+        if (activeInventorySort === 'equipped_first') return (b.equipped ? 1 : 0) - (a.equipped ? 1 : 0);
+        if (activeInventorySort === 'enchanted_first') {
+            const aEnch = (a.tags && a.tags.includes('enchanted')) ? 1 : 0;
+            const bEnch = (b.tags && b.tags.includes('enchanted')) ? 1 : 0;
+            return bEnch - aEnch;
+        }
+        if (activeInventorySort === 'slot_order') {
+            return getSlotOrderWeight(a.type) - getSlotOrderWeight(b.type);
+        }
+        if (activeInventorySort === 'class_order') {
+            return getClassOrderWeight(a.type) - getClassOrderWeight(b.type);
+        }
         return 0;
     });
 
@@ -1331,7 +1841,7 @@ function renderInventoryList() {
 
     if (items.length === 0) {
         let emptyMsg = 'No apparel items found.';
-        if (srcUpper === 'CLOUD') emptyMsg = 'Cloud Wardrobe Chest is empty.';
+        if (srcUpper === 'CLOUD') emptyMsg = 'Wardrobe Chest is empty.';
         grid.innerHTML = '<div style="font-size:10.5px; color:#64748b; text-align:center; padding:24px;">' + emptyMsg + '</div>';
         return;
     }
@@ -1341,7 +1851,7 @@ function renderInventoryList() {
         card.className = 'item-row-card ' + (item.equipped ? 'is-equipped-item' : '');
 
         let badgeTagsHtml = '';
-        if (item.source === 'CLOUD') badgeTagsHtml += '<span class="badge-tag" style="background:rgba(82,165,245,0.2); color:#52a5f5; border:1px solid #52a5f5;">CLOUD</span>';
+        if (item.source === 'CLOUD' || srcUpper === 'CLOUD') badgeTagsHtml += '<span class="badge-tag" style="background:rgba(82,165,245,0.2); color:#52a5f5; border:1px solid #52a5f5;">WARDROBE</span>';
         if (item.tags && item.tags.includes('enchanted')) badgeTagsHtml += '<span class="badge-tag tag-enchanted">ENCH</span>';
         if (item.tags && item.tags.includes('stolen')) badgeTagsHtml += '<span class="badge-tag tag-stolen">STOLEN</span>';
 
@@ -1360,6 +1870,22 @@ function renderInventoryList() {
             </div>
         `;
 
+        card.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                activeDraggedItem = item;
+                isItemDragging = false;
+                dragItemStartX = e.clientX;
+                dragItemStartY = e.clientY;
+            } else {
+                activeDraggedItem = null;
+                isItemDragging = false;
+                if (dragGhostElement) {
+                    dragGhostElement.remove();
+                    dragGhostElement = null;
+                }
+            }
+        });
+
         card.onpointerenter = () => inspectItem(item);
         card.onclick = () => {
             if (typeof window.ToggleItemEquip === 'function') {
@@ -1371,7 +1897,224 @@ function renderInventoryList() {
     });
 }
 
+function showItemContextMenu(x, y, item) {
+    if (!isEditModeActive()) return;
+
+    const menu = document.getElementById('item-context-menu');
+    if (!menu) return;
+
+    hideAllMenus();
+
+    const title = document.getElementById('item-ctx-title');
+    const targetsList = document.getElementById('item-transfer-targets-list');
+    if (!title || !targetsList) return;
+
+    inspectedItemObject = item;
+    title.innerText = item.name || 'Item Options';
+    targetsList.innerHTML = '';
+
+    const currentItemSource = (item.source || activeInventorySource || '0x00000007').toUpperCase();
+    const allSources = getInventorySourcesList();
+
+    allSources.forEach(src => {
+        const srcUpper = src.id.toUpperCase();
+        if (srcUpper !== currentItemSource) {
+            const btn = document.createElement('div');
+            btn.className = 'ctx-item';
+            btn.innerHTML = '<span>' + src.name + '</span>';
+            btn.onmousedown = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                ctxItemTransfer(src.id);
+            };
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                ctxItemTransfer(src.id);
+            };
+            targetsList.appendChild(btn);
+        }
+    });
+
+    let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
+    let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
+
+    posX = Math.max(10, Math.min(posX, window.innerWidth - 220));
+    posY = Math.max(10, Math.min(posY, window.innerHeight - 260));
+
+    menu.style.left = posX + 'px';
+    menu.style.top = posY + 'px';
+    menu.style.display = 'flex';
+}
+
+function openTransferAllMenu(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    const menu = document.getElementById('transfer-all-context-menu');
+    if (!menu) return;
+
+    if (menu.style.display === 'flex') {
+        hideAllMenus();
+        return;
+    }
+
+    hideAllMenus();
+
+    const targetsList = document.getElementById('transfer-all-targets-list');
+    if (!targetsList) return;
+
+    targetsList.innerHTML = '';
+    const currentSource = (activeInventorySource || '0x00000007').toUpperCase();
+    const allSources = getInventorySourcesList();
+
+    allSources.forEach(src => {
+        if (src.id.toUpperCase() !== currentSource) {
+            const btn = document.createElement('div');
+            btn.className = 'ctx-item';
+            btn.innerHTML = '<span>' + src.name + '</span>';
+            btn.onmousedown = (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                ctxTransferAllTo(src.id);
+            };
+            btn.onclick = (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                ctxTransferAllTo(src.id);
+            };
+            targetsList.appendChild(btn);
+        }
+    });
+
+    let posX = window.innerWidth / 2;
+    let posY = window.innerHeight / 2;
+
+    if (e && e.target) {
+        const rect = e.target.getBoundingClientRect();
+        posX = rect.left;
+        posY = rect.top - 120;
+    }
+
+    posX = Math.max(10, Math.min(posX, window.innerWidth - 220));
+    posY = Math.max(10, Math.min(posY, window.innerHeight - 200));
+
+    menu.style.left = posX + 'px';
+    menu.style.top = posY + 'px';
+    menu.style.display = 'flex';
+}
+
+function performLocalItemTransfer(rawIdVal, fromSrc, toTargetId) {
+    const getList = (srcId) => {
+        const s = (srcId || '').toUpperCase();
+        if (s === 'CLOUD') return currentWheelData.cloudInventory;
+        if (s === '0X00000007' || s === '0X00000014' || s === 'PLAYER') return currentWheelData.playerInventory || currentWheelData.inventory;
+        if (currentWheelData.actorInventories && currentWheelData.actorInventories[srcId]) return currentWheelData.actorInventories[srcId];
+        return currentWheelData.followerInventory;
+    };
+
+    const srcList = getList(fromSrc);
+    const dstList = getList(toTargetId);
+
+    if (Array.isArray(srcList) && Array.isArray(dstList) && srcList !== dstList) {
+        const idx = srcList.findIndex(it => (it.rawID || parseInt(it.id, 16)) === rawIdVal);
+        if (idx !== -1) {
+            const [item] = srcList.splice(idx, 1);
+            item.source = toTargetId;
+            item.equipped = false;
+            dstList.unshift(item);
+            renderInventoryList();
+        }
+    }
+}
+
+function performLocalAllTransfer(fromSrc, toTargetId) {
+    const getList = (srcId) => {
+        const s = (srcId || '').toUpperCase();
+        if (s === 'CLOUD') return currentWheelData.cloudInventory;
+        if (s === '0X00000007' || s === '0X00000014' || s === 'PLAYER') return currentWheelData.playerInventory || currentWheelData.inventory;
+        if (currentWheelData.actorInventories && currentWheelData.actorInventories[srcId]) return currentWheelData.actorInventories[srcId];
+        return currentWheelData.followerInventory;
+    };
+
+    const srcList = getList(fromSrc);
+    const dstList = getList(toTargetId);
+
+    if (Array.isArray(srcList) && Array.isArray(dstList) && srcList !== dstList) {
+        while (srcList.length > 0) {
+            const item = srcList.pop();
+            item.source = toTargetId;
+            item.equipped = false;
+            dstList.unshift(item);
+        }
+        renderInventoryList();
+    }
+}
+
+function ctxTransferAllTo(toTargetId) {
+    const fromSrc = activeInventorySource || '0x00000007';
+    performLocalAllTransfer(fromSrc, toTargetId);
+
+    if (typeof window.TransferAllInventory === 'function') {
+        window.TransferAllInventory(JSON.stringify({
+            fromSource: fromSrc,
+            toTarget: toTargetId
+        }));
+    }
+    showSaveToast("Transferring all items...");
+    hideAllMenus();
+}
+
+function ctxItemEquipToggle(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    if (inspectedItemObject && typeof window.ToggleItemEquip === 'function') {
+        window.ToggleItemEquip(JSON.stringify({
+            rawID: inspectedItemObject.rawID,
+            id: inspectedItemObject.id,
+            source: inspectedItemObject.source || activeInventorySource
+        }));
+    }
+    hideAllMenus();
+}
+
+function ctxItemAddToCurrentSlot(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    addInspectedItemToCurrentSlot();
+    hideAllMenus();
+}
+
+function ctxItemTransfer(toTargetId) {
+    if (!inspectedItemObject) return;
+
+    const rawIdVal = inspectedItemObject.rawID || inspectedItemObject.formID || parseInt(inspectedItemObject.id, 16) || 0;
+    const idStrVal = inspectedItemObject.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
+    const fromSrc = inspectedItemObject.source || activeInventorySource || '0x00000007';
+
+    performLocalItemTransfer(rawIdVal, fromSrc, toTargetId);
+
+    if (typeof window.TransferItem === 'function') {
+        window.TransferItem(JSON.stringify({
+            rawID: rawIdVal,
+            id: idStrVal,
+            fromSource: fromSrc,
+            toTarget: toTargetId
+        }));
+    }
+
+    showSaveToast("Transferred " + inspectedItemObject.name);
+    hideAllMenus();
+}
+
 function inspectItem(item) {
+    inspectedItemObject = item;
     const tag = document.getElementById('inspect-type-tag');
     const title = document.getElementById('inspect-title-text');
     const priLbl = document.getElementById('stat-primary-lbl');
@@ -1405,37 +2148,61 @@ function inspectItem(item) {
 
 function renderSlotsRail() {
     const rail = document.getElementById('slots-rail-list');
-    if (!rail || !currentWheelData || !currentWheelData.slots) return;
+    if (!rail || !currentWheelData) return;
     rail.innerHTML = '';
 
-    const slots = currentWheelData.slots;
+    const slots = currentWheelData.slots || [];
+    if (slots.length === 0) {
+        rail.innerHTML = '<div style="font-size:10px; color:#64748b; text-align:center; padding:16px;">No slots. Click + to add.</div>';
+        return;
+    }
+
     slots.forEach((s, idx) => {
         const realIdx = s.index !== undefined ? s.index : idx;
         const card = document.createElement('div');
         const isSelected = (realIdx === selectedSlotIndex);
-        card.className = 'vertical-slot-card ' + (isSelected ? 'active' : '') + ' ' + (s.isEquipped ? 'is-equipped' : '') + ' ' + (s.isAddon ? 'is-addon' : '');
+        const isWornOrEquipped = (s.isEquipped === true || s.isWorn === true);
+        card.className = 'vertical-slot-card ' + (isSelected ? 'active' : '') + ' ' + (isWornOrEquipped ? 'is-equipped' : '') + ' ' + (s.isAddon ? 'is-addon' : '');
+        card.setAttribute('data-slot-index', realIdx);
 
         let pipHtml = '';
-        if (s.isAddon) pipHtml = '<span class="slot-status-pip pip-addon">ADDON</span>';
-        else if (s.isEquipped) pipHtml = '<span class="slot-status-pip pip-equipped">EQUIPPED</span>';
+        if (s.isAddon && isWornOrEquipped) {
+            pipHtml = '<span class="slot-status-pip pip-addon-equipped">ADDON • ON</span>';
+        } else if (s.isAddon) {
+            pipHtml = '<span class="slot-status-pip pip-addon">ADDON</span>';
+        } else if (isWornOrEquipped) {
+            pipHtml = '<span class="slot-status-pip pip-equipped">EQUIPPED</span>';
+        }
 
-        const outfitName = (s.hasOutfit && s.name) ? s.name : 'Empty Slot';
-        const subText = s.hasOutfit ? ((s.count || 0) + ' items') : '';
+        const displayName = (s.name && s.name.trim().length > 0) ? s.name : ('Outfit ' + (realIdx + 1));
+        const itemCount = (s.items && s.items.length > 0) ? s.items.length : (s.count || 0);
 
-        card.innerHTML = `
-            <div class="slot-card-texts">
-                <span class="slot-card-name">${outfitName}</span>
-                ${subText ? `<span class="slot-card-sub">${subText}</span>` : ''}
-            </div>
-            ${pipHtml}
-        `;
+        card.innerHTML = '<div class="slot-card-texts"><span class="slot-card-name">' + displayName + '</span><span class="slot-card-sub">Slot ' + (realIdx + 1) + ' • ' + itemCount + ' pcs</span></div>' + pipHtml;
 
-        card.onclick = () => {
+        card.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                activeDraggedSlotIndex = realIdx;
+                isSlotDragging = false;
+                slotDragStartX = e.clientX;
+                slotDragStartY = e.clientY;
+            } else {
+                activeDraggedSlotIndex = null;
+                isSlotDragging = false;
+                if (slotDragGhostElement) {
+                    slotDragGhostElement.remove();
+                    slotDragGhostElement = null;
+                }
+            }
+        });
+
+        card.onclick = (e) => {
+            if (isSlotDragging) return;
             selectedSlotIndex = realIdx;
             renderSlotsRail();
             renderDrawerDetails();
-            if (s.hasOutfit) {
-                equipOutfit(realIdx);
+            if (s.hasOutfit && s.items && s.items.length > 0) {
+                const keepOpen = (e.shiftKey === true || currentWheelData.autoCloseOnEquip === false);
+                equipOutfit(realIdx, keepOpen);
             }
         };
 
@@ -1449,21 +2216,37 @@ function renderDrawerDetails() {
     const statusContainer = document.getElementById('drawer-slot-status');
     const btnFull = document.getElementById('btn-type-full');
     const btnAddon = document.getElementById('btn-type-addon');
+    const btnSaveMain = document.getElementById('btn-save-drawer-gear');
 
-    if (!badge || !nameEl || !currentWheelData || !currentWheelData.slots) return;
+    if (!badge || !nameEl || !currentWheelData) return;
 
-    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+    const slots = currentWheelData.slots || [];
+    if (slots.length === 0) {
+        badge.innerText = 'NO SLOTS';
+        nameEl.innerText = 'No Slot Selected';
+        if (statusContainer) statusContainer.style.display = 'none';
+        renderDrawerItemsList(null);
+        return;
+    }
+
+    const slot = slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || slots[selectedSlotIndex] || slots[0];
     if (!slot) return;
 
-    badge.innerText = 'SLOT ' + (selectedSlotIndex + 1);
-    nameEl.innerText = slot.hasOutfit ? slot.name : 'Empty Slot';
+    badge.innerText = 'SLOT ' + ((slot.index !== undefined ? slot.index : selectedSlotIndex) + 1);
+    nameEl.innerText = (slot.name && slot.name.trim().length > 0) ? slot.name : ('Outfit ' + ((slot.index !== undefined ? slot.index : selectedSlotIndex) + 1));
 
     if (statusContainer) {
+        const isItemEquipped = (slot.isWorn === true || slot.isEquipped === true);
         if (slot.isAddon) {
             statusContainer.style.display = 'inline-block';
-            statusContainer.className = 'status-chip chip-addon';
-            statusContainer.innerText = 'ADDON';
-        } else if (slot.isWorn || slot.isEquipped) {
+            if (isItemEquipped) {
+                statusContainer.className = 'status-chip chip-addon-active';
+                statusContainer.innerText = 'ADDON (EQUIPPED)';
+            } else {
+                statusContainer.className = 'status-chip chip-addon';
+                statusContainer.innerText = 'ADDON (OFF)';
+            }
+        } else if (isItemEquipped) {
             statusContainer.style.display = 'inline-block';
             statusContainer.className = 'status-chip chip-equipped';
             statusContainer.innerText = 'EQUIPPED';
@@ -1482,6 +2265,10 @@ function renderDrawerDetails() {
         }
     }
 
+    if (btnSaveMain) {
+        btnSaveMain.innerText = slot.isAddon ? 'Save All Worn to Addon' : 'Save Current Gear';
+    }
+
     const currentStars = (slot && slot.preferenceStars !== undefined) ? slot.preferenceStars : 3;
     const stars = document.querySelectorAll('#stars-widget .star-icon');
     stars.forEach((s, idx) => {
@@ -1489,32 +2276,48 @@ function renderDrawerDetails() {
         else s.classList.remove('active');
     });
 
+    renderDrawerContextChips();
+    renderDrawerItemsList(slot);
+}
+
+function switchInspectorContextTab(tabKey, e) {
+    if (e) e.stopPropagation();
+    activeInspectorContextTab = tabKey;
+    const btnAct = document.getElementById('tab-ctx-actions');
+    const btnLoc = document.getElementById('tab-ctx-locations');
+    const btnWea = document.getElementById('tab-ctx-weather');
+
+    if (btnAct) btnAct.classList.toggle('active', tabKey === 'action');
+    if (btnLoc) btnLoc.classList.toggle('active', tabKey === 'location');
+    if (btnWea) btnWea.classList.toggle('active', tabKey === 'weather');
+
+    renderDrawerContextChips();
+}
+
+function renderDrawerContextChips() {
+    const box = document.getElementById('inspector-conditions-chips');
+    if (!box || typeof ALL_CONDITIONS_LIST === 'undefined' || !currentWheelData || !currentWheelData.slots) return;
+    box.innerHTML = '';
+
+    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+    if (!slot) return;
     const currentTag = (slot && slot.contextTag) ? slot.contextTag.toLowerCase() : '';
 
-    const actionsGroup = document.getElementById('inspector-actions-group');
-    const locsGroup = document.getElementById('inspector-locations-group');
-    const modGroup = document.getElementById('inspector-modifiers-group');
+    const filtered = ALL_CONDITIONS_LIST.filter(cond => {
+        if (activeInspectorContextTab === 'action') return cond.cat === 'action';
+        if (activeInspectorContextTab === 'location') return cond.cat === 'generic' || cond.cat === 'unique';
+        if (activeInspectorContextTab === 'weather') return cond.cat === 'modifier';
+        return true;
+    });
 
-    if (actionsGroup && locsGroup && modGroup && typeof ALL_CONDITIONS_LIST !== 'undefined') {
-        actionsGroup.innerHTML = '';
-        locsGroup.innerHTML = '';
-        modGroup.innerHTML = '';
-
-        ALL_CONDITIONS_LIST.forEach(cond => {
-            const chip = document.createElement('span');
-            const isActive = currentTag.includes(cond.id.toLowerCase());
-            chip.className = 'ctx-toggle-chip ' + (isActive ? 'active' : '');
-            chip.innerText = cond.label;
-            chip.title = cond.label;
-            chip.onclick = () => toggleContextTagDirect(cond.id);
-
-            if (cond.cat === 'action') actionsGroup.appendChild(chip);
-            else if (cond.cat === 'generic' || cond.cat === 'unique') locsGroup.appendChild(chip);
-            else if (cond.cat === 'modifier') modGroup.appendChild(chip);
-        });
-    }
-
-    renderDrawerItemsList(slot);
+    filtered.forEach(cond => {
+        const chip = document.createElement('span');
+        const isActive = currentTag.includes(cond.id.toLowerCase());
+        chip.className = 'ctx-toggle-chip ' + (isActive ? 'active' : '');
+        chip.innerText = cond.label;
+        chip.onclick = () => toggleContextTagDirect(cond.id);
+        box.appendChild(chip);
+    });
 }
 
 function renderDrawerItemsList(slot) {
@@ -1522,31 +2325,163 @@ function renderDrawerItemsList(slot) {
     if (!list) return;
     list.innerHTML = '';
 
-    const items = slot.items || slot.itemIDs || [];
-    if (!slot.hasOutfit || items.length === 0) {
-        list.innerHTML = '<div style="font-size:10px; color:#64748b; text-align:center; padding:16px;">No items saved in this slot. Click \'Save Current Gear\' to assign loadout.</div>';
+    if (!slot) {
+        list.innerHTML = '<div class="drawer-empty-drop-hint">No slot selected.</div>';
         return;
     }
 
-    items.forEach(itemEntry => {
+    const items = slot.items || slot.itemIDs || [];
+    if (items.length === 0) {
+        list.innerHTML = '<div class="drawer-empty-drop-hint">Drag & drop items here or click \'+ Add Item\' to assign pieces.</div>';
+        return;
+    }
+
+    items.forEach((itemEntry, itemIdx) => {
         let itemObj = null;
-        if (typeof itemEntry === 'object' && itemEntry.name) {
-            itemObj = itemEntry;
+        if (typeof itemEntry === 'object' && itemEntry !== null) {
+            const rId = itemEntry.rawID || itemEntry.formID || parseInt(itemEntry.id, 16) || 0;
+            itemObj = {
+                name: itemEntry.name || 'Apparel Item',
+                rawID: rId,
+                id: itemEntry.id || ('0x' + Number(rId).toString(16).toUpperCase()),
+                type: itemEntry.type || itemEntry.category || 'Armor'
+            };
         } else {
-            const formIdStr = (typeof itemEntry === 'number') ? ('0x' + itemEntry.toString(16).toUpperCase()) : String(itemEntry);
-            itemObj = (currentWheelData.inventory || []).find(x => x.id === formIdStr || x.rawID === itemEntry) || {
+            const formIdNum = typeof itemEntry === 'number' ? itemEntry : (parseInt(itemEntry, 16) || 0);
+            const formIdStr = typeof itemEntry === 'number' ? ('0x' + itemEntry.toString(16).toUpperCase()) : String(itemEntry);
+            const found = (currentWheelData.inventory || []).find(x => x.id === formIdStr || x.rawID === formIdNum);
+            itemObj = found || {
                 name: 'Apparel Item (' + formIdStr + ')',
+                rawID: formIdNum,
+                id: formIdStr,
                 type: 'Armor'
             };
         }
+
         const row = document.createElement('div');
         row.className = 'drawer-item-row';
-        row.innerHTML = `
-            <span class="drawer-item-title">${itemObj.name}</span>
-            <span class="drawer-item-slot-tag">${itemObj.type || 'Apparel'}</span>
-        `;
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'drawer-item-info';
+        infoDiv.innerHTML = `<span>${itemObj.name}</span>`;
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'drawer-item-actions';
+
+        const typeTag = document.createElement('span');
+        typeTag.className = 'drawer-item-slot-tag';
+        typeTag.innerText = itemObj.type || 'Apparel';
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'btn-remove-item-cross';
+        removeBtn.title = 'Remove item';
+        removeBtn.innerHTML = '&#x2715;';
+        removeBtn.onmousedown = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            removeItemFromCurrentSlot(itemObj.rawID, itemObj.id, itemIdx);
+        };
+        removeBtn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            removeItemFromCurrentSlot(itemObj.rawID, itemObj.id, itemIdx);
+        };
+
+        actionsDiv.appendChild(typeTag);
+        actionsDiv.appendChild(removeBtn);
+
+        row.appendChild(infoDiv);
+        row.appendChild(actionsDiv);
         list.appendChild(row);
     });
+}
+
+function removeItemFromCurrentSlot(rawID, idStr, itemIdx) {
+    const rawIdVal = rawID || parseInt(idStr, 16) || 0;
+    const idStrVal = idStr || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
+
+    if (typeof window.RemoveItemFromSlot === 'function' && currentWheelData) {
+        window.RemoveItemFromSlot(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex || 0,
+            slotIndex: selectedSlotIndex,
+            rawID: rawIdVal,
+            id: idStrVal
+        }));
+    }
+
+    if (currentWheelData && currentWheelData.slots) {
+        const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+        if (slot) {
+            let list = slot.items || slot.itemIDs;
+            if (Array.isArray(list)) {
+                if (itemIdx !== undefined && itemIdx >= 0 && itemIdx < list.length) {
+                    list.splice(itemIdx, 1);
+                } else {
+                    slot.items = list.filter(it => {
+                        const itRaw = typeof it === 'object' ? (it.rawID || it.formID || parseInt(it.id, 16)) : (typeof it === 'number' ? it : parseInt(it, 16));
+                        return itRaw !== rawIdVal;
+                    });
+                }
+            }
+            slot.count = (slot.items || []).length;
+            renderDrawerDetails();
+            renderSlotsRail();
+            if (typeof updateWheelUI === 'function') updateWheelUI();
+            if (typeof showSaveToast === 'function') showSaveToast('Item removed');
+        }
+    }
+}
+
+function addInspectedItemToCurrentSlot() {
+    if (!inspectedItemObject) {
+        if (typeof showSaveToast === 'function') showSaveToast("Select an item in inventory first!");
+        return;
+    }
+
+    if (!currentWheelData || !currentWheelData.slots || currentWheelData.slots.length === 0) {
+        if (typeof showSaveToast === 'function') showSaveToast("Create a slot first (+ Add Slot)!");
+        return;
+    }
+
+    const rawIdVal = inspectedItemObject.rawID || inspectedItemObject.formID || parseInt(inspectedItemObject.id, 16) || 0;
+    const idStrVal = inspectedItemObject.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
+
+    if (typeof window.AddItemToSlot === 'function' && currentWheelData) {
+        window.AddItemToSlot(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex || 0,
+            slotIndex: selectedSlotIndex,
+            rawID: rawIdVal,
+            id: idStrVal
+        }));
+    }
+
+    if (currentWheelData && currentWheelData.slots) {
+        const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+        if (slot) {
+            if (!slot.items) slot.items = [];
+            const exists = slot.items.some(it => {
+                const itRaw = typeof it === 'object' ? (it.rawID || it.formID || parseInt(it.id, 16)) : (typeof it === 'number' ? it : parseInt(it, 16));
+                return itRaw === rawIdVal;
+            });
+            if (!exists) {
+                slot.items.push({
+                    name: inspectedItemObject.name,
+                    rawID: rawIdVal,
+                    id: idStrVal,
+                    type: inspectedItemObject.type || 'Armor'
+                });
+            }
+            slot.hasOutfit = true;
+            slot.count = slot.items.length;
+            renderSlotsRail();
+            renderDrawerDetails();
+            if (typeof updateWheelUI === 'function') updateWheelUI();
+        }
+    }
+
+    if (typeof showSaveToast === 'function') {
+        showSaveToast('Added ' + inspectedItemObject.name + ' to Slot ' + (selectedSlotIndex + 1));
+    }
 }
 
 function toggleSlotAddonType(isAddon) {
@@ -1581,6 +2516,9 @@ function toggleContextTagDirect(ctxKey) {
     }
 
     const newTagStr = currentTags.join(', ');
+    slot.contextTag = newTagStr;
+    renderDrawerContextChips();
+
     if (typeof window.SetSlotContext === 'function' && currentWheelData) {
         window.SetSlotContext(JSON.stringify({
             wheelIndex: currentWheelData.wheelIndex,

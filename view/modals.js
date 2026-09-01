@@ -13,9 +13,10 @@ const ALL_CONDITIONS_LIST = [
     { id: "sleep", label: "Sleeping", cat: "action" },
     { id: "mount", label: "Mounting", cat: "action" },
 
-    { id: "world", label: "World", cat: "generic" },
+    { id: "world", label: "World (Adventure)", cat: "generic" },
     { id: "town", label: "Town", cat: "generic" },
     { id: "city", label: "City", cat: "generic" },
+    { id: "day", label: "Day", cat: "modifier" },
     { id: "night", label: "Night", cat: "modifier" },
     { id: "rain", label: "Rain", cat: "modifier" },
     { id: "snow", label: "Snow", cat: "modifier" },
@@ -24,13 +25,13 @@ const ALL_CONDITIONS_LIST = [
     { id: "dungeon", label: "Dungeon", cat: "unique" },
     { id: "home", label: "Player Home", cat: "unique" },
     { id: "inn", label: "Inn & Tavern", cat: "unique" },
-    { id: "store", label: "Store", cat: "unique" },
+    { id: "store", label: "Store & Market", cat: "unique" },
     { id: "guild", label: "Guild Hall", cat: "unique" },
-    { id: "castle", label: "Castle", cat: "unique" },
-    { id: "temple", label: "Temple", cat: "unique" },
-    { id: "farm", label: "Farm", cat: "unique" },
-    { id: "jail", label: "Jail", cat: "unique" },
-    { id: "military", label: "Military", cat: "unique" }
+    { id: "castle", label: "Castle & Palace", cat: "unique" },
+    { id: "temple", label: "Temple & Shrine", cat: "unique" },
+    { id: "farm", label: "Farm & Mill", cat: "unique" },
+    { id: "jail", label: "Jail & Prison", cat: "unique" },
+    { id: "military", label: "Military Camp", cat: "unique" }
 ];
 
 function showSaveToast(text) {
@@ -45,18 +46,22 @@ function showSaveToast(text) {
 }
 
 function hideAllModals() {
-    ['rename-modal', 'context-modal', 'settings-modal', 'keyboard-modal', 'gamepad-modal'].forEach(id => {
+    ['rename-modal', 'context-modal'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
+    const panelSettings = document.getElementById('panel-settings');
+    if (panelSettings) panelSettings.style.display = 'none';
+
     listeningKeyType = null;
     listeningGamepadType = null;
     closeAllDropdowns();
+    setTyping(false);
 }
 
 function hideAllMenus(e) {
-    if (e) e.stopPropagation();
-    ['slot-context-menu', 'wheel-context-menu'].forEach(id => {
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    ['slot-context-menu', 'wheel-context-menu', 'item-context-menu', 'transfer-all-context-menu'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
@@ -65,14 +70,22 @@ function hideAllMenus(e) {
 
 function showSlotContextMenu(x, y, slotIndex) {
     if (!isEditModeActive()) return;
+
+    const menu = document.getElementById('slot-context-menu');
+    if (!menu) return;
+
+    if (menu.style.display === 'flex' && selectedSlotIndex === slotIndex) {
+        hideAllMenus();
+        return;
+    }
+
     selectedSlotIndex = slotIndex;
     hideAllMenus();
 
-    const menu = document.getElementById('slot-context-menu');
     const title = document.getElementById('slot-ctx-title');
-    if (!menu || !title) return;
-
-    title.innerText = 'Slot ' + (slotIndex + 1) + ' Options';
+    if (title) {
+        title.innerText = 'Slot ' + (slotIndex + 1) + ' Options';
+    }
 
     const currentSlot = currentWheelData.slots.find(s => s.index === slotIndex);
     const wardrobeBtn = document.getElementById('ctx-slot-wardrobe-toggle');
@@ -81,11 +94,11 @@ function showSlotContextMenu(x, y, slotIndex) {
             wardrobeBtn.style.display = 'none';
         } else if (currentSlot.isInWardrobe) {
             wardrobeBtn.style.display = 'block';
-            wardrobeBtn.innerText = 'Transfer to Inventory';
+            wardrobeBtn.innerText = 'Retrieve to Inventory';
             wardrobeBtn.setAttribute('data-action', 'retrieve');
         } else {
             wardrobeBtn.style.display = 'block';
-            wardrobeBtn.innerText = 'Transfer to Cloud';
+            wardrobeBtn.innerText = 'Store in Wardrobe';
             wardrobeBtn.setAttribute('data-action', 'store');
         }
     }
@@ -122,17 +135,23 @@ function ctxToggleSlotWardrobe(e) {
                 slotIndex: selectedSlotIndex
             }));
         }
-        showSaveToast("Outfit Stored in Cloud!");
+        showSaveToast("Outfit Stored in Wardrobe!");
     }
     hideAllMenus();
 }
 
 function showWheelContextMenu(x, y) {
     if (!isEditModeActive()) return;
-    hideAllMenus();
 
     const menu = document.getElementById('wheel-context-menu');
     if (!menu) return;
+
+    if (menu.style.display === 'flex') {
+        hideAllMenus();
+        return;
+    }
+
+    hideAllMenus();
 
     let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
     let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
@@ -151,7 +170,7 @@ function ctxStashAllOutfits(e) {
     if (typeof window.StashAllOutfits === 'function') {
         window.StashAllOutfits("");
     }
-    showSaveToast("Inactive Outfits Stored in Cloud!");
+    showSaveToast("Inactive Outfits Stored in Wardrobe!");
     hideAllMenus();
 }
 
@@ -160,7 +179,7 @@ function ctxRetrieveAllOutfits(e) {
     if (typeof window.RetrieveAllOutfits === 'function') {
         window.RetrieveAllOutfits("");
     }
-    showSaveToast("All Outfits Retrieved!");
+    showSaveToast("All Outfits Retrieved from Wardrobe!");
     hideAllMenus();
 }
 
@@ -176,30 +195,19 @@ function handleCenterRightClick(e) {
 function openSettingsModal(e) {
     if (e) e.stopPropagation();
     hideAllMenus();
-    hideAllModals();
 
-    const modal = document.getElementById('settings-modal');
-    const scaleInput = document.getElementById('scale-input');
-    const offsetInputX = document.getElementById('offsetx-input');
-    const offsetInputY = document.getElementById('offsety-input');
+    const panel = document.getElementById('panel-settings');
+    if (!panel) return;
 
-    const chkAutoStash = document.getElementById('chk-auto-stash');
-    const chkMaster = document.getElementById('chk-auto-master');
-    const chkCity = document.getElementById('chk-auto-city');
-    const chkHome = document.getElementById('chk-auto-home');
-    const chkCombat = document.getElementById('chk-auto-combat');
-    const chkSwim = document.getElementById('chk-auto-swim');
+    const isVisible = panel.style.display !== 'none';
+    if (isVisible) {
+        hideSettingsModal();
+        return;
+    }
 
-    if (chkAutoStash) chkAutoStash.checked = currentWheelData.autoStashEnabled === true;
-    if (chkMaster) chkMaster.checked = currentWheelData.autoSystemEnabled !== false;
-    if (chkCity) chkCity.checked = currentWheelData.autoCityEnabled !== false;
-    if (chkHome) chkHome.checked = currentWheelData.autoHomeEnabled !== false;
-    if (chkCombat) chkCombat.checked = currentWheelData.autoCombatEnabled !== false;
-    if (chkSwim) chkSwim.checked = currentWheelData.autoSwimEnabled !== false;
+    const chkAutoClose = document.getElementById('chk-auto-close-equip');
+    if (chkAutoClose) chkAutoClose.checked = currentWheelData.autoCloseOnEquip !== false;
 
-    tempScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
-    tempOffsetX = (currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0;
-    tempOffsetY = (currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0;
     tempEditKey = currentWheelData.editKey || 0x31;
     tempEditMod = currentWheelData.editModifierKey || 0;
     tempPlayKey = currentWheelData.playKey || 0x2F;
@@ -207,140 +215,73 @@ function openSettingsModal(e) {
     tempGamepadPlayKey = currentWheelData.gamepadPlayKey || 0x0008;
     tempGamepadPlayMod = currentWheelData.gamepadPlayModifier || 0x0100;
 
-    if (scaleInput) scaleInput.value = Math.round(tempScale * 100) + '%';
-    if (offsetInputX) offsetInputX.value = Math.round(tempOffsetX) + 'px';
-    if (offsetInputY) offsetInputY.value = Math.round(tempOffsetY) + 'px';
+    const editBtn = document.getElementById('btn-edit-key');
+    const playBtn = document.getElementById('btn-play-key');
+    const gpPlayBtn = document.getElementById('btn-gp-play-key');
+    const editModText = document.getElementById('dd-edit-text');
+    const playModText = document.getElementById('dd-play-text');
+    const gpPlayModText = document.getElementById('dd-gp-play-text');
 
-    if (modal) modal.style.display = 'flex';
+    if (editBtn) editBtn.innerText = '[' + getKeyName(tempEditKey) + ']';
+    if (playBtn) playBtn.innerText = '[' + getKeyName(tempPlayKey) + ']';
+    if (gpPlayBtn) gpPlayBtn.innerText = '[' + (gamepadNames[tempGamepadPlayKey] ? gamepadNames[tempGamepadPlayKey] : ('0x' + tempGamepadPlayKey.toString(16).toUpperCase())) + ']';
+
+    if (editModText) editModText.innerText = modNameMap[tempEditMod] || 'None';
+    if (playModText) playModText.innerText = modNameMap[tempPlayMod] || 'None';
+    if (gpPlayModText) gpPlayModText.innerText = gpModNameMap[tempGamepadPlayMod] || 'None';
+
+    panel.style.display = 'flex';
     setTyping(true);
 }
 
 function hideSettingsModal() {
-    tempScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
-    tempOffsetX = (currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0;
-    tempOffsetY = (currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0;
-    applyTransform();
-    hideAllModals();
+    const panel = document.getElementById('panel-settings');
+    if (panel) panel.style.display = 'none';
+
+    listeningKeyType = null;
+    listeningGamepadType = null;
+    closeAllDropdowns();
     setTyping(false);
 }
 
-function openKeyboardModal(e) {
-    if (e) e.stopPropagation();
-    hideAllModals();
-
-    const kbModal = document.getElementById('keyboard-modal');
-    const editBtn = document.getElementById('btn-edit-key');
-    const playBtn = document.getElementById('btn-play-key');
-    const editModText = document.getElementById('dd-edit-text');
-    const playModText = document.getElementById('dd-play-text');
-
-    if (editBtn) editBtn.innerText = '[' + getKeyName(tempEditKey) + ']';
-    if (playBtn) playBtn.innerText = '[' + getKeyName(tempPlayKey) + ']';
-    if (editModText) editModText.innerText = modNameMap[tempEditMod] || 'None';
-    if (playModText) playModText.innerText = modNameMap[tempPlayMod] || 'None';
-
-    if (kbModal) kbModal.style.display = 'flex';
-    setTyping(true);
-}
-
-function hideKeyboardModal() {
-    hideAllModals();
-    const settingsModal = document.getElementById('settings-modal');
-    if (settingsModal) settingsModal.style.display = 'flex';
-}
-
-function openGamepadModal(e) {
-    if (e) e.stopPropagation();
-    hideAllModals();
-
-    const gpModal = document.getElementById('gamepad-modal');
-    const gpPlayBtn = document.getElementById('btn-gp-play-key');
-    const gpPlayModText = document.getElementById('dd-gp-play-text');
-
-    if (gpPlayBtn) gpPlayBtn.innerText = '[' + (gamepadNames[tempGamepadPlayKey] ? gamepadNames[tempGamepadPlayKey] : ('0x' + tempGamepadPlayKey.toString(16).toUpperCase())) + ']';
-    if (gpPlayModText) gpPlayModText.innerText = gpModNameMap[tempGamepadPlayMod] || 'None';
-
-    if (gpModal) gpModal.style.display = 'flex';
-    setTyping(true);
-}
-
-function hideGamepadModal() {
-    hideAllModals();
-    const settingsModal = document.getElementById('settings-modal');
-    if (settingsModal) settingsModal.style.display = 'flex';
-}
-
-function saveKeyboardSettings() {
-    currentWheelData.editKey = tempEditKey;
-    currentWheelData.editModifierKey = tempEditMod;
-    currentWheelData.playKey = tempPlayKey;
-    currentWheelData.playModifierKey = tempPlayMod;
-    saveSettings();
-    hideKeyboardModal();
-}
-
-function saveGamepadSettings() {
-    currentWheelData.gamepadPlayKey = tempGamepadPlayKey;
-    currentWheelData.gamepadPlayModifier = tempGamepadPlayMod;
-    saveSettings();
-    hideGamepadModal();
-}
-
 function saveSettings() {
-    currentWheelData.wheelScale = tempScale;
-    currentWheelData.wheelOffsetX = tempOffsetX;
-    currentWheelData.wheelOffsetY = tempOffsetY;
+    const chkAutoClose = document.getElementById('chk-auto-close-equip');
+    const autoCloseVal = chkAutoClose ? chkAutoClose.checked : true;
+
+    currentWheelData.autoCloseOnEquip = autoCloseVal;
     currentWheelData.editKey = tempEditKey;
     currentWheelData.editModifierKey = tempEditMod;
     currentWheelData.playKey = tempPlayKey;
     currentWheelData.playModifierKey = tempPlayMod;
     currentWheelData.gamepadPlayKey = tempGamepadPlayKey;
     currentWheelData.gamepadPlayModifier = tempGamepadPlayMod;
-
-    const chkAutoStash = document.getElementById('chk-auto-stash');
-    const chkMaster = document.getElementById('chk-auto-master');
-    const chkCity = document.getElementById('chk-auto-city');
-    const chkHome = document.getElementById('chk-auto-home');
-    const chkCombat = document.getElementById('chk-auto-combat');
-    const chkSwim = document.getElementById('chk-auto-swim');
-
-    const autoStashVal = chkAutoStash ? chkAutoStash.checked : false;
-    const masterVal = chkMaster ? chkMaster.checked : true;
-    const cityVal = chkCity ? chkCity.checked : true;
-    const homeVal = chkHome ? chkHome.checked : true;
-    const combatVal = chkCombat ? chkCombat.checked : true;
-    const swimVal = chkSwim ? chkSwim.checked : true;
-
-    currentWheelData.autoStashEnabled = autoStashVal;
-    currentWheelData.autoSystemEnabled = masterVal;
-    currentWheelData.autoCityEnabled = cityVal;
-    currentWheelData.autoHomeEnabled = homeVal;
-    currentWheelData.autoCombatEnabled = combatVal;
-    currentWheelData.autoSwimEnabled = swimVal;
 
     if (typeof saveWheelPositionToStorage === 'function') saveWheelPositionToStorage();
+    if (typeof savePanelsLayout === 'function') savePanelsLayout();
 
     if (typeof window.SaveSettings === 'function') {
         window.SaveSettings(JSON.stringify({
             editMode: isEditModeActive(),
-            wheelScale: tempScale,
-            wheelOffsetX: tempOffsetX,
-            wheelOffsetY: tempOffsetY,
+            wheelScale: currentWheelData.wheelScale || 1.0,
+            wheelOffsetX: currentWheelData.wheelOffsetX || 0.0,
+            wheelOffsetY: currentWheelData.wheelOffsetY || 0.0,
             editKey: tempEditKey,
             editModifierKey: tempEditMod,
             playKey: tempPlayKey,
             playModifierKey: tempPlayMod,
             gamepadPlayKey: tempGamepadPlayKey,
             gamepadPlayModifier: tempGamepadPlayMod,
-            autoStashEnabled: autoStashVal,
-            autoSystemEnabled: masterVal,
-            autoCityEnabled: cityVal,
-            autoHomeEnabled: homeVal,
-            autoCombatEnabled: combatVal,
-            autoSwimEnabled: swimVal
+            autoCloseOnEquip: autoCloseVal,
+            autoStashEnabled: currentWheelData.autoStashEnabled === true,
+            autoSystemEnabled: currentWheelData.autoSystemEnabled !== false,
+            autoCityEnabled: currentWheelData.autoCityEnabled !== false,
+            autoHomeEnabled: currentWheelData.autoHomeEnabled !== false,
+            autoCombatEnabled: currentWheelData.autoCombatEnabled !== false,
+            autoSwimEnabled: currentWheelData.autoSwimEnabled !== false
         }));
     }
     hideSettingsModal();
+    showSaveToast("Settings Saved!");
 }
 
 function openContextModal(e) {
@@ -428,6 +369,7 @@ function showRenameModal(titleText, initialValue) {
         title.innerText = titleText;
         input.value = initialValue;
         modal.style.display = 'flex';
+        setTyping(true);
         setTimeout(() => {
             input.focus();
             input.select();
@@ -485,32 +427,123 @@ function ctxRenameSlot(e) {
     if (selectedSlotIndex === null) return;
     renameTargetMode = 'slot';
     const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
-    const currentName = (currentSlot && currentSlot.hasOutfit) ? currentSlot.name : ('Outfit ' + (selectedSlotIndex + 1));
+    const currentName = (currentSlot && currentSlot.name) ? currentSlot.name : ('Outfit ' + (selectedSlotIndex + 1));
     showRenameModal("Rename Preset", currentName);
     hideAllMenus();
 }
 
-function ctxClearSlot(e) {
+function ctxMoveSlot(delta, e) {
     if (e) e.stopPropagation();
-    if (selectedSlotIndex !== null && typeof window.ClearSlot === 'function' && currentWheelData) {
+    if (selectedSlotIndex === null || !currentWheelData || !currentWheelData.slots) return;
+    const total = currentWheelData.slots.length;
+    if (total <= 1) return;
+
+    const fromIdx = selectedSlotIndex;
+    const toIdx = fromIdx + delta;
+    if (toIdx < 0 || toIdx >= total) return;
+
+    if (typeof window.MoveSlot === 'function') {
+        window.MoveSlot(JSON.stringify({
+            wheelIndex: currentWheelData.wheelIndex || 0,
+            fromIndex: fromIdx,
+            toIndex: toIdx,
+            editMode: isEditModeActive()
+        }));
+    }
+
+    const temp = currentWheelData.slots[fromIdx];
+    currentWheelData.slots[fromIdx] = currentWheelData.slots[toIdx];
+    currentWheelData.slots[toIdx] = temp;
+    currentWheelData.slots.forEach((s, i) => s.index = i);
+
+    selectedSlotIndex = toIdx;
+    renderSlotsRail();
+    renderDrawerDetails();
+    if (typeof updateWheelUI === 'function') updateWheelUI();
+    showSaveToast("Slot Reordered!");
+    hideAllMenus();
+}
+
+function ctxMoveWheel(delta, e) {
+    if (e) e.stopPropagation();
+    if (!currentWheelData || currentWheelData.totalWheels <= 1) return;
+
+    const fromIdx = currentWheelData.wheelIndex || 0;
+    const toIdx = fromIdx + delta;
+    if (toIdx < 0 || toIdx >= currentWheelData.totalWheels) return;
+
+    if (typeof window.MoveWheel === 'function') {
+        window.MoveWheel(JSON.stringify({
+            fromIndex: fromIdx,
+            toIndex: toIdx,
+            editMode: isEditModeActive()
+        }));
+    }
+    hideAllMenus();
+}
+
+function ctxClearSlot(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    if (selectedSlotIndex === null || selectedSlotIndex === undefined) return;
+
+    if (typeof window.ClearSlot === 'function' && currentWheelData) {
         window.ClearSlot(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex
         }));
     }
-    selectedSlotIndex = 0;
+
+    if (currentWheelData && currentWheelData.slots) {
+        const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+        if (slot) {
+            slot.hasOutfit = false;
+            slot.name = 'Outfit ' + (selectedSlotIndex + 1);
+            slot.items = [];
+            slot.itemIDs = [];
+            slot.count = 0;
+            slot.isEquipped = false;
+            slot.isWorn = false;
+            slot.contextTag = '';
+        }
+    }
+
+    renderSlotsRail();
+    renderDrawerDetails();
+    if (typeof updateWheelUI === 'function') updateWheelUI();
+    showSaveToast("Slot Cleared!");
     hideAllMenus();
 }
 
 function ctxDeleteSlot(e) {
-    if (e) e.stopPropagation();
-    if (selectedSlotIndex !== null && typeof window.DeleteSlot === 'function' && currentWheelData) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    if (selectedSlotIndex === null || selectedSlotIndex === undefined || !currentWheelData || !currentWheelData.slots) return;
+
+    const targetIdx = selectedSlotIndex;
+
+    if (typeof window.DeleteSlot === 'function') {
         window.DeleteSlot(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
-            slotIndex: selectedSlotIndex
+            wheelIndex: currentWheelData.wheelIndex || 0,
+            slotIndex: targetIdx
         }));
     }
-    selectedSlotIndex = 0;
+
+    if (currentWheelData.slots.length > 0) {
+        currentWheelData.slots.splice(targetIdx, 1);
+        currentWheelData.slots.forEach((s, i) => s.index = i);
+        selectedSlotIndex = currentWheelData.slots.length > 0 ? Math.max(0, Math.min(targetIdx, currentWheelData.slots.length - 1)) : 0;
+    }
+
+    renderSlotsRail();
+    renderDrawerDetails();
+    if (typeof updateWheelUI === 'function') updateWheelUI();
+    showSaveToast("Slot Deleted!");
     hideAllMenus();
 }
 
@@ -528,121 +561,6 @@ function ctxDeleteWheel(e) {
         window.DeleteWheel(JSON.stringify({}));
     }
     hideAllMenus();
-}
-
-function stepScale(delta) {
-    tempScale = Math.max(0.1, tempScale + delta);
-    currentWheelData.wheelScale = tempScale;
-    const scaleInput = document.getElementById('scale-input');
-    if (scaleInput) scaleInput.value = Math.round(tempScale * 100) + '%';
-    applyTransform();
-}
-
-function stepOffsetX(delta) {
-    tempOffsetX += delta;
-    currentWheelData.wheelOffsetX = tempOffsetX;
-    const offsetInput = document.getElementById('offsetx-input');
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetX) + 'px';
-    applyTransform();
-}
-
-function stepOffsetY(delta) {
-    tempOffsetY += delta;
-    currentWheelData.wheelOffsetY = tempOffsetY;
-    const offsetInput = document.getElementById('offsety-input');
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetY) + 'px';
-    applyTransform();
-}
-
-function onScaleInputChange(val) {
-    let clean = String(val).replace('%', '').trim();
-    let num = parseFloat(clean);
-    if (!isNaN(num)) {
-        if (num > 10) num /= 100.0;
-        tempScale = Math.max(0.1, num);
-        currentWheelData.wheelScale = tempScale;
-    }
-    const scaleInput = document.getElementById('scale-input');
-    if (scaleInput) scaleInput.value = Math.round(tempScale * 100) + '%';
-    applyTransform();
-}
-
-function onScaleInputBlur() {
-    setTyping(false);
-    const scaleInput = document.getElementById('scale-input');
-    if (scaleInput) onScaleInputChange(scaleInput.value);
-}
-
-function onOffsetXInputChange(val) {
-    let clean = String(val).replace('px', '').trim();
-    let num = parseFloat(clean);
-    if (!isNaN(num)) {
-        tempOffsetX = num;
-        currentWheelData.wheelOffsetX = tempOffsetX;
-    }
-    const offsetInput = document.getElementById('offsetx-input');
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetX) + 'px';
-    applyTransform();
-}
-
-function onOffsetXInputBlur() {
-    setTyping(false);
-    const offsetInput = document.getElementById('offsetx-input');
-    if (offsetInput) onOffsetXInputChange(offsetInput.value);
-}
-
-function onOffsetYInputChange(val) {
-    let clean = String(val).replace('px', '').trim();
-    let num = parseFloat(clean);
-    if (!isNaN(num)) {
-        tempOffsetY = num;
-        currentWheelData.wheelOffsetY = tempOffsetY;
-    }
-    const offsetInput = document.getElementById('offsety-input');
-    if (offsetInput) offsetInput.value = Math.round(tempOffsetY) + 'px';
-    applyTransform();
-}
-
-function onOffsetYInputBlur() {
-    setTyping(false);
-    const offsetInput = document.getElementById('offsety-input');
-    if (offsetInput) onOffsetYInputChange(offsetInput.value);
-}
-
-function handleScaleScroll(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        stepScale(e.deltaY < 0 ? 0.05 : -0.05);
-    }
-}
-
-function handleOffsetScroll(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        stepOffsetX(e.deltaY < 0 ? 10 : -10);
-    }
-}
-
-function handleOffsetYScroll(e) {
-    if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        stepOffsetY(e.deltaY < 0 ? 10 : -10);
-    }
-}
-
-function applyTransform() {
-    const container = document.getElementById('wheel-container');
-    if (container) {
-        const isEdit = isEditModeActive();
-        const baseScale = isEdit ? 0.55 : 1.0;
-        const curScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : (tempScale || 1.0);
-        const curOffsetX = isEdit ? 0.0 : ((currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : (tempOffsetX || 0.0));
-        const curOffsetY = isEdit ? 0.0 : ((currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : (tempOffsetY || 0.0));
-        container.style.transform = 'translateX(' + curOffsetX + 'px) translateY(' + curOffsetY + 'px) scale(' + (baseScale * curScale) + ')';
-    }
 }
 
 function toggleDropdown(type, e) {
@@ -674,45 +592,7 @@ function selectMod(type, val, text, e) {
     }
     closeAllDropdowns();
 }
-function handleModalResizeStart(e, modalCardId, dir) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
 
-    const card = document.getElementById(modalCardId);
-    if (!card) return;
-
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startW = card.offsetWidth;
-    const startH = card.offsetHeight;
-
-    function onMouseMove(moveEvt) {
-        const dx = moveEvt.clientX - startX;
-        const dy = moveEvt.clientY - startY;
-
-        if (dir.includes('r')) {
-            card.style.width = Math.max(300, startW + dx) + 'px';
-        }
-        if (dir.includes('l')) {
-            card.style.width = Math.max(300, startW - dx) + 'px';
-        }
-        if (dir.includes('b')) {
-            card.style.height = Math.max(220, startH + dy) + 'px';
-        }
-        if (dir.includes('t')) {
-            card.style.height = Math.max(220, startH - dy) + 'px';
-        }
-    }
-
-    function onMouseUp() {
-        window.removeEventListener('mousemove', onMouseMove);
-        window.removeEventListener('mouseup', onMouseUp);
-    }
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-}
 function closeAllDropdowns() {
     ['dd-edit-list', 'dd-play-list', 'dd-gp-play-list'].forEach(id => {
         const el = document.getElementById(id);

@@ -10,9 +10,9 @@
 <div id="ui-wrapper" onclick="handleWrapperClick(event)">
     <div id="top-follower-bar" class="edit-only">
         <div class="follower-carousel-container" id="follower-carousel-container">
-            <button class="carousel-arrow prev" onclick="cycleFollowerCarousel(-1)">◀</button>
+            <button class="carousel-arrow prev" onclick="cycleFollowerCarousel(-1)">&#x25C0;</button>
             <div class="follower-strip" id="follower-strip"></div>
-            <button class="carousel-arrow next" onclick="cycleFollowerCarousel(1)">▶</button>
+            <button class="carousel-arrow next" onclick="cycleFollowerCarousel(1)">&#x25B6;</button>
         </div>
         <button class="top-settings-btn" onclick="openSettingsModal(event)" title="Settings">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -24,7 +24,7 @@
     </div>
 
     <main id="studio-main-stage">
-        <section id="panel-inventory" class="glass-panel draggable-panel edit-only" data-panel="panel-inventory">
+        <section id="panel-inventory" class="glass-panel draggable-panel edit-only" data-panel="inventory">
             <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-inventory')">
                 <span class="drag-title">APPAREL INVENTORY</span>
                 <span class="drag-hint">RMB to move</span>
@@ -32,9 +32,9 @@
 
             <div class="panel-header">
                 <div class="inv-source-carousel-wrapper" id="inv-source-carousel-wrapper">
-                    <button class="source-nav-arrow" onclick="cycleInvSource(-1)">◀</button>
+                    <button class="source-nav-arrow" onclick="cycleInvSource(-1)">&#x25C0;</button>
                     <div class="inv-source-strip" id="inv-source-strip"></div>
-                    <button class="source-nav-arrow" onclick="cycleInvSource(1)">▶</button>
+                    <button class="source-nav-arrow" onclick="cycleInvSource(1)">&#x25B6;</button>
                 </div>
 
                 <div class="search-box-wrapper">
@@ -42,7 +42,7 @@
                         <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
                     </svg>
                     <input type="text" class="inventory-search-input" id="inventory-search" placeholder="Search armors, jewelry..." oninput="handleInventorySearch(this.value)" onfocus="setTyping(true)" onblur="setTyping(false)">
-                    <button class="search-clear-btn" onclick="clearInventorySearch()">✕</button>
+                    <button class="search-clear-btn" onclick="clearInventorySearch()">&#x2715;</button>
                 </div>
 
                 <div class="filter-chips-bar">
@@ -62,17 +62,41 @@
                     </button>
                 </div>
 
+                <div class="sort-box-container">
+                    <div class="custom-sort-dropdown" id="custom-sort-dropdown" onclick="toggleSortDropdown(event)">
+                        <span class="custom-sort-selected" id="custom-sort-label">Name (A → Z)</span>
+                        <svg class="custom-sort-arrow" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                        <div class="custom-sort-list" id="custom-sort-list" style="display: none;">
+                            <div class="sort-optgroup-title">Alphabetical</div>
+                            <div class="sort-item active" onclick="selectSortOption('name_asc', 'Name (A → Z)', event)">Name (A → Z)</div>
+                            <div class="sort-item" onclick="selectSortOption('name_desc', 'Name (Z → A)', event)">Name (Z → A)</div>
+
+                            <div class="sort-optgroup-title">Combat &amp; Armor</div>
+                            <div class="sort-item" onclick="selectSortOption('rating_desc', 'Armor Rating (High → Low)', event)">Armor Rating (High → Low)</div>
+                            <div class="sort-item" onclick="selectSortOption('rating_asc', 'Armor Rating (Low → High)', event)">Armor Rating (Low → High)</div>
+                            <div class="sort-item" onclick="selectSortOption('class_order', 'Class (Heavy → Light → Cloth)', event)">Class (Heavy → Light → Cloth)</div>
+                            <div class="sort-item" onclick="selectSortOption('slot_order', 'Body Slot (Head → Feet)', event)">Body Slot (Head → Feet)</div>
+
+                            <div class="sort-optgroup-title">Weight &amp; Value</div>
+                            <div class="sort-item" onclick="selectSortOption('weight_asc', 'Weight (Low → High)', event)">Weight (Low → High)</div>
+                            <div class="sort-item" onclick="selectSortOption('weight_desc', 'Weight (High → Low)', event)">Weight (High → Low)</div>
+                            <div class="sort-item" onclick="selectSortOption('value_desc', 'Value (High → Low)', event)">Value (High → Low)</div>
+                            <div class="sort-item" onclick="selectSortOption('value_asc', 'Value (Low → High)', event)">Value (Low → High)</div>
+
+                            <div class="sort-optgroup-title">Status</div>
+                            <div class="sort-item" onclick="selectSortOption('equipped_first', 'Equipped First', event)">Equipped First</div>
+                            <div class="sort-item" onclick="selectSortOption('enchanted_first', 'Enchanted First', event)">Enchanted First</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="sort-and-meta-row">
                     <div class="inventory-weight-stat">
                         <span class="stat-label">Weight:</span>
                         <span class="stat-value" id="stat-carry-weight">0 / 300</span>
                     </div>
-                    <select class="sort-select-box" id="sort-select" onchange="handleSortChange(this.value)">
-                        <option value="name">Sort: Name (A-Z)</option>
-                        <option value="rating">Sort: Armor Rating</option>
-                        <option value="weight">Sort: Weight (Low-High)</option>
-                        <option value="value">Sort: Value</option>
-                    </select>
                 </div>
             </div>
 
@@ -106,10 +130,13 @@
 
             <div class="panel-footer-actions">
                 <button class="btn-secondary" onclick="ctxStashAllOutfits(event)">
-                    <span>Stash Inactive</span>
+                    <span>Stash in Wardrobe</span>
                 </button>
                 <button class="btn-secondary" onclick="ctxRetrieveAllOutfits(event)">
-                    <span>Retrieve All</span>
+                    <span>Take All from Wardrobe</span>
+                </button>
+                <button class="btn-secondary btn-full-span" onclick="openTransferAllMenu(event)">
+                    <span>Transfer All To...</span>
                 </button>
             </div>
 
@@ -146,7 +173,7 @@
         </div>
 
         <div class="right-unified-studio-container edit-only" id="right-dock-container">
-            <section id="panel-slots-rail" class="glass-panel draggable-panel" data-panel="panel-slots-rail">
+            <section id="panel-slots-rail" class="glass-panel draggable-panel" data-panel="slots-rail">
                 <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-slots-rail')">
                     <span class="drag-title">SLOTS RAIL</span>
                     <span class="drag-hint">RMB to move</span>
@@ -168,19 +195,19 @@
                 <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'br')"></div>
             </section>
 
-            <section id="panel-slot-details" class="glass-panel draggable-panel" data-panel="panel-slot-details">
+            <section id="panel-slot-details" class="glass-panel draggable-panel" data-panel="slot-details">
                 <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-slot-details')">
                     <span class="drag-title">SLOT INSPECTOR</span>
                     <span class="drag-hint">RMB to move</span>
                 </div>
 
                 <div class="wheel-floating-header">
-                    <button class="nav-arrow-btn" onclick="changeWheel(-1)">◀</button>
+                    <button class="nav-arrow-btn" onclick="changeWheel(-1)">&#x25C0;</button>
                     <div class="wheel-title-container">
                         <span class="wheel-index-label" id="wheel-index-label">WHEEL 1 OF 1</span>
                         <span class="wheel-custom-name" id="wheel-name">Wheel 1</span>
                     </div>
-                    <button class="nav-arrow-btn" onclick="changeWheel(1)">▶</button>
+                    <button class="nav-arrow-btn" onclick="changeWheel(1)">&#x25B6;</button>
                     <div class="wheel-quick-actions">
                         <button class="toolbar-btn" onclick="addWheel()">+ Wheel</button>
                         <button class="toolbar-btn" onclick="ctxRenameWheel(event)">Rename</button>
@@ -202,49 +229,141 @@
                 </div>
 
                 <div class="slot-context-and-rating-controls">
+                    <div class="rating-label-text">Preference:</div>
                     <div class="stars-rating-widget" id="stars-widget">
-                        <span class="star-icon active" onclick="setSlotRatingDirect(1)">★</span>
-                        <span class="star-icon active" onclick="setSlotRatingDirect(2)">★</span>
-                        <span class="star-icon active" onclick="setSlotRatingDirect(3)">★</span>
-                        <span class="star-icon" onclick="setSlotRatingDirect(4)">★</span>
-                        <span class="star-icon" onclick="setSlotRatingDirect(5)">★</span>
+                        <span class="star-icon active" onclick="setSlotRatingDirect(1)">&#x2605;</span>
+                        <span class="star-icon active" onclick="setSlotRatingDirect(2)">&#x2605;</span>
+                        <span class="star-icon active" onclick="setSlotRatingDirect(3)">&#x2605;</span>
+                        <span class="star-icon" onclick="setSlotRatingDirect(4)">&#x2605;</span>
+                        <span class="star-icon" onclick="setSlotRatingDirect(5)">&#x2605;</span>
                     </div>
-                    <button class="toolbar-btn" onclick="openContextModal(event)">Rules Manager</button>
                 </div>
 
                 <div class="inspector-conditions-wrapper">
-                    <div class="cond-group-title">ACTIONS</div>
-                    <div class="context-chips-group" id="inspector-actions-group"></div>
-
-                    <div class="cond-group-title">LOCATIONS</div>
-                    <div class="context-chips-group" id="inspector-locations-group"></div>
-
-                    <div class="cond-group-title">WEATHER & TIME</div>
-                    <div class="context-chips-group" id="inspector-modifiers-group"></div>
+                    <div class="mini-tabs-bar">
+                        <button type="button" class="mini-tab active" id="tab-ctx-actions" onclick="switchInspectorContextTab('action', event)">Actions (5)</button>
+                        <button type="button" class="mini-tab" id="tab-ctx-locations" onclick="switchInspectorContextTab('location', event)">Locations (12)</button>
+                        <button type="button" class="mini-tab" id="tab-ctx-weather" onclick="switchInspectorContextTab('weather', event)">Weather & Time (6)</button>
+                    </div>
+                    <div class="mini-tab-content" id="inspector-conditions-chips"></div>
                 </div>
 
                 <div class="drawer-items-list" id="drawer-items-list"></div>
 
                 <div class="drawer-actions-row">
-                    <button class="btn-primary" onclick="saveCurrentEquippedToSlot()">
+                    <button class="btn-primary" id="btn-save-drawer-gear" onclick="saveCurrentEquippedToSlot()">
                         <span>Save Current Gear</span>
                     </button>
-                    <button class="btn-danger-outline" onclick="clearSelectedSlot()">
+                    <button class="btn-secondary" onclick="addInspectedItemToCurrentSlot()" title="Add selected inventory item to this slot">
+                        <span>+ Add Item</span>
+                    </button>
+                    <button class="btn-danger-outline" onclick="ctxDeleteSlot(event)" title="Delete this slot">
+                        <span>Delete</span>
+                    </button>
+                    <button class="btn-danger-outline" onclick="clearSelectedSlot()" title="Clear items from slot">
                         <span>Clear</span>
                     </button>
                 </div>
 
-                <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 't')"></div>
-                <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'b')"></div>
-                <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'l')"></div>
-                <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'r')"></div>
-                <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'tl')"></div>
-                <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'tr')"></div>
-                <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'bl')"></div>
-                <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'panel-slot-details', 'br')"></div>
+                <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 't')"></div>
+                <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'b')"></div>
+                <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'l')"></div>
+                <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'r')"></div>
+                <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'tl')"></div>
+                <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'tr')"></div>
+                <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'bl')"></div>
+                <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'panel-slots-rail', 'br')"></div>
             </section>
         </div>
     </main>
+
+    <section id="panel-settings" class="glass-panel draggable-panel edit-only" data-panel="settings" style="display: none;">
+        <div class="panel-drag-handle" onmousedown="handlePanelDragStart(event, 'panel-settings')">
+            <span class="drag-title">SETTINGS &amp; CONFIGURATION</span>
+            <span class="drag-hint">RMB to move</span>
+        </div>
+
+        <div class="panel-header" style="flex-direction: row; justify-content: space-between; align-items: center;">
+            <span class="rail-title">WHEEL SETTINGS</span>
+            <button class="modal-close" onclick="hideSettingsModal()">&#x2715;</button>
+        </div>
+
+        <div class="panel-body-scrollable settings-grid">
+            <div class="settings-section">
+                <h4>Controls &amp; Keybinds</h4>
+                <div class="setting-row">
+                    <label>Edit Mode Key</label>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <div class="custom-dropdown" onclick="toggleDropdown('edit', event)">
+                            <span id="dd-edit-text">None</span>
+                            <div class="dropdown-list" id="dd-edit-list" style="display: none;">
+                                <div class="dropdown-item" onclick="selectMod('edit', 0, 'None', event)">None</div>
+                                <div class="dropdown-item" onclick="selectMod('edit', 42, 'Shift', event)">Shift</div>
+                                <div class="dropdown-item" onclick="selectMod('edit', 29, 'Ctrl', event)">Ctrl</div>
+                                <div class="dropdown-item" onclick="selectMod('edit', 56, 'Alt', event)">Alt</div>
+                            </div>
+                        </div>
+                        <button id="btn-edit-key" class="keybind-btn" onclick="startKeyListen('edit')">[N]</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <label>Play Mode Key</label>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <div class="custom-dropdown" onclick="toggleDropdown('play', event)">
+                            <span id="dd-play-text">None</span>
+                            <div class="dropdown-list" id="dd-play-list" style="display: none;">
+                                <div class="dropdown-item" onclick="selectMod('play', 0, 'None', event)">None</div>
+                                <div class="dropdown-item" onclick="selectMod('play', 42, 'Shift', event)">Shift</div>
+                                <div class="dropdown-item" onclick="selectMod('play', 29, 'Ctrl', event)">Ctrl</div>
+                                <div class="dropdown-item" onclick="selectMod('play', 56, 'Alt', event)">Alt</div>
+                            </div>
+                        </div>
+                        <button id="btn-play-key" class="keybind-btn" onclick="startKeyListen('play')">[V]</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <label>Gamepad Button</label>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <div class="custom-dropdown" onclick="toggleDropdown('gp-play', event)">
+                            <span id="dd-gp-play-text">LB</span>
+                            <div class="dropdown-list" id="dd-gp-play-list" style="display: none;">
+                                <div class="dropdown-item" onclick="selectMod('gp-play', 0, 'None', event)">None</div>
+                                <div class="dropdown-item" onclick="selectMod('gp-play', 256, 'LB', event)">LB</div>
+                                <div class="dropdown-item" onclick="selectMod('gp-play', 512, 'RB', event)">RB</div>
+                                <div class="dropdown-item" onclick="selectMod('gp-play', 9, 'LT', event)">LT</div>
+                                <div class="dropdown-item" onclick="selectMod('gp-play', 10, 'RT', event)">RT</div>
+                            </div>
+                        </div>
+                        <button id="btn-gp-play-key" class="keybind-btn" onclick="startGamepadListen('play')">[DPad Right]</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h4>Behavior</h4>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="chk-auto-close-equip">
+                    <label for="chk-auto-close-equip">Auto-Close Wheel on Equip</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-footer-actions">
+            <button class="btn-secondary" onclick="hideSettingsModal()">Cancel</button>
+            <button class="btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+
+        <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'panel-settings', 't')"></div>
+        <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'b')"></div>
+        <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'l')"></div>
+        <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'r')"></div>
+        <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'tl')"></div>
+        <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'tr')"></div>
+        <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'bl')"></div>
+        <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'panel-settings', 'br')"></div>
+    </section>
 
     <div id="gamepad-hints-bar" class="gamepad-hints-bar play-only" style="display:none;">
         <div class="gp-hint-item"><span class="gp-key">A</span><span>Equip Outfit</span></div>
@@ -255,217 +374,51 @@
 
     <div id="slot-context-menu" class="context-menu-popup">
         <div class="ctx-header" id="slot-ctx-title">Slot Options</div>
-        <div class="ctx-item" onclick="ctxSaveOutfit(event)">Save Current Gear</div>
-        <div class="ctx-item" onclick="ctxRenameSlot(event)">Rename Preset</div>
-        <div class="ctx-item" onclick="openContextModal(event)">Set Tags & Stars</div>
-        <div class="ctx-item" id="ctx-slot-wardrobe-toggle" onclick="ctxToggleSlotWardrobe(event)">Transfer to Cloud</div>
+        <div class="ctx-item" onmousedown="ctxSaveOutfit(event)" onclick="ctxSaveOutfit(event)">Save Current Gear</div>
+        <div class="ctx-item" onmousedown="ctxRenameSlot(event)" onclick="ctxRenameSlot(event)">Rename Preset</div>
+        <div class="ctx-item" id="ctx-slot-wardrobe-toggle" onmousedown="ctxToggleSlotWardrobe(event)" onclick="ctxToggleSlotWardrobe(event)">Store in Wardrobe</div>
         <div class="ctx-divider"></div>
-        <div class="ctx-item ctx-danger" onclick="ctxClearSlot(event)">Clear Slot</div>
-        <div class="ctx-item ctx-danger" onclick="ctxDeleteSlot(event)">Delete Slot</div>
+        <div class="ctx-item" onmousedown="ctxMoveSlot(-1, event)" onclick="ctxMoveSlot(-1, event)">Move Up / Left</div>
+        <div class="ctx-item" onmousedown="ctxMoveSlot(1, event)" onclick="ctxMoveSlot(1, event)">Move Down / Right</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item ctx-danger" onmousedown="ctxClearSlot(event)" onclick="ctxClearSlot(event)">Clear Slot</div>
+        <div class="ctx-item ctx-danger" onmousedown="ctxDeleteSlot(event)" onclick="ctxDeleteSlot(event)">Delete Slot</div>
+    </div>
+
+    <div id="item-context-menu" class="context-menu-popup">
+        <div class="ctx-header" id="item-ctx-title">Item Options</div>
+        <div class="ctx-item" onmousedown="ctxItemEquipToggle(event)" onclick="ctxItemEquipToggle(event)">Equip / Unequip</div>
+        <div class="ctx-item" onmousedown="ctxItemAddToCurrentSlot(event)" onclick="ctxItemAddToCurrentSlot(event)">+ Add to Current Slot</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-header">Transfer To:</div>
+        <div id="item-transfer-targets-list" class="item-transfer-targets-container"></div>
+    </div>
+
+    <div id="transfer-all-context-menu" class="context-menu-popup">
+        <div class="ctx-header" id="transfer-all-ctx-title">Transfer All Apparel To:</div>
+        <div id="transfer-all-targets-list" class="item-transfer-targets-container"></div>
     </div>
 
     <div id="wheel-context-menu" class="context-menu-popup">
         <div class="ctx-header">Wheel Options</div>
-        <div class="ctx-item" onclick="addWheel()">+ Create New Wheel</div>
-        <div class="ctx-item" onclick="addSlot()">+ Add Slot</div>
-        <div class="ctx-item" onclick="ctxRenameWheel(event)">Rename Wheel</div>
-        <div class="ctx-item" onclick="openSettingsModal(event)">Settings</div>
+        <div class="ctx-item" onmousedown="addWheel()" onclick="addWheel()">+ Create New Wheel</div>
+        <div class="ctx-item" onmousedown="addSlot()" onclick="addSlot()">+ Add Slot</div>
+        <div class="ctx-item" onmousedown="ctxRenameWheel(event)" onclick="ctxRenameWheel(event)">Rename Wheel</div>
+        <div class="ctx-item" onmousedown="ctxMoveWheel(-1, event)" onclick="ctxMoveWheel(-1, event)">Move Wheel Left</div>
+        <div class="ctx-item" onmousedown="ctxMoveWheel(1, event)" onclick="ctxMoveWheel(1, event)">Move Wheel Right</div>
+        <div class="ctx-item" onmousedown="openSettingsModal(event)" onclick="openSettingsModal(event)">Settings</div>
         <div class="ctx-divider"></div>
-        <div class="ctx-item" onclick="ctxStashAllOutfits(event)">Stash Inactive to Cloud</div>
-        <div class="ctx-item" onclick="ctxRetrieveAllOutfits(event)">Retrieve All Outfits</div>
+        <div class="ctx-item" onmousedown="ctxStashAllOutfits(event)" onclick="ctxStashAllOutfits(event)">Stash in Wardrobe</div>
+        <div class="ctx-item" onmousedown="ctxRetrieveAllOutfits(event)" onclick="ctxRetrieveAllOutfits(event)">Take All from Wardrobe</div>
         <div class="ctx-divider"></div>
-        <div class="ctx-item ctx-danger" onclick="ctxDeleteWheel(event)">Delete Current Wheel</div>
-    </div>
-
-    <div id="settings-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card draggable-panel" id="settings-modal-card" data-panel="settings-modal-card">
-            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'settings-modal-card')">
-                <h3>Wheel Settings</h3>
-                <button class="modal-close" onclick="hideSettingsModal()">✕</button>
-            </div>
-            <div class="modal-body settings-grid">
-                <div class="settings-section">
-                    <h4>Appearance & Scale</h4>
-                    <div class="setting-row">
-                        <label>Scale</label>
-                        <div class="number-control">
-                            <button onclick="stepScale(-0.05)">-</button>
-                            <input type="text" id="scale-input" value="100%" oninput="onScaleInputChange(this.value)" onblur="onScaleInputBlur()" onfocus="setTyping(true)">
-                            <button onclick="stepScale(0.05)">+</button>
-                        </div>
-                    </div>
-                    <div class="setting-row" onwheel="handleOffsetScroll(event)">
-                        <label>X Position</label>
-                        <div class="number-control">
-                            <button onclick="stepOffsetX(-10)">-</button>
-                            <input type="text" id="offsetx-input" value="0px" oninput="onOffsetXInputChange(this.value)" onblur="onOffsetXInputBlur()" onfocus="setTyping(true)">
-                            <button onclick="stepOffsetX(10)">+</button>
-                        </div>
-                    </div>
-                    <div class="setting-row" onwheel="handleOffsetYScroll(event)">
-                        <label>Y Position</label>
-                        <div class="number-control">
-                            <button onclick="stepOffsetY(-10)">-</button>
-                            <input type="text" id="offsety-input" value="0px" oninput="onOffsetYInputChange(this.value)" onblur="onOffsetYInputBlur()" onfocus="setTyping(true)">
-                            <button onclick="stepOffsetY(10)">+</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="settings-section">
-                    <h4>Adaptive Wardrobe Automation</h4>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-auto-master">
-                        <label for="chk-auto-master">Master Auto System</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-auto-city">
-                        <label for="chk-auto-city">Auto Switch in Cities/Towns</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-auto-home">
-                        <label for="chk-auto-home">Auto Switch in Player Homes</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-auto-combat">
-                        <label for="chk-auto-combat">Auto Switch in Combat</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-auto-swim">
-                        <label for="chk-auto-swim">Auto Switch when Swimming</label>
-                    </div>
-                    <div class="checkbox-row">
-                        <input type="checkbox" id="chk-auto-stash">
-                        <label for="chk-auto-stash">Auto Stash Inactive Outfits to Cloud</label>
-                    </div>
-                </div>
-
-                <div class="settings-section">
-                    <h4>Keybinds & Controls</h4>
-                    <div class="btn-group-row">
-                        <button class="settings-nav-btn" onclick="openKeyboardModal(event)">Configure Keyboard Keys</button>
-                        <button class="settings-nav-btn" onclick="openGamepadModal(event)">Configure Gamepad Buttons</button>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="hideSettingsModal()">Cancel</button>
-                <button class="btn-primary" onclick="saveSettings()">Save Settings</button>
-            </div>
-
-            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 't')"></div>
-            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'b')"></div>
-            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'l')"></div>
-            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'r')"></div>
-            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'tl')"></div>
-            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'tr')"></div>
-            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'bl')"></div>
-            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'settings-modal-card', 'br')"></div>
-        </div>
-    </div>
-
-    <div id="keyboard-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card draggable-panel" id="keyboard-modal-card" data-panel="keyboard-modal-card">
-            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'keyboard-modal-card')">
-                <h3>Keyboard Controls</h3>
-                <button class="modal-close" onclick="hideKeyboardModal()">✕</button>
-            </div>
-            <div class="modal-body settings-grid">
-                <div class="setting-row">
-                    <label>Edit Modifier</label>
-                    <div class="custom-dropdown" onclick="toggleDropdown('edit', event)">
-                        <span id="dd-edit-text">None</span>
-                        <div class="dropdown-list" id="dd-edit-list" style="display: none;">
-                            <div class="dropdown-item" onclick="selectMod('edit', 0, 'None', event)">None</div>
-                            <div class="dropdown-item" onclick="selectMod('edit', 42, 'Shift', event)">Shift</div>
-                            <div class="dropdown-item" onclick="selectMod('edit', 29, 'Ctrl', event)">Ctrl</div>
-                            <div class="dropdown-item" onclick="selectMod('edit', 56, 'Alt', event)">Alt</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="setting-row">
-                    <label>Edit Mode Key</label>
-                    <button id="btn-edit-key" class="keybind-btn" onclick="startKeyListen('edit')">[N]</button>
-                </div>
-                <div class="setting-row">
-                    <label>Play Modifier</label>
-                    <div class="custom-dropdown" onclick="toggleDropdown('play', event)">
-                        <span id="dd-play-text">None</span>
-                        <div class="dropdown-list" id="dd-play-list" style="display: none;">
-                            <div class="dropdown-item" onclick="selectMod('play', 0, 'None', event)">None</div>
-                            <div class="dropdown-item" onclick="selectMod('play', 42, 'Shift', event)">Shift</div>
-                            <div class="dropdown-item" onclick="selectMod('play', 29, 'Ctrl', event)">Ctrl</div>
-                            <div class="dropdown-item" onclick="selectMod('play', 56, 'Alt', event)">Alt</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="setting-row">
-                    <label>Play Mode Key</label>
-                    <button id="btn-play-key" class="keybind-btn" onclick="startKeyListen('play')">[V]</button>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="hideKeyboardModal()">Back</button>
-                <button class="btn-primary" onclick="saveKeyboardSettings()">Save</button>
-            </div>
-
-            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 't')"></div>
-            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'b')"></div>
-            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'l')"></div>
-            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'r')"></div>
-            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'tl')"></div>
-            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'tr')"></div>
-            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'bl')"></div>
-            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'keyboard-modal-card', 'br')"></div>
-        </div>
-    </div>
-
-    <div id="gamepad-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card draggable-panel" id="gamepad-modal-card" data-panel="gamepad-modal-card">
-            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'gamepad-modal-card')">
-                <h3>Gamepad Controls</h3>
-                <button class="modal-close" onclick="hideGamepadModal()">✕</button>
-            </div>
-            <div class="modal-body settings-grid">
-                <div class="setting-row">
-                    <label>Play Modifier</label>
-                    <div class="custom-dropdown" onclick="toggleDropdown('gp-play', event)">
-                        <span id="dd-gp-play-text">LB</span>
-                        <div class="dropdown-list" id="dd-gp-play-list" style="display: none;">
-                            <div class="dropdown-item" onclick="selectMod('gp-play', 0, 'None', event)">None</div>
-                            <div class="dropdown-item" onclick="selectMod('gp-play', 256, 'LB', event)">LB</div>
-                            <div class="dropdown-item" onclick="selectMod('gp-play', 512, 'RB', event)">RB</div>
-                            <div class="dropdown-item" onclick="selectMod('gp-play', 9, 'LT', event)">LT</div>
-                            <div class="dropdown-item" onclick="selectMod('gp-play', 10, 'RT', event)">RT</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="setting-row">
-                    <label>Play Mode Key</label>
-                    <button id="btn-gp-play-key" class="keybind-btn" onclick="startGamepadListen('play')">[DPad Right]</button>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="hideGamepadModal()">Back</button>
-                <button class="btn-primary" onclick="saveGamepadSettings()">Save</button>
-            </div>
-
-            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 't')"></div>
-            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'b')"></div>
-            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'l')"></div>
-            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'r')"></div>
-            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'tl')"></div>
-            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'tr')"></div>
-            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'bl')"></div>
-            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'gamepad-modal-card', 'br')"></div>
-        </div>
+        <div class="ctx-item ctx-danger" onmousedown="ctxDeleteWheel(event)" onclick="ctxDeleteWheel(event)">Delete Current Wheel</div>
     </div>
 
     <div id="rename-modal" class="fullscreen-modal-backdrop">
         <div class="modal-card modal-sm">
             <div class="modal-header">
                 <h3 id="modal-title-text">Rename Preset</h3>
-                <button class="modal-close" onclick="hideRenameModal()">✕</button>
+                <button class="modal-close" onclick="hideRenameModal()">&#x2715;</button>
             </div>
             <div class="modal-body">
                 <input type="text" id="rename-input" class="modal-input" maxlength="30" onkeydown="handleRenameKey(event)">
@@ -474,44 +427,6 @@
                 <button class="btn-secondary" onclick="hideRenameModal()">Cancel</button>
                 <button class="btn-primary" onclick="confirmRename()">Save</button>
             </div>
-        </div>
-    </div>
-
-    <div id="context-modal" class="fullscreen-modal-backdrop">
-        <div class="modal-card draggable-panel" id="context-modal-card" data-panel="context-modal-card" style="width: 540px; max-height: 85vh;">
-            <div class="modal-header panel-drag-handle" onmousedown="handlePanelDragStart(event, 'context-modal-card')">
-                <h3>Slot Auto-Switch Rules & Preferences</h3>
-                <button class="modal-close" onclick="hideContextModal()">✕</button>
-            </div>
-            <div class="modal-body settings-grid" style="overflow-y: auto;">
-                <div class="settings-section">
-                    <h4>Active Trigger Conditions</h4>
-                    <div id="modal-conditions-checkboxes-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"></div>
-                </div>
-                <div class="settings-section">
-                    <h4>Preference Rating (Selection Weight)</h4>
-                    <div class="star-rating" id="modal-star-rating">
-                        <span class="star" onclick="setStarRating(1)">★</span>
-                        <span class="star" onclick="setStarRating(2)">★</span>
-                        <span class="star" onclick="setStarRating(3)">★</span>
-                        <span class="star" onclick="setStarRating(4)">★</span>
-                        <span class="star" onclick="setStarRating(5)">★</span>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="hideContextModal()">Cancel</button>
-                <button class="btn-primary" onclick="saveSlotContextAndRating()">Save Rules</button>
-            </div>
-
-            <div class="resize-handle resize-t" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 't')"></div>
-            <div class="resize-handle resize-b" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'b')"></div>
-            <div class="resize-handle resize-l" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'l')"></div>
-            <div class="resize-handle resize-r" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'r')"></div>
-            <div class="resize-handle resize-tl" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'tl')"></div>
-            <div class="resize-handle resize-tr" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'tr')"></div>
-            <div class="resize-handle resize-bl" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'bl')"></div>
-            <div class="resize-handle resize-br" onmousedown="handlePanelResizeStart(event, 'context-modal-card', 'br')"></div>
         </div>
     </div>
 </div>
