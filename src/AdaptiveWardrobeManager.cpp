@@ -41,10 +41,10 @@ std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe(RE::FormID a_ac
 
 ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const noexcept {
     if (HasContext(activeContext, ContextFlags::Sleep)) return ContextFlags::Sleep;
+    if (HasContext(activeContext, ContextFlags::Mount)) return ContextFlags::Mount;
     if (HasContext(activeContext, ContextFlags::Combat)) return ContextFlags::Combat;
     if (HasContext(activeContext, ContextFlags::Swim)) return ContextFlags::Swim;
     if (HasContext(activeContext, ContextFlags::InWater)) return ContextFlags::InWater;
-    if (HasContext(activeContext, ContextFlags::Mount)) return ContextFlags::Mount;
 
     if (HasContext(activeContext, ContextFlags::Dungeon)) return ContextFlags::Dungeon;
     if (HasContext(activeContext, ContextFlags::Jail)) return ContextFlags::Jail;
@@ -138,6 +138,10 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
                 break;
             }
         }
+    }
+
+    if (candidates.empty() && (HasContext(targetContext, ContextFlags::Mount) || HasContext(targetContext, ContextFlags::Sleep))) {
+        return std::nullopt;
     }
 
     if (candidates.empty() && HasContext(targetContext, ContextFlags::City)) {

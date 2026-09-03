@@ -13,6 +13,29 @@
 
 using json = nlohmann::json;
 
+struct OutfitItem {
+    RE::FormID formID{ 0 };
+    uint16_t uniqueID{ 0 };
+    RE::FormID enchantmentID{ 0 };
+    std::string customName{};
+};
+
+inline void to_json(json& j, const OutfitItem& itm) {
+    j = json{
+        {"formID", itm.formID},
+        {"uniqueID", itm.uniqueID},
+        {"enchantmentID", static_cast<uint32_t>(itm.enchantmentID)},
+        {"customName", itm.customName}
+    };
+}
+
+inline void from_json(const json& j, OutfitItem& itm) {
+    itm.formID = j.value("formID", static_cast<RE::FormID>(0));
+    itm.uniqueID = j.value("uniqueID", static_cast<uint16_t>(0));
+    itm.enchantmentID = static_cast<RE::FormID>(j.value("enchantmentID", static_cast<uint32_t>(0)));
+    itm.customName = j.value("customName", "");
+}
+
 enum class ContextFlags : uint64_t {
     None            = 0,
     Default         = 1ULL << 0,
@@ -88,6 +111,7 @@ struct AdaptiveOutfit {
     std::string id;
     std::string name;
     std::vector<RE::FormID> itemIDs;
+    std::vector<OutfitItem> items;
     std::vector<SuitabilityRule> suitabilities;
     uint8_t preferenceStars = 3;
     ControlState controlState = ControlState::Normal;
@@ -99,6 +123,7 @@ inline void to_json(json& j, const AdaptiveOutfit& o) {
         {"id", o.id},
         {"name", o.name},
         {"itemIDs", o.itemIDs},
+        {"items", o.items},
         {"suitabilities", o.suitabilities},
         {"preferenceStars", o.preferenceStars},
         {"controlState", static_cast<uint8_t>(o.controlState)},
@@ -110,6 +135,9 @@ inline void from_json(const json& j, AdaptiveOutfit& o) {
     j.at("id").get_to(o.id);
     j.at("name").get_to(o.name);
     j.at("itemIDs").get_to(o.itemIDs);
+    if (j.contains("items")) {
+        j.at("items").get_to(o.items);
+    }
     j.at("suitabilities").get_to(o.suitabilities);
     j.at("preferenceStars").get_to(o.preferenceStars);
     uint8_t cs = j.at("controlState").get<uint8_t>();

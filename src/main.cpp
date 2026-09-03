@@ -57,40 +57,7 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
                 isMenuOpen.store(false, std::memory_order_release);
 
                 PrismaUI->RegisterConsoleCallback(view, OnConsoleMessageCallbackFunc);
-                PrismaUI->RegisterJSListener(view, "SaveSettings", SaveSettingsListener);
-                PrismaUI->RegisterJSListener(view, "SetTypingMode", SetTypingModeListener);
-                PrismaUI->RegisterJSListener(view, "SaveOutfit", SaveOutfitListener);
-                PrismaUI->RegisterJSListener(view, "SaveOutfitToSlot", SaveOutfitListener);
-                PrismaUI->RegisterJSListener(view, "RenameSlot", RenameSlotListener);
-                PrismaUI->RegisterJSListener(view, "RenameWheel", RenameWheelListener);
-                PrismaUI->RegisterJSListener(view, "ClearSlot", ClearSlotListener);
-                PrismaUI->RegisterJSListener(view, "DeleteSlot", DeleteSlotListener);
-                PrismaUI->RegisterJSListener(view, "EquipSlot", EquipSlotListener);
-                PrismaUI->RegisterJSListener(view, "OnCloseWheel", OnCloseWheelListener);
-                PrismaUI->RegisterJSListener(view, "ChangeWheel", ChangeWheelListener);
-                PrismaUI->RegisterJSListener(view, "AddWheel", AddWheelListener);
-                PrismaUI->RegisterJSListener(view, "AddSlot", AddSlotListener);
-                PrismaUI->RegisterJSListener(view, "DeleteWheel", DeleteWheelListener);
-                PrismaUI->RegisterJSListener(view, "SetSlotContext", SetSlotContextListener);
-                PrismaUI->RegisterJSListener(view, "SetSlotRating", SetSlotRatingListener);
-                PrismaUI->RegisterJSListener(view, "SetSlotType", SetSlotTypeListener);
-                PrismaUI->RegisterJSListener(view, "ToggleItemEquip", ToggleItemEquipListener);
-                PrismaUI->RegisterJSListener(view, "TransferItem", TransferItemListener);
-                PrismaUI->RegisterJSListener(view, "TransferAllInventory", TransferAllInventoryListener);
-                PrismaUI->RegisterJSListener(view, "OrbitCamera", OrbitCameraListener);
-                PrismaUI->RegisterJSListener(view, "ZoomCamera", ZoomCameraListener);
-                PrismaUI->RegisterJSListener(view, "PanCamera", PanCameraListener);
-                PrismaUI->RegisterJSListener(view, "SelectTargetActor", SelectTargetActorListener);
-                PrismaUI->RegisterJSListener(view, "RetrieveAllOutfits", RetrieveAllOutfitsListener);
-                PrismaUI->RegisterJSListener(view, "StashAllOutfits", StashAllOutfitsListener);
-                PrismaUI->RegisterJSListener(view, "StashSlotOutfit", StashSlotOutfitListener);
-                PrismaUI->RegisterJSListener(view, "RetrieveSlotOutfit", RetrieveSlotOutfitListener);
-                PrismaUI->RegisterJSListener(view, "StashWheelOutfits", StashWheelOutfitsListener);
-                PrismaUI->RegisterJSListener(view, "RetrieveWheelOutfits", RetrieveWheelOutfitsListener);
-                PrismaUI->RegisterJSListener(view, "AddItemToSlot", AddItemToSlotListener);
-                PrismaUI->RegisterJSListener(view, "RemoveItemFromSlot", RemoveItemFromSlotListener);
-                PrismaUI->RegisterJSListener(view, "MoveSlot", MoveSlotListener);
-                PrismaUI->RegisterJSListener(view, "MoveWheel", MoveWheelListener);
+                RegisterJSListeners(view);
                 SKSE::log::info("Registered all JS listeners successfully");
             }
         }
@@ -99,8 +66,10 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
     } else if (message->type == SKSE::MessagingInterface::kPreLoadGame) {
         g_gameFullyLoaded.store(false, std::memory_order_release);
         g_gameSessionGeneration.fetch_add(1, std::memory_order_acq_rel);
+        ExecutionQueue::GetSingleton()->ResetEnvironmentState();
     } else if (message->type == SKSE::MessagingInterface::kPostLoadGame || message->type == SKSE::MessagingInterface::kNewGame) {
         LoadData();
+        ExecutionQueue::GetSingleton()->ResetEnvironmentState();
         g_gameFullyLoaded.store(true, std::memory_order_release);
         ExecutionQueue::GetSingleton()->RegisterEvents();
     }

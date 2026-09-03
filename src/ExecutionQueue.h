@@ -34,6 +34,7 @@ public:
     void RegisterEvents();
     void ResetEnvironmentState();
     void EvaluateAndQueueChange(bool isEmergency);
+    void Update();
 
     RE::BSEventNotifyControl ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) override;
     RE::BSEventNotifyControl ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*) override;

@@ -1,9 +1,5 @@
 #include "pch.h"
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
 #ifdef max
 #undef max
 #endif
@@ -25,7 +21,6 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
-#include <sstream>
 #include <set>
 #include <unordered_set>
 #include <SKSE/SKSE.h>
@@ -44,8 +39,14 @@ static std::string ToLowerString(std::string str) {
     return str;
 }
 
+static std::string FormatFormID(RE::FormID a_id) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "0x%08X", a_id);
+    return std::string(buf);
+}
+
 static std::string SanitizeUtf8(const std::string& str) {
-    if (str.empty()) return "Apparel";
+    if (str.empty()) return "";
     std::string out;
     out.reserve(str.size());
     for (size_t i = 0; i < str.size(); ++i) {
@@ -67,7 +68,6 @@ static std::string SanitizeUtf8(const std::string& str) {
             out += ' ';
         }
     }
-    if (out.empty()) return "Apparel";
     return out;
 }
 
@@ -78,8 +78,8 @@ static ContextFlags ParseContextTagToFlags(const std::string& tag) {
     if (lower.find("combat") != std::string::npos || lower.find("fight") != std::string::npos) flags |= ContextFlags::Combat;
     if (lower.find("swim") != std::string::npos) flags |= ContextFlags::Swim;
     if (lower.find("in_water") != std::string::npos || lower.find("water") != std::string::npos) flags |= ContextFlags::InWater;
-    if (lower.find("sleep") != std::string::npos || lower.find("bed") != std::string::npos) flags |= ContextFlags::Sleep;
-    if (lower.find("mount") != std::string::npos || lower.find("horse") != std::string::npos) flags |= ContextFlags::Mount;
+    if (lower.find("sleep") != std::string::npos || lower.find("bed") != std::string::npos || lower.find("pajama") != std::string::npos || lower.find("nightwear") != std::string::npos || lower.find("rest") != std::string::npos) flags |= ContextFlags::Sleep;
+    if (lower.find("mount") != std::string::npos || lower.find("horse") != std::string::npos || lower.find("ride") != std::string::npos || lower.find("riding") != std::string::npos) flags |= ContextFlags::Mount;
 
     if (lower.find("dungeon") != std::string::npos || lower.find("tomb") != std::string::npos || lower.find("ruin") != std::string::npos) flags |= ContextFlags::Dungeon;
     if (lower.find("home") != std::string::npos || lower.find("house") != std::string::npos) flags |= ContextFlags::PlayerHome;
@@ -154,6 +154,7 @@ void SyncWheelOutfitsToAdaptiveWardrobe() {
                     ao.id = std::to_string(wIdx) + "_" + std::to_string(sIdx);
                     ao.name = slot.outfit->name;
                     ao.itemIDs = slot.outfit->itemIDs;
+                    ao.items = slot.outfit->items;
                     ao.preferenceStars = slot.outfit->preferenceStars;
                     ao.controlState = slot.outfit->controlState;
                     ao.dynamicVars.usageCount = slot.outfit->usageCount;
@@ -176,30 +177,48 @@ void SyncWheelOutfitsToAdaptiveWardrobe() {
 }
 
 static json SerializeFormID(RE::FormID formID) {
-    auto* form = RE::TESForm::LookupByID(formID);
-    if (form) {
-        auto* file = form->GetFile(0);
+    if (formID == 0) {
+        return json{ {"plugin", ""}, {"localID", "0x00000000"}, {"rawID", 0} };
+    }
+
+    auto* dataHandler = RE::TESDataHandler::GetSingleton();
+    if (dataHandler) {
+        uint8_t modIndex = static_cast<uint8_t>((formID >> 24) & 0xFF);
+        const RE::TESFile* file = nullptr;
+        uint32_t localID = 0;
+
+        if (modIndex == 0xFE) {
+            uint16_t lightIndex = static_cast<uint16_t>((formID >> 12) & 0x0FFF);
+            file = dataHandler->LookupLoadedLightModByIndex(lightIndex);
+            localID = formID & 0x00000FFF;
+        } else {
+            file = dataHandler->LookupLoadedModByIndex(modIndex);
+            localID = formID & 0x00FFFFFF;
+        }
+
         if (file && file->fileName && file->fileName[0] != 0) {
-            std::string modName = file->fileName;
-            if (!modName.empty()) {
-                uint32_t localID = file->IsLight() ? (formID & 0x00000FFF) : (formID & 0x00FFFFFF);
-                std::stringstream ss;
-                ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << localID;
-                return json{
-                    {"plugin", modName},
-                    {"localID", ss.str()},
-                    {"rawID", static_cast<uint32_t>(formID)}
-                };
-            }
+            return json{
+                {"plugin", std::string(file->fileName)},
+                {"localID", FormatFormID(localID)},
+                {"rawID", static_cast<uint32_t>(formID)}
+            };
         }
     }
-    std::stringstream ss;
-    ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << formID;
+
     return json{
         {"plugin", "Skyrim.esm"},
-        {"localID", ss.str()},
+        {"localID", FormatFormID(formID & 0x00FFFFFF)},
         {"rawID", static_cast<uint32_t>(formID)}
     };
+}
+
+static json SerializeOutfitItem(const OutfitItem& itm) {
+    json j = SerializeFormID(itm.formID);
+    j["uniqueID"] = itm.uniqueID;
+    j["enchantmentID"] = static_cast<uint32_t>(itm.enchantmentID);
+    std::string safeName = (itm.customName == "Apparel") ? "" : itm.customName;
+    j["customName"] = SanitizeUtf8(safeName);
+    return j;
 }
 
 static RE::FormID DeserializeFormID(const json& jItem) {
@@ -233,26 +252,18 @@ static RE::FormID DeserializeFormID(const json& jItem) {
         if (!plugin.empty() && localID != 0) {
             auto* dataHandler = RE::TESDataHandler::GetSingleton();
             if (dataHandler) {
-                const RE::TESFile* modFile = nullptr;
-                for (const auto* f : dataHandler->files) {
-                    if (f && f->fileName && _stricmp(f->fileName, plugin.c_str()) == 0) {
-                        modFile = f;
-                        break;
-                    }
+                const auto* regularMod = dataHandler->LookupLoadedModByName(plugin);
+                if (regularMod && regularMod->compileIndex != 0xFF) {
+                    RE::FormID fullID = (static_cast<RE::FormID>(regularMod->compileIndex) << 24) | (localID & 0x00FFFFFF);
+                    auto* form = RE::TESForm::LookupByID(fullID);
+                    if (form) return fullID;
                 }
 
-                if (modFile) {
-                    RE::FormID resolvedFullID = 0;
-                    if (modFile->IsLight()) {
-                        resolvedFullID = dataHandler->LookupFormID(localID & 0x00000FFF, modFile->fileName);
-                    } else {
-                        resolvedFullID = dataHandler->LookupFormID(localID & 0x00FFFFFF, modFile->fileName);
-                    }
-
-                    if (resolvedFullID != 0) {
-                        auto* f = RE::TESForm::LookupByID(resolvedFullID);
-                        if (f) return resolvedFullID;
-                    }
+                const auto* lightMod = dataHandler->LookupLoadedLightModByName(plugin);
+                if (lightMod && lightMod->smallFileCompileIndex != 0xFFFF) {
+                    RE::FormID fullID = 0xFE000000 | (static_cast<RE::FormID>(lightMod->smallFileCompileIndex) << 12) | (localID & 0x00000FFF);
+                    auto* form = RE::TESForm::LookupByID(fullID);
+                    if (form) return fullID;
                 }
             }
         }
@@ -264,6 +275,20 @@ static RE::FormID DeserializeFormID(const json& jItem) {
         }
     }
     return 0;
+}
+
+static OutfitItem DeserializeOutfitItem(const json& jItem) {
+    OutfitItem itm;
+    itm.formID = DeserializeFormID(jItem);
+    if (jItem.is_object()) {
+        itm.uniqueID = jItem.value("uniqueID", static_cast<uint16_t>(0));
+        itm.enchantmentID = static_cast<RE::FormID>(jItem.value("enchantmentID", static_cast<uint32_t>(0)));
+        itm.customName = jItem.value("customName", "");
+        if (itm.customName == "Apparel") {
+            itm.customName = "";
+        }
+    }
+    return itm;
 }
 
 static json SerializeProfile(const ActorWheelProfile& prof) {
@@ -283,12 +308,21 @@ static json SerializeProfile(const ActorWheelProfile& prof) {
                 sJson["preferenceStars"] = slot.outfit->preferenceStars;
                 sJson["controlState"] = static_cast<uint8_t>(slot.outfit->controlState);
                 sJson["isAddon"] = slot.outfit->isAddon;
+                sJson["icon"] = slot.outfit->icon;
                 sJson["usageCount"] = slot.outfit->usageCount;
                 sJson["lastWornTimestamp"] = slot.outfit->lastWornTimestamp;
 
                 json itemsArray = json::array();
-                for (auto fID : slot.outfit->itemIDs) {
-                    itemsArray.push_back(SerializeFormID(fID));
+                if (!slot.outfit->items.empty()) {
+                    for (const auto& itm : slot.outfit->items) {
+                        itemsArray.push_back(SerializeOutfitItem(itm));
+                    }
+                } else {
+                    for (auto fID : slot.outfit->itemIDs) {
+                        OutfitItem dummy;
+                        dummy.formID = fID;
+                        itemsArray.push_back(SerializeOutfitItem(dummy));
+                    }
                 }
                 sJson["items"] = itemsArray;
             } else {
@@ -299,6 +333,7 @@ static json SerializeProfile(const ActorWheelProfile& prof) {
                 sJson["preferenceStars"] = 3;
                 sJson["controlState"] = 0;
                 sJson["isAddon"] = false;
+                sJson["icon"] = "";
                 sJson["usageCount"] = 0;
                 sJson["lastWornTimestamp"] = 0;
             }
@@ -337,14 +372,16 @@ static ActorWheelProfile DeserializeProfile(const json& profJson) {
                         o.preferenceStars = sJson.value("preferenceStars", static_cast<uint8_t>(3));
                         o.controlState = static_cast<ControlState>(sJson.value("controlState", static_cast<uint8_t>(ControlState::Normal)));
                         o.isAddon = sJson.value("isAddon", false);
+                        o.icon = sJson.value("icon", "");
                         o.usageCount = sJson.value("usageCount", 0u);
                         o.lastWornTimestamp = sJson.value("lastWornTimestamp", 0u);
 
                         if (hasItems) {
                             for (const auto& jItem : sJson["items"]) {
-                                RE::FormID resolvedID = DeserializeFormID(jItem);
-                                if (resolvedID != 0) {
-                                    o.itemIDs.push_back(resolvedID);
+                                OutfitItem resolvedItm = DeserializeOutfitItem(jItem);
+                                if (resolvedItm.formID != 0) {
+                                    o.items.push_back(resolvedItm);
+                                    o.itemIDs.push_back(resolvedItm.formID);
                                 }
                             }
                         }
@@ -356,6 +393,7 @@ static ActorWheelProfile DeserializeProfile(const json& profJson) {
                         o.preferenceStars = 3;
                         o.controlState = ControlState::Normal;
                         o.isAddon = false;
+                        o.icon = "";
                         s.outfit = o;
                     }
                     w.slots.push_back(s);
@@ -385,14 +423,10 @@ void SaveDataInternal() {
 
         json actorsJson = json::object();
         for (const auto& [actorID, profile] : g_manager.actorProfiles) {
-            std::stringstream ss;
-            ss << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << actorID;
-
             json actorNode;
             actorNode["profile"] = SerializeProfile(profile);
             actorNode["formMeta"] = SerializeFormID(actorID);
-
-            actorsJson[ss.str()] = actorNode;
+            actorsJson[FormatFormID(actorID)] = actorNode;
         }
         root["actors"] = actorsJson;
 
@@ -502,8 +536,8 @@ static json GetDynamicFollowersList() {
     auto* pAvOwner = player->AsActorValueOwner();
     float pCurWeight = pAvOwner ? pAvOwner->GetActorValue(RE::ActorValue::kInventoryWeight) : 0.0f;
     float pMaxWeight = pAvOwner ? pAvOwner->GetActorValue(RE::ActorValue::kCarryWeight) : 300.0f;
-    std::stringstream pSs;
-    pSs << static_cast<int>(pCurWeight) << " / " << static_cast<int>(pMaxWeight);
+    char pWBuf[32];
+    snprintf(pWBuf, sizeof(pWBuf), "%d / %d", static_cast<int>(pCurWeight), static_cast<int>(pMaxWeight));
 
     std::string pName = (player->GetActorBase() && player->GetActorBase()->GetName()) ? player->GetActorBase()->GetName() : "Player Character";
     arr.push_back(json{
@@ -512,10 +546,12 @@ static json GetDynamicFollowersList() {
         {"type", "PLAYER"},
         {"avatar", "D"},
         {"avatarUrl", ""},
-        {"weight", pSs.str()}
+        {"weight", std::string(pWBuf)}
     });
 
     auto processLists = RE::ProcessLists::GetSingleton();
+    auto* npcKw = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("ActorTypeNPC");
+
     if (processLists) {
         std::set<RE::FormID> addedActors;
         addedActors.insert(0x00000007);
@@ -524,6 +560,9 @@ static json GetDynamicFollowersList() {
         for (auto& handle : processLists->highActorHandles) {
             auto actor = handle.get();
             if (!actor || actor.get() == player || actor->IsDead()) continue;
+
+            auto* race = actor->GetRace();
+            if (!race || (npcKw && !race->HasKeyword(npcKw))) continue;
 
             if (actor->IsPlayerTeammate() || actor->IsPlayerRef()) {
                 RE::FormID fID = actor->GetFormID();
@@ -536,23 +575,20 @@ static json GetDynamicFollowersList() {
                 auto* aAvOwner = actor->AsActorValueOwner();
                 float curW = aAvOwner ? aAvOwner->GetActorValue(RE::ActorValue::kInventoryWeight) : 0.0f;
                 float maxW = aAvOwner ? aAvOwner->GetActorValue(RE::ActorValue::kCarryWeight) : 300.0f;
-                std::stringstream ssW;
-                ssW << static_cast<int>(curW) << " / " << static_cast<int>(maxW);
-
-                std::stringstream ssID;
-                ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << fID;
+                char aWBuf[32];
+                snprintf(aWBuf, sizeof(aWBuf), "%d / %d", static_cast<int>(curW), static_cast<int>(maxW));
 
                 std::string aName = base->GetName() ? base->GetName() : "Follower";
                 std::string safeAName = SanitizeUtf8(aName);
                 std::string av = safeAName.empty() ? "F" : std::string(1, safeAName[0]);
 
                 arr.push_back(json{
-                    {"id", ssID.str()},
+                    {"id", FormatFormID(fID)},
                     {"name", safeAName},
                     {"type", "FOLLOWER"},
                     {"avatar", av},
                     {"avatarUrl", ""},
-                    {"weight", ssW.str()}
+                    {"weight", std::string(aWBuf)}
                 });
             }
         }
@@ -562,28 +598,31 @@ static json GetDynamicFollowersList() {
 
 static std::string GetApparelTypeString(RE::TESObjectARMO* armor) {
     if (!armor) return "Armor";
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kHead) || armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kHair) || armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kCirclet)) {
+    uint32_t slotMask = static_cast<uint32_t>(armor->GetSlotMask());
+    using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
+
+    if (slotMask & (static_cast<uint32_t>(Slot::kHead) | static_cast<uint32_t>(Slot::kHair) | static_cast<uint32_t>(Slot::kCirclet))) {
         return "Helmet";
     }
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kAmulet)) {
+    if (slotMask & static_cast<uint32_t>(Slot::kAmulet)) {
         return "Amulet";
     }
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kRing)) {
+    if (slotMask & static_cast<uint32_t>(Slot::kRing)) {
         return "Ring";
     }
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kBody)) {
-        return "Cuirass";
-    }
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kHands)) {
+    if (slotMask & static_cast<uint32_t>(Slot::kHands)) {
         return "Gauntlets";
     }
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kFeet)) {
+    if (slotMask & static_cast<uint32_t>(Slot::kFeet)) {
         return "Boots";
     }
-    if (armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kShield)) {
+    if (slotMask & static_cast<uint32_t>(Slot::kShield)) {
         return "Shield";
     }
-    return "Apparel";
+    if (slotMask & static_cast<uint32_t>(Slot::kBody)) {
+        return "Cuirass";
+    }
+    return "Armor";
 }
 
 static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& sourceTag) {
@@ -598,9 +637,6 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
         auto* armor = item->As<RE::TESObjectARMO>();
         if (!armor) continue;
 
-        std::stringstream ssID;
-        ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << item->GetFormID();
-
         std::string typeStr = GetApparelTypeString(armor);
         std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
 
@@ -608,51 +644,91 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
         float wt = item->GetWeight();
         int val = item->GetGoldValue();
 
-        std::string rawName = item->GetName() ? item->GetName() : "Apparel";
-        std::string safeName = SanitizeUtf8(rawName);
-
-        std::string enchName = "";
-        std::vector<std::string> tags;
-
-        if (armor->formEnchanting) {
-            enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
-            tags.push_back("enchanted");
-        }
-
-        bool isWorn = false;
         auto* entryData = data.second.get();
-        if (entryData && entryData->extraLists) {
+        if (entryData && entryData->extraLists && !entryData->extraLists->empty()) {
             for (auto* xList : *entryData->extraLists) {
-                if (xList) {
-                    if (xList->HasType(RE::ExtraDataType::kWorn) || xList->HasType(RE::ExtraDataType::kWornLeft)) {
-                        isWorn = true;
-                    }
-                    if (xList->HasType(RE::ExtraDataType::kEnchantment)) {
-                        tags.push_back("enchanted");
-                    }
-                    if (xList->HasType(RE::ExtraDataType::kOwnership)) {
-                        tags.push_back("stolen");
-                    }
-                }
-            }
-        }
+                if (!xList) continue;
 
-        arr.push_back(json{
-            {"id", ssID.str()},
-            {"rawID", static_cast<uint32_t>(item->GetFormID())},
-            {"name", safeName},
-            {"category", catStr},
-            {"type", typeStr},
-            {"damage", 0},
-            {"armor", static_cast<int>(armRating)},
-            {"weight", wt},
-            {"value", val},
-            {"enchantment", enchName},
-            {"tags", tags},
-            {"equipped", isWorn},
-            {"count", data.first},
-            {"source", sourceTag}
-        });
+                std::string displayName = item->GetName() ? item->GetName() : "Apparel";
+                std::string customName = "";
+                auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
+                if (xName && xName->displayName.c_str()) {
+                    customName = xName->displayName.c_str();
+                    displayName = customName;
+                }
+
+                uint16_t uniqueID = 0;
+                auto* xUID = xList->GetByType<RE::ExtraUniqueID>();
+                if (xUID) uniqueID = xUID->uniqueID;
+
+                RE::FormID enchantmentID = 0;
+                std::string enchName = "";
+                std::vector<std::string> tags;
+
+                auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
+                if (xEnch && xEnch->enchantment) {
+                    enchantmentID = xEnch->enchantment->GetFormID();
+                    enchName = SanitizeUtf8(xEnch->enchantment->GetName() ? xEnch->enchantment->GetName() : "Enchanted");
+                    tags.push_back("enchanted");
+                } else if (armor->formEnchanting) {
+                    enchantmentID = armor->formEnchanting->GetFormID();
+                    enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                    tags.push_back("enchanted");
+                }
+
+                bool isWorn = xList->HasType(RE::ExtraDataType::kWorn) || xList->HasType(RE::ExtraDataType::kWornLeft);
+
+                arr.push_back(json{
+                    {"id", FormatFormID(item->GetFormID())},
+                    {"rawID", static_cast<uint32_t>(item->GetFormID())},
+                    {"uniqueID", uniqueID},
+                    {"enchantmentID", static_cast<uint32_t>(enchantmentID)},
+                    {"customName", SanitizeUtf8(customName)},
+                    {"name", SanitizeUtf8(displayName)},
+                    {"category", catStr},
+                    {"type", typeStr},
+                    {"damage", 0},
+                    {"armor", static_cast<int>(armRating)},
+                    {"weight", wt},
+                    {"value", val},
+                    {"enchantment", enchName},
+                    {"tags", tags},
+                    {"equipped", isWorn},
+                    {"count", 1},
+                    {"source", sourceTag}
+                });
+            }
+        } else {
+            std::string rawName = item->GetName() ? item->GetName() : "Apparel";
+            std::string enchName = "";
+            std::vector<std::string> tags;
+            RE::FormID enchantmentID = 0;
+            if (armor->formEnchanting) {
+                enchantmentID = armor->formEnchanting->GetFormID();
+                enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                tags.push_back("enchanted");
+            }
+
+            arr.push_back(json{
+                {"id", FormatFormID(item->GetFormID())},
+                {"rawID", static_cast<uint32_t>(item->GetFormID())},
+                {"uniqueID", 0},
+                {"enchantmentID", static_cast<uint32_t>(enchantmentID)},
+                {"customName", ""},
+                {"name", SanitizeUtf8(rawName)},
+                {"category", catStr},
+                {"type", typeStr},
+                {"damage", 0},
+                {"armor", static_cast<int>(armRating)},
+                {"weight", wt},
+                {"value", val},
+                {"enchantment", enchName},
+                {"tags", tags},
+                {"equipped", false},
+                {"count", data.first},
+                {"source", sourceTag}
+            });
+        }
     }
     return arr;
 }
@@ -670,9 +746,6 @@ static json GetCloudWardrobeInventoryJson() {
         auto* armor = item->As<RE::TESObjectARMO>();
         if (!armor) continue;
 
-        std::stringstream ssID;
-        ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << item->GetFormID();
-
         std::string typeStr = GetApparelTypeString(armor);
         std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
 
@@ -680,33 +753,89 @@ static json GetCloudWardrobeInventoryJson() {
         float wt = item->GetWeight();
         int val = item->GetGoldValue();
 
-        std::string rawName = item->GetName() ? item->GetName() : "Apparel";
-        std::string safeName = SanitizeUtf8(rawName);
+        auto* entryData = data.second.get();
+        if (entryData && entryData->extraLists && !entryData->extraLists->empty()) {
+            for (auto* xList : *entryData->extraLists) {
+                if (!xList) continue;
 
-        std::string enchName = "";
-        std::vector<std::string> tags;
+                std::string displayName = item->GetName() ? item->GetName() : "Apparel";
+                std::string customName = "";
+                auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
+                if (xName && xName->displayName.c_str()) {
+                    customName = xName->displayName.c_str();
+                    displayName = customName;
+                }
 
-        if (armor->formEnchanting) {
-            enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
-            tags.push_back("enchanted");
+                uint16_t uniqueID = 0;
+                auto* xUID = xList->GetByType<RE::ExtraUniqueID>();
+                if (xUID) uniqueID = xUID->uniqueID;
+
+                RE::FormID enchantmentID = 0;
+                std::string enchName = "";
+                std::vector<std::string> tags;
+
+                auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
+                if (xEnch && xEnch->enchantment) {
+                    enchantmentID = xEnch->enchantment->GetFormID();
+                    enchName = SanitizeUtf8(xEnch->enchantment->GetName() ? xEnch->enchantment->GetName() : "Enchanted");
+                    tags.push_back("enchanted");
+                } else if (armor->formEnchanting) {
+                    enchantmentID = armor->formEnchanting->GetFormID();
+                    enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                    tags.push_back("enchanted");
+                }
+
+                arr.push_back(json{
+                    {"id", FormatFormID(item->GetFormID())},
+                    {"rawID", static_cast<uint32_t>(item->GetFormID())},
+                    {"uniqueID", uniqueID},
+                    {"enchantmentID", static_cast<uint32_t>(enchantmentID)},
+                    {"customName", SanitizeUtf8(customName)},
+                    {"name", SanitizeUtf8(displayName)},
+                    {"category", catStr},
+                    {"type", typeStr},
+                    {"damage", 0},
+                    {"armor", static_cast<int>(armRating)},
+                    {"weight", wt},
+                    {"value", val},
+                    {"enchantment", enchName},
+                    {"tags", tags},
+                    {"equipped", false},
+                    {"count", 1},
+                    {"source", "CLOUD"}
+                });
+            }
+        } else {
+            std::string rawName = item->GetName() ? item->GetName() : "Apparel";
+            std::string enchName = "";
+            std::vector<std::string> tags;
+            RE::FormID enchantmentID = 0;
+            if (armor->formEnchanting) {
+                enchantmentID = armor->formEnchanting->GetFormID();
+                enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                tags.push_back("enchanted");
+            }
+
+            arr.push_back(json{
+                {"id", FormatFormID(item->GetFormID())},
+                {"rawID", static_cast<uint32_t>(item->GetFormID())},
+                {"uniqueID", 0},
+                {"enchantmentID", static_cast<uint32_t>(enchantmentID)},
+                {"customName", ""},
+                {"name", SanitizeUtf8(rawName)},
+                {"category", catStr},
+                {"type", typeStr},
+                {"damage", 0},
+                {"armor", static_cast<int>(armRating)},
+                {"weight", wt},
+                {"value", val},
+                {"enchantment", enchName},
+                {"tags", tags},
+                {"equipped", false},
+                {"count", data.first},
+                {"source", "CLOUD"}
+            });
         }
-
-        arr.push_back(json{
-            {"id", ssID.str()},
-            {"rawID", static_cast<uint32_t>(item->GetFormID())},
-            {"name", safeName},
-            {"category", catStr},
-            {"type", typeStr},
-            {"damage", 0},
-            {"armor", static_cast<int>(armRating)},
-            {"weight", wt},
-            {"value", val},
-            {"enchantment", enchName},
-            {"tags", tags},
-            {"equipped", false},
-            {"count", data.first},
-            {"source", "CLOUD"}
-        });
     }
     return arr;
 }
@@ -725,16 +854,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         }
 
         auto activeActor = ResolveActiveTargetActor();
-        std::unordered_set<RE::FormID> currentlyWornSet;
-        if (activeActor && activeActor->GetActorBase()) {
-            auto equippedEntries = GetEquippedInventoryEntries(activeActor);
-            currentlyWornSet.reserve(equippedEntries.size());
-            for (const auto& entry : equippedEntries) {
-                if (entry.object && IsPureApparel(entry.object)) {
-                    currentlyWornSet.insert(entry.object->GetFormID());
-                }
-            }
-        }
+        auto equippedEntries = GetEquippedInventoryEntries(activeActor);
 
         auto* wardrobe = GetWardrobeContainer();
         RE::TESObjectREFR::InventoryItemMap wardrobeInv;
@@ -744,12 +864,8 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 
         const auto& activeWheel = activeProfile.wheels[activeProfile.activeWheelIndex];
         RE::FormID canonicalTargetID = (g_manager.activeTargetActorID == 0x00000014 || g_manager.activeTargetActorID == 0) ? 0x00000007 : g_manager.activeTargetActorID;
-        std::string currentActiveID = AdaptiveWardrobeManager::GetSingleton()->GetCurrentOutfitID(canonicalTargetID);
 
         bool isGpConnected = CheckGamepadConnected();
-
-        std::stringstream targetIDStream;
-        targetIDStream << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << canonicalTargetID;
 
         json data;
         data["editMode"] = isEditMode;
@@ -763,7 +879,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         data["editModifierKey"] = g_editModifierKey;
         data["playKey"] = g_playKey;
         data["playModifierKey"] = g_playModifierKey;
-        data["activeTargetActorId"] = targetIDStream.str();
+        data["activeTargetActorId"] = FormatFormID(canonicalTargetID);
 
         data["gamepadPlayKey"] = g_gamepadPlayKey;
         data["gamepadPlayModifier"] = g_gamepadPlayModifier;
@@ -782,23 +898,29 @@ std::string GetWheelJsonInternal(bool isEditMode) {
             data["followers"] = GetDynamicFollowersList();
 
             json actorInvs = json::object();
-            actorInvs["0x00000007"] = GetActorApparelInventoryJson(player, "PLAYER");
+            actorInvs["0x00000007"] = GetActorApparelInventoryJson(player, "0x00000007");
 
             auto processLists = RE::ProcessLists::GetSingleton();
+            auto* npcKw = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("ActorTypeNPC");
+
             if (processLists) {
                 for (auto& handle : processLists->highActorHandles) {
                     auto actor = handle.get();
-                    if (actor && actor.get() != player && actor->IsPlayerTeammate() && !actor->IsDead() && actor->GetActorBase()) {
-                        std::stringstream ssID;
-                        ssID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << actor->GetFormID();
-                        actorInvs[ssID.str()] = GetActorApparelInventoryJson(actor.get(), "FOLLOWER");
-                    }
+                    if (!actor || actor.get() == player || !actor->IsPlayerTeammate() || actor->IsDead() || !actor->GetActorBase()) continue;
+                    auto* race = actor->GetRace();
+                    if (!race || (npcKw && !race->HasKeyword(npcKw))) continue;
+
+                    std::string fIDStr = FormatFormID(actor->GetFormID());
+                    actorInvs[fIDStr] = GetActorApparelInventoryJson(actor.get(), fIDStr);
                 }
             }
 
             data["actorInventories"] = actorInvs;
             data["playerInventory"] = actorInvs["0x00000007"];
-            data["followerInventory"] = (activeActor && activeActor != player) ? GetActorApparelInventoryJson(activeActor, "FOLLOWER") : json::array();
+
+            std::string activeActorIDStr = FormatFormID(activeActor ? activeActor->GetFormID() : 0x00000007);
+            data["followerInventory"] = (activeActor && activeActor != player) ? GetActorApparelInventoryJson(activeActor, activeActorIDStr) : json::array();
+
             data["cloudInventory"] = GetCloudWardrobeInventoryJson();
             data["inventory"] = data["playerInventory"];
         } else {
@@ -821,6 +943,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
             sJson["hasOutfit"] = hasRealOutfit;
             sJson["name"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->name) : ("Outfit " + std::to_string(slotIdx + 1));
             sJson["count"] = slot.outfit.has_value() ? slot.outfit->itemIDs.size() : 0;
+            sJson["icon"] = slot.outfit.has_value() ? slot.outfit->icon : "";
             sJson["contextTag"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->contextTag) : "";
             sJson["preferenceStars"] = slot.outfit.has_value() ? slot.outfit->preferenceStars : 3;
             sJson["controlState"] = slot.outfit.has_value() ? static_cast<uint8_t>(slot.outfit->controlState) : 0;
@@ -828,43 +951,76 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 
             json itemObjects = json::array();
             if (slot.outfit.has_value()) {
-                for (auto fID : slot.outfit->itemIDs) {
-                    auto* f = RE::TESForm::LookupByID(fID);
-                    if (f && IsPureApparel(f)) {
-                        std::stringstream sID;
-                        sID << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex << fID;
-                        auto* arm = f->As<RE::TESObjectARMO>();
-                        std::string tStr = GetApparelTypeString(arm);
+                if (!slot.outfit->items.empty()) {
+                    for (const auto& itm : slot.outfit->items) {
+                        auto* f = RE::TESForm::LookupByID(itm.formID);
+                        if (f && IsPureApparel(f)) {
+                            auto* arm = f->As<RE::TESObjectARMO>();
+                            std::string tStr = GetApparelTypeString(arm);
+                            std::string dName = (!itm.customName.empty() && itm.customName != "Apparel") ? itm.customName : (f->GetName() ? f->GetName() : "Apparel");
+                            std::string cName = (itm.customName == "Apparel") ? "" : itm.customName;
 
-                        itemObjects.push_back(json{
-                            {"id", sID.str()},
-                            {"rawID", static_cast<uint32_t>(fID)},
-                            {"name", SanitizeUtf8(f->GetName() ? f->GetName() : "Apparel")},
-                            {"type", tStr}
-                        });
+                            itemObjects.push_back(json{
+                                {"id", FormatFormID(itm.formID)},
+                                {"rawID", static_cast<uint32_t>(itm.formID)},
+                                {"uniqueID", itm.uniqueID},
+                                {"enchantmentID", static_cast<uint32_t>(itm.enchantmentID)},
+                                {"customName", SanitizeUtf8(cName)},
+                                {"name", SanitizeUtf8(dName)},
+                                {"type", tStr}
+                            });
+                        }
+                    }
+                } else {
+                    for (auto fID : slot.outfit->itemIDs) {
+                        auto* f = RE::TESForm::LookupByID(fID);
+                        if (f && IsPureApparel(f)) {
+                            auto* arm = f->As<RE::TESObjectARMO>();
+                            std::string tStr = GetApparelTypeString(arm);
+
+                            itemObjects.push_back(json{
+                                {"id", FormatFormID(fID)},
+                                {"rawID", static_cast<uint32_t>(fID)},
+                                {"name", SanitizeUtf8(f->GetName() ? f->GetName() : "Apparel")},
+                                {"type", tStr}
+                            });
+                        }
                     }
                 }
             }
             sJson["items"] = itemObjects;
 
-            std::string thisSlotID = std::to_string(activeProfile.activeWheelIndex) + "_" + std::to_string(slotIdx);
             bool isWorn = false;
-
             if (slot.outfit.has_value() && !slot.outfit->itemIDs.empty()) {
                 size_t matches = 0;
-                for (RE::FormID fID : slot.outfit->itemIDs) {
-                    if (currentlyWornSet.find(fID) != currentlyWornSet.end()) {
-                        matches++;
-                    }
-                }
+                const auto& targetItems = !slot.outfit->items.empty() ? slot.outfit->items : std::vector<OutfitItem>();
 
-                if (isAddon) {
-                    isWorn = (matches == slot.outfit->itemIDs.size());
-                } else {
-                    if (!currentActiveID.empty() && thisSlotID == currentActiveID) {
-                        isWorn = true;
+                if (!targetItems.empty()) {
+                    for (const auto& itm : targetItems) {
+                        for (const auto& entry : equippedEntries) {
+                            if (MatchesWornEntry(entry, itm)) {
+                                matches++;
+                                break;
+                            }
+                        }
+                    }
+                    if (isAddon) {
+                        isWorn = (matches == targetItems.size());
                     } else {
-                        isWorn = (!currentlyWornSet.empty() && matches == slot.outfit->itemIDs.size() && matches == currentlyWornSet.size());
+                        isWorn = (!equippedEntries.empty() && matches == targetItems.size() && matches == equippedEntries.size());
+                    }
+                } else {
+                    for (const auto& entry : equippedEntries) {
+                        if (!entry.object) continue;
+                        RE::FormID fID = entry.object->GetFormID();
+                        if (std::find(slot.outfit->itemIDs.begin(), slot.outfit->itemIDs.end(), fID) != slot.outfit->itemIDs.end()) {
+                            matches++;
+                        }
+                    }
+                    if (isAddon) {
+                        isWorn = (matches == slot.outfit->itemIDs.size());
+                    } else {
+                        isWorn = (!equippedEntries.empty() && matches == slot.outfit->itemIDs.size() && matches == equippedEntries.size());
                     }
                 }
             }

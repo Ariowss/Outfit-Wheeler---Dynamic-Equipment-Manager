@@ -69,12 +69,12 @@ function hideAllMenus(e) {
 }
 
 function showSlotContextMenu(x, y, slotIndex) {
-    if (!isEditModeActive()) return;
-
     const menu = document.getElementById('slot-context-menu');
     if (!menu) return;
 
+    const now = Date.now();
     if (menu.style.display === 'flex' && selectedSlotIndex === slotIndex) {
+        if (now - lastMenuOpenTime < 250) return;
         hideAllMenus();
         return;
     }
@@ -87,7 +87,7 @@ function showSlotContextMenu(x, y, slotIndex) {
         title.innerText = 'Slot ' + (slotIndex + 1) + ' Options';
     }
 
-    const currentSlot = currentWheelData.slots.find(s => s.index === slotIndex);
+    const currentSlot = (currentWheelData.slots || []).find(s => (s.index !== undefined ? s.index : 0) === slotIndex) || (currentWheelData.slots || [])[slotIndex];
     const wardrobeBtn = document.getElementById('ctx-slot-wardrobe-toggle');
     if (wardrobeBtn) {
         if (!currentSlot || !currentSlot.hasOutfit) {
@@ -107,12 +107,12 @@ function showSlotContextMenu(x, y, slotIndex) {
     let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
 
     posX = Math.max(10, Math.min(posX, window.innerWidth - 200));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 230));
+    posY = Math.max(10, Math.min(posY, window.innerHeight - 260));
 
     menu.style.left = posX + 'px';
     menu.style.top = posY + 'px';
     menu.style.display = 'flex';
-    lastMenuOpenTime = Date.now();
+    lastMenuOpenTime = now;
 }
 
 function ctxToggleSlotWardrobe(e) {
@@ -123,7 +123,7 @@ function ctxToggleSlotWardrobe(e) {
     if (action === 'retrieve') {
         if (typeof window.RetrieveSlotOutfit === 'function') {
             window.RetrieveSlotOutfit(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex,
+                wheelIndex: currentWheelData.wheelIndex || 0,
                 slotIndex: selectedSlotIndex
             }));
         }
@@ -131,7 +131,7 @@ function ctxToggleSlotWardrobe(e) {
     } else {
         if (typeof window.StashSlotOutfit === 'function') {
             window.StashSlotOutfit(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex,
+                wheelIndex: currentWheelData.wheelIndex || 0,
                 slotIndex: selectedSlotIndex
             }));
         }
@@ -141,12 +141,12 @@ function ctxToggleSlotWardrobe(e) {
 }
 
 function showWheelContextMenu(x, y) {
-    if (!isEditModeActive()) return;
-
     const menu = document.getElementById('wheel-context-menu');
     if (!menu) return;
 
+    const now = Date.now();
     if (menu.style.display === 'flex') {
+        if (now - lastMenuOpenTime < 250) return;
         hideAllMenus();
         return;
     }
@@ -162,7 +162,7 @@ function showWheelContextMenu(x, y) {
     menu.style.left = posX + 'px';
     menu.style.top = posY + 'px';
     menu.style.display = 'flex';
-    lastMenuOpenTime = Date.now();
+    lastMenuOpenTime = now;
 }
 
 function ctxStashAllOutfits(e) {
@@ -188,8 +188,9 @@ function handleCenterRightClick(e) {
         e.preventDefault();
         e.stopPropagation();
     }
-    if (!isEditModeActive()) return;
-    showWheelContextMenu(e.clientX || 200, e.clientY || 200);
+    const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
+    const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
+    showWheelContextMenu(clickX, clickY);
 }
 
 function openSettingsModal(e) {
@@ -205,8 +206,19 @@ function openSettingsModal(e) {
         return;
     }
 
+    panel.style.position = 'fixed';
+    panel.style.left = '50%';
+    panel.style.top = '50%';
+    panel.style.transform = 'translate(-50%, -50%)';
+
     const chkAutoClose = document.getElementById('chk-auto-close-equip');
-    if (chkAutoClose) chkAutoClose.checked = currentWheelData.autoCloseOnEquip !== false;
+    if (chkAutoClose) chkAutoClose.checked = (currentWheelData.autoCloseOnEquip !== false);
+
+    const chkAutoStash = document.getElementById('chk-auto-stash');
+    if (chkAutoStash) chkAutoStash.checked = (currentWheelData.autoStashEnabled === true);
+
+    const chkAutoSystem = document.getElementById('chk-auto-system');
+    if (chkAutoSystem) chkAutoSystem.checked = (currentWheelData.autoSystemEnabled !== false);
 
     tempEditKey = currentWheelData.editKey || 0x31;
     tempEditMod = currentWheelData.editModifierKey || 0;
@@ -248,7 +260,16 @@ function saveSettings() {
     const chkAutoClose = document.getElementById('chk-auto-close-equip');
     const autoCloseVal = chkAutoClose ? chkAutoClose.checked : true;
 
+    const chkAutoStash = document.getElementById('chk-auto-stash');
+    const autoStashVal = chkAutoStash ? chkAutoStash.checked : false;
+
+    const chkAutoSystem = document.getElementById('chk-auto-system');
+    const autoSystemVal = chkAutoSystem ? chkAutoSystem.checked : true;
+
     currentWheelData.autoCloseOnEquip = autoCloseVal;
+    currentWheelData.autoStashEnabled = autoStashVal;
+    currentWheelData.autoSystemEnabled = autoSystemVal;
+
     currentWheelData.editKey = tempEditKey;
     currentWheelData.editModifierKey = tempEditMod;
     currentWheelData.playKey = tempPlayKey;
@@ -272,8 +293,8 @@ function saveSettings() {
             gamepadPlayKey: tempGamepadPlayKey,
             gamepadPlayModifier: tempGamepadPlayMod,
             autoCloseOnEquip: autoCloseVal,
-            autoStashEnabled: currentWheelData.autoStashEnabled === true,
-            autoSystemEnabled: currentWheelData.autoSystemEnabled !== false,
+            autoStashEnabled: autoStashVal,
+            autoSystemEnabled: autoSystemVal,
             autoCityEnabled: currentWheelData.autoCityEnabled !== false,
             autoHomeEnabled: currentWheelData.autoHomeEnabled !== false,
             autoCombatEnabled: currentWheelData.autoCombatEnabled !== false,
@@ -291,7 +312,7 @@ function openContextModal(e) {
     hideAllMenus();
     hideAllModals();
 
-    const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
+    const currentSlot = (currentWheelData.slots || []).find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || (currentWheelData.slots || [])[selectedSlotIndex];
     const currentTag = (currentSlot && currentSlot.contextTag) ? currentSlot.contextTag.toLowerCase() : "";
     const currentRating = (currentSlot && currentSlot.preferenceStars !== undefined) ? currentSlot.preferenceStars : 3;
 
@@ -321,7 +342,7 @@ function hideContextModal() {
 
 function setStarRating(num) {
     tempStars = num;
-    document.querySelectorAll('.star').forEach((s, idx) => {
+    document.querySelectorAll('#modal-stars-widget .star').forEach((s, idx) => {
         if (idx < num) s.classList.add('active');
         else s.classList.remove('active');
     });
@@ -342,7 +363,7 @@ function saveSlotContextAndRating() {
 
     if (typeof window.SetSlotContext === 'function' && currentWheelData) {
         window.SetSlotContext(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex,
             contextTag: contextString
         }));
@@ -350,7 +371,7 @@ function saveSlotContextAndRating() {
 
     if (typeof window.SetSlotRating === 'function' && currentWheelData) {
         window.SetSlotRating(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex,
             ratingStars: tempStars
         }));
@@ -395,7 +416,7 @@ function confirmRename() {
     if (renameTargetMode === 'slot' && selectedSlotIndex !== null) {
         if (typeof window.RenameSlot === 'function' && currentWheelData) {
             window.RenameSlot(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex,
+                wheelIndex: currentWheelData.wheelIndex || 0,
                 slotIndex: selectedSlotIndex,
                 newName: val
             }));
@@ -403,7 +424,7 @@ function confirmRename() {
     } else if (renameTargetMode === 'wheel') {
         if (typeof window.RenameWheel === 'function' && currentWheelData) {
             window.RenameWheel(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex,
+                wheelIndex: currentWheelData.wheelIndex || 0,
                 newName: val
             }));
         }
@@ -426,7 +447,7 @@ function ctxRenameSlot(e) {
     if (e) e.stopPropagation();
     if (selectedSlotIndex === null) return;
     renameTargetMode = 'slot';
-    const currentSlot = currentWheelData.slots.find(s => s.index === selectedSlotIndex);
+    const currentSlot = (currentWheelData.slots || []).find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || (currentWheelData.slots || [])[selectedSlotIndex];
     const currentName = (currentSlot && currentSlot.name) ? currentSlot.name : ('Outfit ' + (selectedSlotIndex + 1));
     showRenameModal("Rename Preset", currentName);
     hideAllMenus();
@@ -466,11 +487,11 @@ function ctxMoveSlot(delta, e) {
 
 function ctxMoveWheel(delta, e) {
     if (e) e.stopPropagation();
-    if (!currentWheelData || currentWheelData.totalWheels <= 1) return;
+    if (!currentWheelData || (currentWheelData.totalWheels || 1) <= 1) return;
 
     const fromIdx = currentWheelData.wheelIndex || 0;
-    const toIdx = fromIdx + delta;
-    if (toIdx < 0 || toIdx >= currentWheelData.totalWheels) return;
+    const total = currentWheelData.totalWheels || 1;
+    const toIdx = (fromIdx + delta + total) % total;
 
     if (typeof window.MoveWheel === 'function') {
         window.MoveWheel(JSON.stringify({
@@ -550,7 +571,7 @@ function ctxDeleteSlot(e) {
 function ctxRenameWheel(e) {
     if (e) e.stopPropagation();
     renameTargetMode = 'wheel';
-    const currentName = currentWheelData.wheelName || ('Wheel ' + (currentWheelData.wheelIndex + 1));
+    const currentName = currentWheelData.wheelName || ('Wheel ' + ((currentWheelData.wheelIndex || 0) + 1));
     showRenameModal("Rename Wheel", currentName);
     hideAllMenus();
 }

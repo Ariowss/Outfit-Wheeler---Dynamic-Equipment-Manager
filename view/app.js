@@ -46,8 +46,7 @@ var currentWheelData = {
     gamepadPlayModifier: 0x0100,
     gamepadConnected: false,
     autoCloseOnEquip: true,
-    autoStashEnabled: false,
-    autoSystemEnabled: true,
+    autoStashEnabled: true,
     autoCityEnabled: true,
     autoHomeEnabled: true,
     autoCombatEnabled: true,
@@ -274,12 +273,35 @@ function updateGamepadHintsVisibility() {
     hintsBar.style.display = hasGp ? 'flex' : 'none';
 }
 
+function getInventoryBySourceId(sourceId) {
+    if (!currentWheelData || !sourceId) return [];
+    const srcUpper = sourceId.toUpperCase();
+    if (srcUpper === 'CLOUD' || srcUpper === 'WARDROBE') {
+        return currentWheelData.cloudInventory || [];
+    }
+    if (srcUpper === '0X00000007' || srcUpper === '0X00000014' || srcUpper === 'PLAYER') {
+        return currentWheelData.playerInventory || currentWheelData.inventory || [];
+    }
+    if (currentWheelData.actorInventories) {
+        for (let key in currentWheelData.actorInventories) {
+            if (key.toUpperCase() === srcUpper) {
+                return currentWheelData.actorInventories[key] || [];
+            }
+        }
+    }
+    if (currentWheelData.followerInventory && currentWheelData.followerInventory.length > 0) {
+        return currentWheelData.followerInventory;
+    }
+    return [];
+}
+
 window.openWheel = function(argument) {
     applyAutoResolutionScale();
 
     var previousOffsetX = currentWheelData.wheelOffsetX;
     var previousOffsetY = currentWheelData.wheelOffsetY;
     var previousScale = currentWheelData.wheelScale;
+    var prevInvSource = activeInventorySource;
 
     try {
         if (typeof argument === 'string' && argument.trim().length > 0) {
@@ -310,6 +332,13 @@ window.openWheel = function(argument) {
     gamepadHoverSlotIndex = null;
     activeWheelContextFilter = 'ALL';
     activeCategoryFilter = 'ALL';
+
+    const sources = getInventorySourcesList();
+    if (prevInvSource && sources.some(s => s.id.toUpperCase() === prevInvSource.toUpperCase())) {
+        activeInventorySource = prevInvSource;
+    } else {
+        activeInventorySource = '0x00000007';
+    }
 
     const tabs = document.querySelectorAll('#filter-tabs-container .filter-tab');
     tabs.forEach(tab => {
@@ -511,12 +540,13 @@ function handleEscClose(e) {
             (ddGpPlay && ddGpPlay.style.display === 'flex') ||
             (sortList && sortList.style.display === 'flex')) {
             if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
+            hideAllMenus();
             return true;
         }
 
         const panelSettings = document.getElementById('panel-settings');
         if (panelSettings && panelSettings.style.display !== 'none') {
-            if (typeof hideSettingsModal === 'function') hideSettingsModal();
+            hideSettingsModal();
             return true;
         }
 
@@ -549,6 +579,10 @@ function handleEscClose(e) {
 
 function initGlobalInputHandlers() {
     window.addEventListener('keydown', handleEscClose, true);
+
+    window.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+    });
 
     document.addEventListener('focusin', (e) => {
         if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
@@ -660,6 +694,13 @@ function initGlobalInputHandlers() {
                 dragGhostElement = null;
             }
 
+            activeDraggedSlotIndex = null;
+            isSlotDragging = false;
+            if (slotDragGhostElement) {
+                slotDragGhostElement.remove();
+                slotDragGhostElement = null;
+            }
+
             if (isInsideMenu || e.target.closest('.modal-card') || e.target.closest('#panel-settings')) return;
 
             const itemElem = e.target.closest('.item-row-card');
@@ -671,13 +712,7 @@ function initGlobalInputHandlers() {
                 const itemNameEl = itemElem.querySelector('.item-name-text');
                 const itemName = itemNameEl ? itemNameEl.innerText.trim() : '';
 
-                let inv = [];
-                const srcUpper = (activeInventorySource || '0x00000007').toUpperCase();
-                if (srcUpper === 'CLOUD') inv = currentWheelData.cloudInventory || [];
-                else if (currentWheelData.actorInventories && currentWheelData.actorInventories[activeInventorySource]) inv = currentWheelData.actorInventories[activeInventorySource];
-                else if (srcUpper === '0X00000007' || srcUpper === '0X00000014') inv = currentWheelData.playerInventory || currentWheelData.inventory || [];
-                else inv = currentWheelData.followerInventory || [];
-
+                const inv = getInventoryBySourceId(activeInventorySource);
                 const matchedItem = inv.find(x => x.name === itemName) || inspectedItemObject;
 
                 if (itemMenu && itemMenu.style.display === 'flex' && inspectedItemObject && (inspectedItemObject.name === itemName || (matchedItem && inspectedItemObject.rawID === matchedItem.rawID))) {
@@ -693,7 +728,7 @@ function initGlobalInputHandlers() {
 
             const slotElem = e.target.closest('[data-slot-index]');
             if (slotElem) {
-                const idx = parseInt(slotElem.getAttribute('data-slot-index'));
+                const idx = parseInt(slotElem.getAttribute('data-slot-index'), 10);
                 if (!isNaN(idx)) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -712,7 +747,12 @@ function initGlobalInputHandlers() {
                 }
             }
 
-            if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || e.target.closest('.wheel-center')) {
+            const panelElem = e.target.closest('.draggable-panel, #panel-settings');
+            if (panelElem) {
+                return;
+            }
+
+            if (isEditModeActive()) {
                 e.preventDefault();
                 e.stopPropagation();
 
@@ -722,9 +762,27 @@ function initGlobalInputHandlers() {
                     return;
                 }
 
+                hideAllMenus();
                 const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
                 const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
                 if (typeof showWheelContextMenu === 'function') showWheelContextMenu(clickX, clickY);
+                return;
+            } else {
+                if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || e.target.closest('.wheel-center')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    const wheelMenu = document.getElementById('wheel-context-menu');
+                    if (wheelMenu && wheelMenu.style.display === 'flex') {
+                        hideAllMenus();
+                        return;
+                    }
+
+                    hideAllMenus();
+                    const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
+                    const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
+                    if (typeof showWheelContextMenu === 'function') showWheelContextMenu(clickX, clickY);
+                }
             }
         }
     }, false);
@@ -772,6 +830,9 @@ function selectSortOption(val, labelText, e) {
 }
 
 function initWheelCenterInteraction() {
+    let wheelRafId = null;
+    let cachedAutoScale = 1.0;
+
     document.querySelectorAll('.wheel-center').forEach(centerEl => {
         centerEl.addEventListener('mousedown', (e) => {
             if (e.button === 0) {
@@ -781,9 +842,14 @@ function initWheelCenterInteraction() {
                 wheelDragStartY = e.clientY;
                 wheelStartOffsetX = (currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0;
                 wheelStartOffsetY = (currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0;
+                cachedAutoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
                 centerEl.classList.add('is-dragging');
                 const wheelContainer = document.getElementById('wheel-container');
-                if (wheelContainer) wheelContainer.style.transition = 'none';
+                if (wheelContainer) {
+                    wheelContainer.style.transition = 'none';
+                    wheelContainer.style.willChange = 'transform';
+                }
+                e.preventDefault();
                 e.stopPropagation();
             }
         });
@@ -805,33 +871,45 @@ function initWheelCenterInteraction() {
 
     window.addEventListener('mousemove', (e) => {
         if (!isDraggingWheelCenter) return;
-        let dx = e.clientX - wheelDragStartX;
-        let dy = e.clientY - wheelDragStartY;
         wheelDragMoved = true;
 
-        let newOffsetX = wheelStartOffsetX + dx;
-        let newOffsetY = wheelStartOffsetY + dy;
+        const dx = e.clientX - wheelDragStartX;
+        const dy = e.clientY - wheelDragStartY;
+        const newOffsetX = wheelStartOffsetX + dx;
+        const newOffsetY = wheelStartOffsetY + dy;
+
         currentWheelData.wheelOffsetX = newOffsetX;
         currentWheelData.wheelOffsetY = newOffsetY;
         tempOffsetX = newOffsetX;
         tempOffsetY = newOffsetY;
 
-        const container = document.getElementById('wheel-container');
-        if (container) {
-            const isEdit = isEditModeActive();
-            const baseScale = isEdit ? 0.65 : 1.0;
-            const userScale = currentWheelData.wheelScale || 1.0;
-            const autoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
-            container.style.transform = `translate3d(${newOffsetX}px, ${newOffsetY}px, 0) scale(${baseScale * userScale * autoScale})`;
+        if (!wheelRafId) {
+            wheelRafId = requestAnimationFrame(() => {
+                wheelRafId = null;
+                const container = document.getElementById('wheel-container');
+                if (container) {
+                    const isEdit = isEditModeActive();
+                    const baseScale = isEdit ? 0.65 : 1.0;
+                    const userScale = currentWheelData.wheelScale || 1.0;
+                    container.style.transform = `translate3d(${newOffsetX}px, ${newOffsetY}px, 0) scale(${baseScale * userScale * cachedAutoScale})`;
+                }
+            });
         }
-    });
+    }, { passive: true });
 
     window.addEventListener('mouseup', () => {
         if (isDraggingWheelCenter) {
             isDraggingWheelCenter = false;
+            if (wheelRafId) {
+                cancelAnimationFrame(wheelRafId);
+                wheelRafId = null;
+            }
             document.querySelectorAll('.wheel-center').forEach(el => el.classList.remove('is-dragging'));
             const wheelContainer = document.getElementById('wheel-container');
-            if (wheelContainer) wheelContainer.style.transition = '';
+            if (wheelContainer) {
+                wheelContainer.style.transition = '';
+                wheelContainer.style.willChange = 'auto';
+            }
             if (wheelDragMoved) {
                 saveWheelPositionToStorage();
                 persistWheelSettings();
@@ -855,8 +933,7 @@ function persistWheelSettings() {
             gamepadPlayKey: currentWheelData.gamepadPlayKey || 0x0008,
             gamepadPlayModifier: currentWheelData.gamepadPlayModifier || 0x0100,
             autoCloseOnEquip: currentWheelData.autoCloseOnEquip !== false,
-            autoStashEnabled: currentWheelData.autoStashEnabled === true,
-            autoSystemEnabled: currentWheelData.autoSystemEnabled !== false,
+            autoStashEnabled: currentWheelData.autoStashEnabled !== false,
             autoCityEnabled: currentWheelData.autoCityEnabled !== false,
             autoHomeEnabled: currentWheelData.autoHomeEnabled !== false,
             autoCombatEnabled: currentWheelData.autoCombatEnabled !== false,
@@ -869,12 +946,12 @@ function saveOutfit(slotIndex) {
     if (typeof showSaveToast === 'function') showSaveToast("Outfit Saved!");
     if (typeof window.SaveOutfit === 'function' && currentWheelData) {
         window.SaveOutfit(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: slotIndex
         }));
     } else if (typeof window.SaveOutfitToSlot === 'function' && currentWheelData) {
         window.SaveOutfitToSlot(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: slotIndex
         }));
     }
@@ -889,7 +966,7 @@ function equipOutfit(slotIndex, keepOpen) {
     if (typeof updateWheelUI === 'function') updateWheelUI();
     if (typeof window.EquipSlot === 'function' && currentWheelData) {
         window.EquipSlot(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: slotIndex,
             editMode: isEditModeActive(),
             keepOpen: keepOpen === true
@@ -957,11 +1034,11 @@ function setCategoryFilter(cat, e) {
 }
 
 function savePanelsLayout() {
-    const panelIds = ['panel-inventory', 'panel-slots-rail', 'panel-slot-details', 'panel-settings'];
+    const panelIds = ['panel-inventory', 'panel-slots-rail', 'panel-slot-details'];
     const layout = {};
     panelIds.forEach(id => {
         const el = document.getElementById(id);
-        if (el) {
+        if (el && el.style.display !== 'none') {
             const rect = el.getBoundingClientRect();
             layout[id] = {
                 left: rect.left,
@@ -986,6 +1063,7 @@ function loadPanelsLayout() {
         if (raw) {
             const layout = JSON.parse(raw);
             Object.keys(layout).forEach(id => {
+                if (id === 'panel-settings') return;
                 const data = layout[id];
                 const el = document.getElementById(id);
                 if (el && data) {
@@ -1003,19 +1081,6 @@ function loadPanelsLayout() {
                     el.style.bottom = 'auto';
                     el.style.maxWidth = 'none';
                     el.style.maxHeight = 'none';
-                }
-            });
-        } else {
-            const defaultConfigs = [
-                { id: 'panel-inventory', w: 330, h: 720 },
-                { id: 'panel-slots-rail', w: 200, h: 720 },
-                { id: 'panel-slot-details', w: 330, h: 720 }
-            ];
-            defaultConfigs.forEach(cfg => {
-                const el = document.getElementById(cfg.id);
-                if (el) {
-                    el.style.width = Math.round(cfg.w * autoScale) + 'px';
-                    el.style.height = Math.round(cfg.h * autoScale) + 'px';
                 }
             });
         }
@@ -1112,9 +1177,22 @@ function initCameraOrbitAndControls() {
 }
 
 function initDraggablePanels() {
-    document.querySelectorAll('.draggable-panel').forEach(panel => {
+    let panelRafId = null;
+
+    const targets = document.querySelectorAll('.draggable-panel');
+    targets.forEach(panel => {
+        if (panel.id === 'panel-settings') return;
         panel.addEventListener('mousedown', (e) => {
-            if (e.button === 2) {
+            const isHeader = !!e.target.closest('.panel-drag-handle, .modal-header, .panel-header');
+            if (e.button === 2 || (e.button === 0 && isHeader)) {
+                if (e.target.closest('.item-row-card') ||
+                    e.target.closest('[data-slot-index]') ||
+                    e.target.closest('button') ||
+                    e.target.closest('input') ||
+                    e.target.closest('.context-menu-popup') ||
+                    e.target.closest('.resize-handle')) {
+                    return;
+                }
                 e.preventDefault();
                 startPanelDrag(e, panel.id);
             }
@@ -1125,85 +1203,87 @@ function initDraggablePanels() {
     });
 
     window.addEventListener('mousemove', (e) => {
-        if (!activeDragPanelId) return;
-        const panel = document.getElementById(activeDragPanelId);
-        if (!panel) return;
+        if (!activeDragPanelId || activeDragPanelId === 'panel-settings') return;
 
-        const screenW = window.innerWidth;
-        const screenH = window.innerHeight;
-        const panelW = panel.offsetWidth;
-        const panelH = panel.offsetHeight;
+        const currentClientX = e.clientX;
+        const currentClientY = e.clientY;
 
-        let rawLeft = panelStartLeft + (e.clientX - dragStartX);
-        let rawTop = panelStartTop + (e.clientY - dragStartY);
+        if (!panelRafId) {
+            panelRafId = requestAnimationFrame(() => {
+                panelRafId = null;
+                const panel = document.getElementById(activeDragPanelId);
+                if (!panel) return;
 
-        if (activeDragPanelId === 'panel-settings') {
-            let directLeft = Math.max(10, Math.min(rawLeft, screenW - panelW - 10));
-            let directTop = Math.max(10, Math.min(rawTop, screenH - panelH - 10));
-            panel.style.position = 'fixed';
-            panel.style.left = directLeft + 'px';
-            panel.style.top = directTop + 'px';
-            panel.style.right = 'auto';
-            panel.style.bottom = 'auto';
-            return;
+                const screenW = window.innerWidth;
+                const screenH = window.innerHeight;
+                const panelW = panel.offsetWidth;
+                const panelH = panel.offsetHeight;
+
+                let rawLeft = panelStartLeft + (currentClientX - dragStartX);
+                let rawTop = panelStartTop + (currentClientY - dragStartY);
+
+                const SNAP_THRESHOLD = 18;
+                const SCREEN_MARGIN = 14;
+                const PANEL_GAP = 12;
+
+                let snappedLeft = rawLeft;
+                let snappedTop = rawTop;
+
+                if (Math.abs(rawLeft - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+                    snappedLeft = SCREEN_MARGIN;
+                } else if (Math.abs(rawLeft - (screenW - panelW - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+                    snappedLeft = screenW - panelW - SCREEN_MARGIN;
+                }
+
+                if (Math.abs(rawTop - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+                    snappedTop = SCREEN_MARGIN;
+                } else if (Math.abs(rawTop - (screenH - panelH - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+                    snappedTop = screenH - panelH - SCREEN_MARGIN;
+                }
+
+                document.querySelectorAll('.draggable-panel').forEach(other => {
+                    if (other.id === activeDragPanelId || other.id === 'panel-settings' || other.style.display === 'none') return;
+                    const oRect = other.getBoundingClientRect();
+
+                    if (Math.abs(snappedLeft - oRect.left) < SNAP_THRESHOLD) {
+                        snappedLeft = oRect.left;
+                    } else if (Math.abs(snappedLeft - (oRect.right + PANEL_GAP)) < SNAP_THRESHOLD) {
+                        snappedLeft = oRect.right + PANEL_GAP;
+                    } else if (Math.abs((snappedLeft + panelW) - oRect.left) < SNAP_THRESHOLD) {
+                        snappedLeft = oRect.left - panelW - PANEL_GAP;
+                    } else if (Math.abs((snappedLeft + panelW) - oRect.right) < SNAP_THRESHOLD) {
+                        snappedLeft = oRect.right - panelW;
+                    }
+
+                    if (Math.abs(snappedTop - oRect.top) < SNAP_THRESHOLD) {
+                        snappedTop = oRect.top;
+                    } else if (Math.abs(snappedTop - (oRect.bottom + PANEL_GAP)) < SNAP_THRESHOLD) {
+                        snappedTop = oRect.bottom + PANEL_GAP;
+                    } else if (Math.abs((snappedTop + panelH) - oRect.top) < SNAP_THRESHOLD) {
+                        snappedTop = oRect.top - panelH - PANEL_GAP;
+                    } else if (Math.abs((snappedTop + panelH) - oRect.bottom) < SNAP_THRESHOLD) {
+                        snappedTop = oRect.bottom - panelH;
+                    }
+                });
+
+                snappedLeft = Math.max(SCREEN_MARGIN, Math.min(snappedLeft, screenW - panelW - SCREEN_MARGIN));
+                snappedTop = Math.max(SCREEN_MARGIN, Math.min(snappedTop, screenH - panelH - SCREEN_MARGIN));
+
+                panel.style.position = 'fixed';
+                panel.style.left = snappedLeft + 'px';
+                panel.style.top = snappedTop + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+            });
         }
-
-        const SNAP_THRESHOLD = 18;
-        const SCREEN_MARGIN = 14;
-        const PANEL_GAP = 12;
-
-        let snappedLeft = rawLeft;
-        let snappedTop = rawTop;
-
-        if (Math.abs(rawLeft - SCREEN_MARGIN) < SNAP_THRESHOLD) {
-            snappedLeft = SCREEN_MARGIN;
-        } else if (Math.abs(rawLeft - (screenW - panelW - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
-            snappedLeft = screenW - panelW - SCREEN_MARGIN;
-        }
-
-        if (Math.abs(rawTop - SCREEN_MARGIN) < SNAP_THRESHOLD) {
-            snappedTop = SCREEN_MARGIN;
-        } else if (Math.abs(rawTop - (screenH - panelH - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
-            snappedTop = screenH - panelH - SCREEN_MARGIN;
-        }
-
-        document.querySelectorAll('.draggable-panel').forEach(other => {
-            if (other.id === activeDragPanelId || other.id === 'panel-settings' || other.style.display === 'none') return;
-            const oRect = other.getBoundingClientRect();
-
-            if (Math.abs(snappedLeft - oRect.left) < SNAP_THRESHOLD) {
-                snappedLeft = oRect.left;
-            } else if (Math.abs(snappedLeft - (oRect.right + PANEL_GAP)) < SNAP_THRESHOLD) {
-                snappedLeft = oRect.right + PANEL_GAP;
-            } else if (Math.abs((snappedLeft + panelW) - oRect.left) < SNAP_THRESHOLD) {
-                snappedLeft = oRect.left - panelW - PANEL_GAP;
-            } else if (Math.abs((snappedLeft + panelW) - oRect.right) < SNAP_THRESHOLD) {
-                snappedLeft = oRect.right - panelW;
-            }
-
-            if (Math.abs(snappedTop - oRect.top) < SNAP_THRESHOLD) {
-                snappedTop = oRect.top;
-            } else if (Math.abs(snappedTop - (oRect.bottom + PANEL_GAP)) < SNAP_THRESHOLD) {
-                snappedTop = oRect.bottom + PANEL_GAP;
-            } else if (Math.abs((snappedTop + panelH) - oRect.top) < SNAP_THRESHOLD) {
-                snappedTop = oRect.top - panelH - PANEL_GAP;
-            } else if (Math.abs((snappedTop + panelH) - oRect.bottom) < SNAP_THRESHOLD) {
-                snappedTop = oRect.bottom - panelH;
-            }
-        });
-
-        snappedLeft = Math.max(SCREEN_MARGIN, Math.min(snappedLeft, screenW - panelW - SCREEN_MARGIN));
-        snappedTop = Math.max(SCREEN_MARGIN, Math.min(snappedTop, screenH - panelH - SCREEN_MARGIN));
-
-        panel.style.position = 'fixed';
-        panel.style.left = snappedLeft + 'px';
-        panel.style.top = snappedTop + 'px';
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-    });
+    }, { passive: true });
 
     window.addEventListener('mouseup', () => {
         if (activeDragPanelId) {
+            if (panelRafId) {
+                cancelAnimationFrame(panelRafId);
+                panelRafId = null;
+            }
             const panel = document.getElementById(activeDragPanelId);
             if (panel) panel.classList.remove('is-dragging');
             savePanelsLayout();
@@ -1213,9 +1293,12 @@ function initDraggablePanels() {
 }
 
 function handlePanelDragStart(e, panelId) {
-    startPanelDrag(e, panelId);
+    if (e.button === 0 || e.button === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        startPanelDrag(e, panelId);
+    }
 }
-
 function startPanelDrag(e, panelId) {
     activeDragPanelId = panelId;
     dragStartX = e.clientX;
@@ -1226,6 +1309,13 @@ function startPanelDrag(e, panelId) {
         const rect = panel.getBoundingClientRect();
         panelStartLeft = rect.left;
         panelStartTop = rect.top;
+        panel.style.position = 'fixed';
+        panel.style.left = panelStartLeft + 'px';
+        panel.style.top = panelStartTop + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.style.transform = 'none';
+        panel.style.margin = '0';
         panel.style.maxWidth = 'none';
         panel.style.maxHeight = 'none';
     }
@@ -1233,7 +1323,7 @@ function startPanelDrag(e, panelId) {
 
 function initResizablePanels() {
     window.addEventListener('mousemove', (e) => {
-        if (!activeResizePanelId) return;
+        if (!activeResizePanelId || activeResizePanelId === 'panel-settings') return;
         const panel = document.getElementById(activeResizePanelId);
         if (!panel) return;
 
@@ -1318,6 +1408,8 @@ function handlePanelResizeStart(e, panelId, dir) {
     panel.style.bottom = 'auto';
     panel.style.maxWidth = 'none';
     panel.style.maxHeight = 'none';
+    panel.style.transform = 'none';
+    panel.style.margin = '0';
 
     activeResizePanelId = panelId;
     resizeDirection = dir;
@@ -1328,35 +1420,26 @@ function handlePanelResizeStart(e, panelId, dir) {
 function initCustomItemDragDrop() {
     window.addEventListener('mousemove', (e) => {
         if (activeDraggedItem) {
-            if (e.buttons !== 1) {
-                if (dragGhostElement) {
-                    dragGhostElement.remove();
-                    dragGhostElement = null;
-                }
-                activeDraggedItem = null;
-                isItemDragging = false;
-                document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
-                return;
-            }
-
             const dx = e.clientX - dragItemStartX;
             const dy = e.clientY - dragItemStartY;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            if (dist > 5 && !isItemDragging) {
+            if (dist > 4 && !isItemDragging) {
                 isItemDragging = true;
                 if (!dragGhostElement) {
                     dragGhostElement = document.createElement('div');
                     dragGhostElement.id = 'dragged-item-ghost';
+                    dragGhostElement.style.position = 'fixed';
                     dragGhostElement.style.pointerEvents = 'none';
+                    dragGhostElement.style.zIndex = '999999';
                     dragGhostElement.innerHTML = '<span class="ghost-type-badge">' + (activeDraggedItem.type || 'Armor') + '</span><span>' + activeDraggedItem.name + '</span>';
                     document.body.appendChild(dragGhostElement);
                 }
             }
 
             if (isItemDragging && dragGhostElement) {
-                dragGhostElement.style.left = e.clientX + 'px';
-                dragGhostElement.style.top = e.clientY + 'px';
+                dragGhostElement.style.left = (e.clientX + 12) + 'px';
+                dragGhostElement.style.top = (e.clientY + 12) + 'px';
 
                 document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
 
@@ -1376,27 +1459,18 @@ function initCustomItemDragDrop() {
         }
 
         if (activeDraggedSlotIndex !== null) {
-            if (e.buttons !== 1) {
-                if (slotDragGhostElement) {
-                    slotDragGhostElement.remove();
-                    slotDragGhostElement = null;
-                }
-                activeDraggedSlotIndex = null;
-                isSlotDragging = false;
-                document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
-                return;
-            }
-
             const dx = e.clientX - slotDragStartX;
             const dy = e.clientY - slotDragStartY;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            if (dist > 6 && !isSlotDragging) {
+            if (dist > 4 && !isSlotDragging) {
                 isSlotDragging = true;
                 if (!slotDragGhostElement) {
                     slotDragGhostElement = document.createElement('div');
                     slotDragGhostElement.id = 'dragged-slot-ghost';
+                    slotDragGhostElement.style.position = 'fixed';
                     slotDragGhostElement.style.pointerEvents = 'none';
+                    slotDragGhostElement.style.zIndex = '999999';
                     const slotObj = (currentWheelData.slots || [])[activeDraggedSlotIndex];
                     const slotName = slotObj && slotObj.name ? slotObj.name : ('Slot ' + (activeDraggedSlotIndex + 1));
                     slotDragGhostElement.innerHTML = '<span class="ghost-slot-badge">SLOT ' + (activeDraggedSlotIndex + 1) + '</span><span>' + slotName + '</span>';
@@ -1405,8 +1479,8 @@ function initCustomItemDragDrop() {
             }
 
             if (isSlotDragging && slotDragGhostElement) {
-                slotDragGhostElement.style.left = e.clientX + 'px';
-                slotDragGhostElement.style.top = e.clientY + 'px';
+                slotDragGhostElement.style.left = (e.clientX + 12) + 'px';
+                slotDragGhostElement.style.top = (e.clientY + 12) + 'px';
 
                 document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
 
@@ -1414,30 +1488,7 @@ function initCustomItemDragDrop() {
                 if (elemBelow) {
                     const targetCard = elemBelow.closest('.vertical-slot-card');
                     if (targetCard) {
-                        const targetIdx = parseInt(targetCard.getAttribute('data-slot-index'), 10);
-                        if (!isNaN(targetIdx) && targetIdx !== activeDraggedSlotIndex && currentWheelData && currentWheelData.slots) {
-                            const fromIdx = activeDraggedSlotIndex;
-                            const toIdx = targetIdx;
-
-                            if (typeof window.MoveSlot === 'function') {
-                                window.MoveSlot(JSON.stringify({
-                                    wheelIndex: currentWheelData.wheelIndex || 0,
-                                    fromIndex: fromIdx,
-                                    toIndex: toIdx,
-                                    editMode: isEditModeActive()
-                                }));
-                            }
-
-                            const movedSlot = currentWheelData.slots.splice(fromIdx, 1)[0];
-                            currentWheelData.slots.splice(toIdx, 0, movedSlot);
-                            currentWheelData.slots.forEach((s, i) => s.index = i);
-
-                            selectedSlotIndex = toIdx;
-                            renderSlotsRail();
-                            renderDrawerDetails();
-                            if (typeof updateWheelUI === 'function') updateWheelUI();
-                            showSaveToast("Slot Moved to Position " + (toIdx + 1));
-                        }
+                        targetCard.classList.add('slot-drop-hover');
                     }
                 }
             }
@@ -1482,13 +1533,19 @@ function initCustomItemDragDrop() {
                     if (foundTarget) {
                         const rawIdVal = activeDraggedItem.rawID || activeDraggedItem.formID || parseInt(activeDraggedItem.id, 16) || 0;
                         const idStrVal = activeDraggedItem.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
+                        const uniqueIdVal = activeDraggedItem.uniqueID || 0;
+                        const enchIdVal = activeDraggedItem.enchantmentID || 0;
+                        const customNameVal = (activeDraggedItem.customName && activeDraggedItem.customName !== 'Apparel') ? activeDraggedItem.customName : '';
 
                         if (typeof window.AddItemToSlot === 'function' && currentWheelData) {
                             window.AddItemToSlot(JSON.stringify({
                                 wheelIndex: currentWheelData.wheelIndex || 0,
                                 slotIndex: targetSlotIdx,
                                 rawID: rawIdVal,
-                                id: idStrVal
+                                id: idStrVal,
+                                uniqueID: uniqueIdVal,
+                                enchantmentID: enchIdVal,
+                                customName: customNameVal
                             }));
                         }
 
@@ -1503,7 +1560,10 @@ function initCustomItemDragDrop() {
 
                                 const alreadyExists = targetSlot.items.some(it => {
                                     const itRaw = (typeof it === 'object') ? (it.rawID || it.formID || parseInt(it.id, 16)) : (typeof it === 'number' ? it : parseInt(it, 16));
-                                    return itRaw === rawIdVal;
+                                    const itUID = (typeof it === 'object') ? (it.uniqueID || 0) : 0;
+                                    const itEnch = (typeof it === 'object') ? (it.enchantmentID || 0) : 0;
+                                    const itName = (typeof it === 'object') ? (it.customName || '') : '';
+                                    return itRaw === rawIdVal && itUID === uniqueIdVal && itEnch === enchIdVal && itName === customNameVal;
                                 });
 
                                 if (!alreadyExists) {
@@ -1511,6 +1571,9 @@ function initCustomItemDragDrop() {
                                         name: activeDraggedItem.name,
                                         rawID: rawIdVal,
                                         id: idStrVal,
+                                        uniqueID: uniqueIdVal,
+                                        enchantmentID: enchIdVal,
+                                        customName: customNameVal,
                                         type: activeDraggedItem.type || 'Armor'
                                     });
                                 }
@@ -1650,6 +1713,7 @@ function renderFollowersStrip() {
     }
 
     strip.innerHTML = '';
+    const fragment = document.createDocumentFragment();
     displayList.forEach(f => {
         const fID = (f.id || '').toUpperCase();
         const isActive = (fID === activeTarget);
@@ -1661,8 +1725,9 @@ function renderFollowersStrip() {
             e.stopPropagation();
             selectFollower(f.id);
         };
-        strip.appendChild(item);
+        fragment.appendChild(item);
     });
+    strip.appendChild(fragment);
 }
 
 function selectFollower(targetId) {
@@ -1728,6 +1793,7 @@ function renderInventorySourceStrip() {
     }
 
     strip.innerHTML = '';
+    const fragment = document.createDocumentFragment();
     displayList.forEach(s => {
         const btn = document.createElement('button');
         const isActive = (s.id.toUpperCase() === activeInventorySource.toUpperCase());
@@ -1737,8 +1803,9 @@ function renderInventorySourceStrip() {
             e.stopPropagation();
             setInventorySource(s.id);
         };
-        strip.appendChild(btn);
+        fragment.appendChild(btn);
     });
+    strip.appendChild(fragment);
 }
 
 function handleInventorySearch(val) {
@@ -1784,18 +1851,8 @@ function renderInventoryList() {
     if (!grid) return;
     grid.innerHTML = '';
 
-    let inv = [];
+    const inv = getInventoryBySourceId(activeInventorySource);
     const srcUpper = activeInventorySource.toUpperCase();
-
-    if (srcUpper === 'CLOUD') {
-        inv = currentWheelData.cloudInventory || [];
-    } else if (currentWheelData.actorInventories && currentWheelData.actorInventories[activeInventorySource]) {
-        inv = currentWheelData.actorInventories[activeInventorySource];
-    } else if (srcUpper === '0X00000007' || srcUpper === '0X00000014') {
-        inv = currentWheelData.playerInventory || currentWheelData.inventory || [];
-    } else {
-        inv = currentWheelData.followerInventory || [];
-    }
 
     let items = inv.filter(item => {
         if (!item.name || item.name.trim().length === 0) return false;
@@ -1846,6 +1903,8 @@ function renderInventoryList() {
         return;
     }
 
+    const fragment = document.createDocumentFragment();
+
     items.forEach(item => {
         const card = document.createElement('div');
         card.className = 'item-row-card ' + (item.equipped ? 'is-equipped-item' : '');
@@ -1893,8 +1952,9 @@ function renderInventoryList() {
             }
         };
 
-        grid.appendChild(card);
+        fragment.appendChild(card);
     });
+    grid.appendChild(fragment);
 }
 
 function showItemContextMenu(x, y, item) {
@@ -1907,32 +1967,51 @@ function showItemContextMenu(x, y, item) {
 
     const title = document.getElementById('item-ctx-title');
     const targetsList = document.getElementById('item-transfer-targets-list');
+    const allTargetsList = document.getElementById('item-transfer-all-targets-list');
     if (!title || !targetsList) return;
 
     inspectedItemObject = item;
     title.innerText = item.name || 'Item Options';
     targetsList.innerHTML = '';
+    if (allTargetsList) allTargetsList.innerHTML = '';
 
-    const currentItemSource = (item.source || activeInventorySource || '0x00000007').toUpperCase();
+    const currentItemSource = (activeInventorySource || item.source || '0x00000007').toUpperCase();
     const allSources = getInventorySourcesList();
 
     allSources.forEach(src => {
         const srcUpper = src.id.toUpperCase();
         if (srcUpper !== currentItemSource) {
-            const btn = document.createElement('div');
-            btn.className = 'ctx-item';
-            btn.innerHTML = '<span>' + src.name + '</span>';
-            btn.onmousedown = (e) => {
+            const btnSingle = document.createElement('div');
+            btnSingle.className = 'ctx-item';
+            btnSingle.innerHTML = '<span>' + src.name + '</span>';
+            btnSingle.onmousedown = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 ctxItemTransfer(src.id);
             };
-            btn.onclick = (e) => {
+            btnSingle.onclick = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 ctxItemTransfer(src.id);
             };
-            targetsList.appendChild(btn);
+            targetsList.appendChild(btnSingle);
+
+            if (allTargetsList) {
+                const btnAll = document.createElement('div');
+                btnAll.className = 'ctx-item';
+                btnAll.innerHTML = '<span>' + src.name + '</span>';
+                btnAll.onmousedown = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    ctxTransferAllTo(src.id);
+                };
+                btnAll.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    ctxTransferAllTo(src.id);
+                };
+                allTargetsList.appendChild(btnAll);
+            }
         }
     });
 
@@ -1940,7 +2019,7 @@ function showItemContextMenu(x, y, item) {
     let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
 
     posX = Math.max(10, Math.min(posX, window.innerWidth - 220));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 260));
+    posY = Math.max(10, Math.min(posY, window.innerHeight - 300));
 
     menu.style.left = posX + 'px';
     menu.style.top = posY + 'px';
@@ -2007,16 +2086,8 @@ function openTransferAllMenu(e) {
 }
 
 function performLocalItemTransfer(rawIdVal, fromSrc, toTargetId) {
-    const getList = (srcId) => {
-        const s = (srcId || '').toUpperCase();
-        if (s === 'CLOUD') return currentWheelData.cloudInventory;
-        if (s === '0X00000007' || s === '0X00000014' || s === 'PLAYER') return currentWheelData.playerInventory || currentWheelData.inventory;
-        if (currentWheelData.actorInventories && currentWheelData.actorInventories[srcId]) return currentWheelData.actorInventories[srcId];
-        return currentWheelData.followerInventory;
-    };
-
-    const srcList = getList(fromSrc);
-    const dstList = getList(toTargetId);
+    const srcList = getInventoryBySourceId(fromSrc);
+    const dstList = getInventoryBySourceId(toTargetId);
 
     if (Array.isArray(srcList) && Array.isArray(dstList) && srcList !== dstList) {
         const idx = srcList.findIndex(it => (it.rawID || parseInt(it.id, 16)) === rawIdVal);
@@ -2025,22 +2096,14 @@ function performLocalItemTransfer(rawIdVal, fromSrc, toTargetId) {
             item.source = toTargetId;
             item.equipped = false;
             dstList.unshift(item);
-            renderInventoryList();
         }
     }
+    renderInventoryList();
 }
 
 function performLocalAllTransfer(fromSrc, toTargetId) {
-    const getList = (srcId) => {
-        const s = (srcId || '').toUpperCase();
-        if (s === 'CLOUD') return currentWheelData.cloudInventory;
-        if (s === '0X00000007' || s === '0X00000014' || s === 'PLAYER') return currentWheelData.playerInventory || currentWheelData.inventory;
-        if (currentWheelData.actorInventories && currentWheelData.actorInventories[srcId]) return currentWheelData.actorInventories[srcId];
-        return currentWheelData.followerInventory;
-    };
-
-    const srcList = getList(fromSrc);
-    const dstList = getList(toTargetId);
+    const srcList = getInventoryBySourceId(fromSrc);
+    const dstList = getInventoryBySourceId(toTargetId);
 
     if (Array.isArray(srcList) && Array.isArray(dstList) && srcList !== dstList) {
         while (srcList.length > 0) {
@@ -2049,8 +2112,8 @@ function performLocalAllTransfer(fromSrc, toTargetId) {
             item.equipped = false;
             dstList.unshift(item);
         }
-        renderInventoryList();
     }
+    renderInventoryList();
 }
 
 function ctxTransferAllTo(toTargetId) {
@@ -2096,7 +2159,7 @@ function ctxItemTransfer(toTargetId) {
 
     const rawIdVal = inspectedItemObject.rawID || inspectedItemObject.formID || parseInt(inspectedItemObject.id, 16) || 0;
     const idStrVal = inspectedItemObject.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
-    const fromSrc = inspectedItemObject.source || activeInventorySource || '0x00000007';
+    const fromSrc = activeInventorySource || inspectedItemObject.source || '0x00000007';
 
     performLocalItemTransfer(rawIdVal, fromSrc, toTargetId);
 
@@ -2157,6 +2220,8 @@ function renderSlotsRail() {
         return;
     }
 
+    const fragment = document.createDocumentFragment();
+
     slots.forEach((s, idx) => {
         const realIdx = s.index !== undefined ? s.index : idx;
         const card = document.createElement('div');
@@ -2185,13 +2250,6 @@ function renderSlotsRail() {
                 isSlotDragging = false;
                 slotDragStartX = e.clientX;
                 slotDragStartY = e.clientY;
-            } else {
-                activeDraggedSlotIndex = null;
-                isSlotDragging = false;
-                if (slotDragGhostElement) {
-                    slotDragGhostElement.remove();
-                    slotDragGhostElement = null;
-                }
             }
         });
 
@@ -2206,8 +2264,9 @@ function renderSlotsRail() {
             }
         };
 
-        rail.appendChild(card);
+        fragment.appendChild(card);
     });
+    rail.appendChild(fragment);
 }
 
 function renderDrawerDetails() {
@@ -2310,14 +2369,16 @@ function renderDrawerContextChips() {
         return true;
     });
 
+    const fragment = document.createDocumentFragment();
     filtered.forEach(cond => {
         const chip = document.createElement('span');
         const isActive = currentTag.includes(cond.id.toLowerCase());
         chip.className = 'ctx-toggle-chip ' + (isActive ? 'active' : '');
         chip.innerText = cond.label;
         chip.onclick = () => toggleContextTagDirect(cond.id);
-        box.appendChild(chip);
+        fragment.appendChild(chip);
     });
+    box.appendChild(fragment);
 }
 
 function renderDrawerItemsList(slot) {
@@ -2336,12 +2397,26 @@ function renderDrawerItemsList(slot) {
         return;
     }
 
+    const fragment = document.createDocumentFragment();
+
     items.forEach((itemEntry, itemIdx) => {
         let itemObj = null;
         if (typeof itemEntry === 'object' && itemEntry !== null) {
             const rId = itemEntry.rawID || itemEntry.formID || parseInt(itemEntry.id, 16) || 0;
+            let resolvedName = itemEntry.name;
+            if (!resolvedName || resolvedName === 'Apparel' || resolvedName === 'Apparel Item') {
+                if (itemEntry.customName && itemEntry.customName !== 'Apparel') {
+                    resolvedName = itemEntry.customName;
+                } else {
+                    const foundInInv = (currentWheelData.inventory || []).find(x => x.rawID === rId || x.id === itemEntry.id);
+                    if (foundInInv && foundInInv.name && foundInInv.name !== 'Apparel') {
+                        resolvedName = foundInInv.name;
+                    }
+                }
+            }
+
             itemObj = {
-                name: itemEntry.name || 'Apparel Item',
+                name: resolvedName || 'Apparel Item',
                 rawID: rId,
                 id: itemEntry.id || ('0x' + Number(rId).toString(16).toUpperCase()),
                 type: itemEntry.type || itemEntry.category || 'Armor'
@@ -2392,8 +2467,9 @@ function renderDrawerItemsList(slot) {
 
         row.appendChild(infoDiv);
         row.appendChild(actionsDiv);
-        list.appendChild(row);
+        fragment.appendChild(row);
     });
+    list.appendChild(fragment);
 }
 
 function removeItemFromCurrentSlot(rawID, idStr, itemIdx) {
@@ -2445,13 +2521,19 @@ function addInspectedItemToCurrentSlot() {
 
     const rawIdVal = inspectedItemObject.rawID || inspectedItemObject.formID || parseInt(inspectedItemObject.id, 16) || 0;
     const idStrVal = inspectedItemObject.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
+    const uniqueIdVal = inspectedItemObject.uniqueID || 0;
+    const enchIdVal = inspectedItemObject.enchantmentID || 0;
+    const customNameVal = (inspectedItemObject.customName && inspectedItemObject.customName !== 'Apparel') ? inspectedItemObject.customName : '';
 
     if (typeof window.AddItemToSlot === 'function' && currentWheelData) {
         window.AddItemToSlot(JSON.stringify({
             wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex,
             rawID: rawIdVal,
-            id: idStrVal
+            id: idStrVal,
+            uniqueID: uniqueIdVal,
+            enchantmentID: enchIdVal,
+            customName: customNameVal
         }));
     }
 
@@ -2459,15 +2541,21 @@ function addInspectedItemToCurrentSlot() {
         const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
         if (slot) {
             if (!slot.items) slot.items = [];
-            const exists = slot.items.some(it => {
+            const alreadyExists = slot.items.some(it => {
                 const itRaw = typeof it === 'object' ? (it.rawID || it.formID || parseInt(it.id, 16)) : (typeof it === 'number' ? it : parseInt(it, 16));
-                return itRaw === rawIdVal;
+                const itUID = typeof it === 'object' ? (it.uniqueID || 0) : 0;
+                const itEnch = typeof it === 'object' ? (it.enchantmentID || 0) : 0;
+                const itName = typeof it === 'object' ? (it.customName || '') : '';
+                return itRaw === rawIdVal && itUID === uniqueIdVal && itEnch === enchIdVal && itName === customNameVal;
             });
-            if (!exists) {
+            if (!alreadyExists) {
                 slot.items.push({
                     name: inspectedItemObject.name,
                     rawID: rawIdVal,
                     id: idStrVal,
+                    uniqueID: uniqueIdVal,
+                    enchantmentID: enchIdVal,
+                    customName: customNameVal,
                     type: inspectedItemObject.type || 'Armor'
                 });
             }
@@ -2487,7 +2575,7 @@ function addInspectedItemToCurrentSlot() {
 function toggleSlotAddonType(isAddon) {
     if (typeof window.SetSlotType === 'function' && currentWheelData) {
         window.SetSlotType(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex,
             isAddon: isAddon
         }));
@@ -2497,7 +2585,7 @@ function toggleSlotAddonType(isAddon) {
 function setSlotRatingDirect(num) {
     if (typeof window.SetSlotRating === 'function' && currentWheelData) {
         window.SetSlotRating(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex,
             ratingStars: num
         }));
@@ -2521,7 +2609,7 @@ function toggleContextTagDirect(ctxKey) {
 
     if (typeof window.SetSlotContext === 'function' && currentWheelData) {
         window.SetSlotContext(JSON.stringify({
-            wheelIndex: currentWheelData.wheelIndex,
+            wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: selectedSlotIndex,
             contextTag: newTagStr
         }));

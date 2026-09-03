@@ -13,7 +13,9 @@ using json = nlohmann::json;
 struct Outfit {
     std::string name;
     std::vector<RE::FormID> itemIDs;
+    std::vector<OutfitItem> items;
     std::string contextTag;
+    std::string icon{};
     uint8_t preferenceStars{ 3 };
     ControlState controlState{ ControlState::Normal };
     bool isAddon{ false };
