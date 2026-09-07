@@ -59,13 +59,3 @@ private:
 
     std::shared_mutex _mutex;
 };
-
-//auto keyHandler = KeyHandler::GetSingleton();
-//
-//const uint32_t G_KEY = 0x22; // G
-//
-//KeyHandlerEvent G_downEventHandler = keyHandler->Register(G_KEY, KeyEventType::KEY_DOWN, [&]() {
-//    logger::info("[Callback 1] G was pressed!");
-//});
-// 
-//keyHandler->Unregister(G_downEventHandler);

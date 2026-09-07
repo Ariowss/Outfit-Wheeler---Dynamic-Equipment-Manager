@@ -19,7 +19,10 @@ struct SelectionResult {
 struct ActorWardrobeData {
     std::vector<AdaptiveOutfit> wardrobe;
     std::string currentOutfitID;
+    std::string preSpecialConditionOutfitID;
     std::deque<std::string> recentHistory;
+    bool isManualOverride{ false };
+    ContextFlags manualOverrideContext{ ContextFlags::None };
 };
 
 class AdaptiveWardrobeManager {
@@ -39,6 +42,7 @@ public:
 
     void LoadWardrobe(RE::FormID a_actorID, const std::vector<AdaptiveOutfit>& outfits);
     std::vector<AdaptiveOutfit> GetWardrobe(RE::FormID a_actorID);
+    bool HasWardrobe(RE::FormID a_actorID) const;
 
     ContextFlags ResolveContextHierarchy(ContextFlags activeContext) const noexcept;
     std::optional<SelectionResult> SelectOptimalOutfit(RE::FormID a_actorID, ContextFlags activeContext, bool isEmergency);
@@ -47,6 +51,7 @@ public:
 
     void SetCurrentOutfitID(RE::FormID a_actorID, const std::string& id);
     std::string GetCurrentOutfitID(RE::FormID a_actorID);
+    void SetManualOverride(RE::FormID a_actorID, ContextFlags context);
 };
 
 #endif

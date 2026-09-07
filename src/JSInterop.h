@@ -14,6 +14,7 @@ void OnConsoleMessageCallbackFunc(PrismaView v, PRISMA_UI_API::ConsoleMessageLev
 
 void InitializeStudioStage();
 void SetupStudioCameraAndControls(bool enableStudio);
+void SetCameraInputHandlingEnabled(bool a_enabled);
 void RestoreStudioActors();
 
 void SaveSettingsListener(const char* data);

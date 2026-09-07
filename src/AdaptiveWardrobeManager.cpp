@@ -9,6 +9,7 @@
 #endif
 
 #include "AdaptiveWardrobeManager.h"
+#include "ExecutionQueue.h"
 #include <SKSE/SKSE.h>
 #include <chrono>
 
@@ -35,8 +36,19 @@ void AdaptiveWardrobeManager::LoadWardrobe(RE::FormID a_actorID, const std::vect
 
 std::vector<AdaptiveOutfit> AdaptiveWardrobeManager::GetWardrobe(RE::FormID a_actorID) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
-    auto& data = GetOrCreateWardrobeData(a_actorID);
-    return data.wardrobe;
+    RE::FormID canonicalID = (a_actorID == 0x00000014 || a_actorID == 0) ? 0x00000007 : a_actorID;
+    auto it = actorWardrobes.find(canonicalID);
+    if (it != actorWardrobes.end()) {
+        return it->second.wardrobe;
+    }
+    return {};
+}
+
+bool AdaptiveWardrobeManager::HasWardrobe(RE::FormID a_actorID) const {
+    std::lock_guard<std::mutex> lock(wardrobeMutex);
+    RE::FormID canonicalID = (a_actorID == 0x00000014 || a_actorID == 0) ? 0x00000007 : a_actorID;
+    auto it = actorWardrobes.find(canonicalID);
+    return it != actorWardrobes.end() && !it->second.wardrobe.empty();
 }
 
 ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activeContext) const noexcept {
@@ -85,7 +97,8 @@ ContextFlags AdaptiveWardrobeManager::ResolveContextHierarchy(ContextFlags activ
 }
 
 float AdaptiveWardrobeManager::CalculatePreferenceWeight(uint8_t stars) const noexcept {
-    static constexpr float kWeightTable[] = { 4.0f, 1.0f, 2.0f, 4.0f, 7.0f, 11.0f };
+    if (stars == 0) return 0.0f;
+    static constexpr float kWeightTable[] = { 0.0f, 1.0f, 2.0f, 4.0f, 7.0f, 11.0f };
     if (stars <= 5) return kWeightTable[stars];
     return 4.0f;
 }
@@ -111,9 +124,41 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
 
     ContextFlags targetContext = ResolveContextHierarchy(activeContext);
 
+    bool isSpecialTempContext = HasContext(targetContext, ContextFlags::Swim) ||
+                                HasContext(targetContext, ContextFlags::InWater) ||
+                                HasContext(targetContext, ContextFlags::Sleep) ||
+                                HasContext(targetContext, ContextFlags::Mount);
+
+    if (isSpecialTempContext) {
+        if (data.preSpecialConditionOutfitID.empty() && !data.currentOutfitID.empty()) {
+            data.preSpecialConditionOutfitID = data.currentOutfitID;
+        }
+    } else if (!data.preSpecialConditionOutfitID.empty()) {
+        std::string revertID = data.preSpecialConditionOutfitID;
+        data.preSpecialConditionOutfitID.clear();
+        for (const auto& outfit : data.wardrobe) {
+            if (outfit.id == revertID && outfit.controlState != ControlState::Excluded && outfit.preferenceStars > 0) {
+                data.isManualOverride = true;
+                data.manualOverrideContext = targetContext;
+                SelectionResult res;
+                res.selectedOutfit = outfit;
+                res.reasonCode = "Reverting to Previous Outfit";
+                res.calculatedWeight = 1000.0f;
+                return res;
+            }
+        }
+    }
+
+    if (data.isManualOverride) {
+        if (!isEmergency && targetContext == data.manualOverrideContext) {
+            return std::nullopt;
+        }
+        data.isManualOverride = false;
+    }
+
     if (!isEmergency && !data.currentOutfitID.empty()) {
         for (const auto& outfit : data.wardrobe) {
-            if (outfit.id == data.currentOutfitID && outfit.controlState != ControlState::Excluded) {
+            if (outfit.id == data.currentOutfitID && outfit.controlState != ControlState::Excluded && outfit.preferenceStars > 0) {
                 for (const auto& rule : outfit.suitabilities) {
                     if (HasContext(rule.contextMask, targetContext) || rule.contextMask == targetContext) {
                         SelectionResult res;
@@ -131,7 +176,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
     candidates.reserve(data.wardrobe.size());
 
     for (const auto& outfit : data.wardrobe) {
-        if (outfit.controlState == ControlState::Excluded) continue;
+        if (outfit.preferenceStars == 0 || outfit.controlState == ControlState::Excluded || outfit.suitabilities.empty()) continue;
         for (const auto& rule : outfit.suitabilities) {
             if (HasContext(rule.contextMask, targetContext) || (rule.contextMask & targetContext) != ContextFlags::None) {
                 candidates.push_back(&outfit);
@@ -146,7 +191,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
 
     if (candidates.empty() && HasContext(targetContext, ContextFlags::City)) {
         for (const auto& outfit : data.wardrobe) {
-            if (outfit.controlState == ControlState::Excluded) continue;
+            if (outfit.preferenceStars == 0 || outfit.controlState == ControlState::Excluded || outfit.suitabilities.empty()) continue;
             for (const auto& rule : outfit.suitabilities) {
                 if (HasContext(rule.contextMask, ContextFlags::City)) {
                     candidates.push_back(&outfit);
@@ -158,7 +203,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
 
     if (candidates.empty() && HasContext(targetContext, ContextFlags::Town)) {
         for (const auto& outfit : data.wardrobe) {
-            if (outfit.controlState == ControlState::Excluded) continue;
+            if (outfit.preferenceStars == 0 || outfit.controlState == ControlState::Excluded || outfit.suitabilities.empty()) continue;
             for (const auto& rule : outfit.suitabilities) {
                 if (HasContext(rule.contextMask, ContextFlags::Town)) {
                     candidates.push_back(&outfit);
@@ -170,20 +215,12 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
 
     if (candidates.empty() && HasContext(targetContext, ContextFlags::World)) {
         for (const auto& outfit : data.wardrobe) {
-            if (outfit.controlState == ControlState::Excluded) continue;
+            if (outfit.preferenceStars == 0 || outfit.controlState == ControlState::Excluded || outfit.suitabilities.empty()) continue;
             for (const auto& rule : outfit.suitabilities) {
                 if (HasContext(rule.contextMask, ContextFlags::World)) {
                     candidates.push_back(&outfit);
                     break;
                 }
-            }
-        }
-    }
-
-    if (candidates.empty()) {
-        for (const auto& outfit : data.wardrobe) {
-            if (outfit.controlState != ControlState::Excluded) {
-                candidates.push_back(&outfit);
             }
         }
     }
@@ -241,6 +278,15 @@ void AdaptiveWardrobeManager::RecordOutfitEquipped(RE::FormID a_actorID, const s
     auto& data = GetOrCreateWardrobeData(a_actorID);
     data.currentOutfitID = outfitID;
 
+    data.isManualOverride = true;
+    auto* form = RE::TESForm::LookupByID(a_actorID);
+    auto* actor = form ? form->As<RE::Actor>() : nullptr;
+    if (actor) {
+        data.manualOverrideContext = ResolveContextHierarchy(ExecutionQueue::GetSingleton()->GatherCurrentContext());
+    } else {
+        data.manualOverrideContext = ContextFlags::Default;
+    }
+
     data.recentHistory.push_front(outfitID);
     if (data.recentHistory.size() > 5) {
         data.recentHistory.pop_back();
@@ -257,4 +303,12 @@ std::string AdaptiveWardrobeManager::GetCurrentOutfitID(RE::FormID a_actorID) {
     std::lock_guard<std::mutex> lock(wardrobeMutex);
     auto& data = GetOrCreateWardrobeData(a_actorID);
     return data.currentOutfitID;
+}
+
+void AdaptiveWardrobeManager::SetManualOverride(RE::FormID a_actorID, ContextFlags context) {
+    std::lock_guard<std::mutex> lock(wardrobeMutex);
+    auto& data = GetOrCreateWardrobeData(a_actorID);
+    data.isManualOverride = true;
+    data.manualOverrideContext = ResolveContextHierarchy(context);
+    data.currentOutfitID = "";
 }

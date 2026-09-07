@@ -29,6 +29,72 @@ var gamepadNames = {
     0x0009: 'LT', 0x000A: 'RT'
 };
 
+var isShiftKeyDown = false;
+window.addEventListener('keydown', (e) => {
+    if (e.shiftKey || e.keyCode === 16 || e.key === 'Shift') {
+        isShiftKeyDown = true;
+    }
+}, true);
+window.addEventListener('keyup', (e) => {
+    if (e.keyCode === 16 || e.key === 'Shift' || !e.shiftKey) {
+        isShiftKeyDown = false;
+    }
+}, true);
+window.addEventListener('blur', () => {
+    isShiftKeyDown = false;
+});
+
+function safeClosest(target, selector) {
+    if (!target) return null;
+    let curr = (target.nodeType === 3) ? target.parentElement : target;
+    while (curr && curr !== document && curr !== document.documentElement) {
+        try {
+            if (typeof curr.matches === 'function' && curr.matches(selector)) return curr;
+            if (typeof curr.webkitMatchesSelector === 'function' && curr.webkitMatchesSelector(selector)) return curr;
+        } catch (err) {}
+        curr = curr.parentElement;
+    }
+    return null;
+}
+
+function safeGetStorage(key, defaultVal) {
+    try {
+        const val = localStorage.getItem(key);
+        return (val !== null && val !== undefined) ? val : defaultVal;
+    } catch (err) {
+        return defaultVal;
+    }
+}
+
+function safeSetStorage(key, val) {
+    try {
+        localStorage.setItem(key, String(val));
+    } catch (err) {}
+}
+
+function safeRemoveStorage(key) {
+    try {
+        localStorage.removeItem(key);
+    } catch (err) {}
+}
+
+window.safeClosest = safeClosest;
+window.safeGetStorage = safeGetStorage;
+window.safeSetStorage = safeSetStorage;
+window.safeRemoveStorage = safeRemoveStorage;
+
+window.closeAllDropdowns = function() {
+    ['dd-edit-list', 'dd-play-list', 'dd-gp-play-list'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    const sortList = document.getElementById('custom-sort-list');
+    const sortDropdown = document.getElementById('custom-sort-dropdown');
+    if (sortList) sortList.style.display = 'none';
+    if (sortDropdown) sortDropdown.classList.remove('open');
+};
+var closeAllDropdowns = window.closeAllDropdowns;
+
 var currentWheelData = {
     editMode: false,
     wheelIndex: 0,
@@ -99,12 +165,14 @@ var wheelDragStartY = 0;
 var wheelStartOffsetX = 0;
 var wheelStartOffsetY = 0;
 var wheelDragMoved = false;
+var wheelDragButton = 0;
 
 var activeDragPanelId = null;
 var dragStartX = 0;
 var dragStartY = 0;
 var panelStartLeft = 0;
 var panelStartTop = 0;
+var panelRafId = null;
 
 var activeResizePanelId = null;
 var resizeDirection = '';
@@ -112,6 +180,11 @@ var resizeStartX = 0;
 var resizeStartY = 0;
 var panelStartWidth = 0;
 var panelStartHeight = 0;
+var resizeRafPending = false;
+var resizeCurrentClientX = 0;
+var resizeCurrentClientY = 0;
+var uiScaleTimeout = null;
+var currentAppliedZoom = null;
 
 var activeDraggedItem = null;
 var isItemDragging = false;
@@ -126,12 +199,19 @@ var slotDragStartX = 0;
 var slotDragStartY = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
+    const wrapper = document.getElementById('ui-wrapper');
+    if (wrapper) {
+        wrapper.classList.remove('is-open');
+        wrapper.style.display = 'none';
+        wrapper.style.pointerEvents = 'none';
+    }
     applyAutoResolutionScale();
     loadWheelPositionFromStorage();
     applyModeLayout();
     loadPanelsLayout();
     initDraggablePanels();
     initResizablePanels();
+    initSlotsRailResizer();
     initCameraOrbitAndControls();
     initGlobalInputHandlers();
     initCarouselScrollHandlers();
@@ -146,11 +226,62 @@ window.addEventListener('resize', () => {
     if (typeof updateWheelUI === 'function') updateWheelUI();
 });
 
-function applyAutoResolutionScale() {
-    const h = window.innerHeight || 1080;
-    const rawScale = h / 1080;
-    const autoScale = Math.max(0.65, Math.min(2.5, rawScale));
-    document.documentElement.style.setProperty('--auto-ui-scale', String(autoScale));
+function getUiScale() {
+    if (currentWheelData && currentWheelData.uiScale !== undefined) {
+        const s = parseFloat(currentWheelData.uiScale);
+        if (!isNaN(s) && s >= 0.5 && s <= 3.0) return s;
+    }
+    const stored = parseFloat(localStorage.getItem('outfit_wheeler_ui_scale'));
+    if (!isNaN(stored) && stored >= 0.5 && stored <= 3.0) return stored;
+    return 1.0;
+}
+
+function applyAutoResolutionScale(force) {
+    const scale = getUiScale();
+    const strScale = String(scale);
+    if (!force && currentAppliedZoom === strScale) return;
+    currentAppliedZoom = strScale;
+    document.documentElement.style.zoom = strScale;
+    document.documentElement.style.setProperty('--ui-scale', strScale);
+    document.documentElement.style.setProperty('--auto-ui-scale', strScale);
+    const wrapper = document.getElementById('ui-wrapper');
+    if (wrapper) {
+        wrapper.style.width = '';
+        wrapper.style.height = '';
+        wrapper.style.transform = '';
+        wrapper.style.transformOrigin = '';
+    }
+}
+
+function onUiScaleInput(val) {
+    const userScale = parseFloat(val) || 1.0;
+    const txt = document.getElementById('txt-ui-scale');
+    if (txt) txt.innerText = userScale.toFixed(2) + 'x';
+    localStorage.setItem('outfit_wheeler_ui_scale', String(userScale));
+    if (currentWheelData) currentWheelData.uiScale = userScale;
+    if (uiScaleTimeout) clearTimeout(uiScaleTimeout);
+    uiScaleTimeout = setTimeout(() => {
+        uiScaleTimeout = null;
+        applyAutoResolutionScale(true);
+    }, 40);
+}
+
+function onUiScaleChange(val) {
+    if (uiScaleTimeout) {
+        clearTimeout(uiScaleTimeout);
+        uiScaleTimeout = null;
+    }
+    const userScale = parseFloat(val) || 1.0;
+    localStorage.setItem('outfit_wheeler_ui_scale', String(userScale));
+    if (currentWheelData) currentWheelData.uiScale = userScale;
+    applyAutoResolutionScale(true);
+    if (typeof persistWheelSettings === 'function') {
+        persistWheelSettings();
+    } else if (typeof window.SaveSettings === 'function') {
+        window.SaveSettings(JSON.stringify({
+            uiScale: userScale
+        }));
+    }
 }
 
 function loadWheelPositionFromStorage() {
@@ -183,6 +314,85 @@ function saveWheelPositionToStorage() {
 
 function isEditModeActive() {
     return currentWheelData && (currentWheelData.editMode === true || currentWheelData.editMode === "true" || currentWheelData.editMode === 1);
+}
+
+function isClassicEditMode() {
+    if (!isEditModeActive()) return false;
+    const mode = (currentWheelData && currentWheelData.editUiMode !== undefined) ? currentWheelData.editUiMode : (localStorage.getItem('outfit_wheeler_edit_ui_mode') !== null ? parseInt(localStorage.getItem('outfit_wheeler_edit_ui_mode')) : 1);
+    return mode === 0;
+}
+
+function toggleEditUiMode(e) {
+    if (e) {
+        e.stopPropagation();
+        e.preventDefault();
+    }
+    const currentMode = isClassicEditMode() ? 0 : 1;
+    const newMode = currentMode === 0 ? 1 : 0;
+    setEditUiStyle(newMode);
+}
+
+function setEditUiStyle(mode) {
+    if (!currentWheelData) currentWheelData = {};
+    currentWheelData.editUiMode = mode;
+    localStorage.setItem('outfit_wheeler_edit_ui_mode', String(mode));
+
+    const btnClassic = document.getElementById('btn-mode-classic');
+    const btnStudio = document.getElementById('btn-mode-studio');
+    if (btnClassic && btnStudio) {
+        if (mode === 0) {
+            btnClassic.classList.add('active');
+            btnStudio.classList.remove('active');
+        } else {
+            btnStudio.classList.add('active');
+            btnClassic.classList.remove('active');
+        }
+    }
+
+    applyModeLayout();
+
+    if (typeof window.SaveSettings === 'function') {
+        window.SaveSettings(JSON.stringify({
+            editMode: isEditModeActive(),
+            wheelScale: currentWheelData.wheelScale || 1.0,
+            wheelOffsetX: currentWheelData.wheelOffsetX || 0.0,
+            wheelOffsetY: currentWheelData.wheelOffsetY || 0.0,
+            uiScale: currentWheelData.uiScale || 1.0,
+            editUiMode: mode,
+            editKey: (currentWheelData.editKey !== undefined && currentWheelData.editKey !== null) ? currentWheelData.editKey : 0x31,
+            editModifierKey: (currentWheelData.editModifierKey !== undefined && currentWheelData.editModifierKey !== null) ? (parseInt(currentWheelData.editModifierKey, 10) || 0) : 0,
+            playKey: (currentWheelData.playKey !== undefined && currentWheelData.playKey !== null) ? currentWheelData.playKey : 0x2F,
+            playModifierKey: (currentWheelData.playModifierKey !== undefined && currentWheelData.playModifierKey !== null) ? (parseInt(currentWheelData.playModifierKey, 10) || 0) : 0,
+            gamepadPlayKey: (currentWheelData.gamepadPlayKey !== undefined && currentWheelData.gamepadPlayKey !== null) ? (parseInt(currentWheelData.gamepadPlayKey, 10) || 0x0008) : 0x0008,
+            gamepadPlayModifier: (currentWheelData.gamepadPlayModifier !== undefined && currentWheelData.gamepadPlayModifier !== null) ? (parseInt(currentWheelData.gamepadPlayModifier, 10) || 0x0100) : 0x0100,
+            autoCloseOnEquip: currentWheelData.autoCloseOnEquip !== false,
+            autoStashEnabled: currentWheelData.autoStashEnabled === true,
+            autoSystemEnabled: currentWheelData.autoSystemEnabled === true,
+            autoCityEnabled: currentWheelData.autoCityEnabled !== false,
+            autoHomeEnabled: currentWheelData.autoHomeEnabled !== false,
+            autoCombatEnabled: currentWheelData.autoCombatEnabled !== false,
+            autoSwimEnabled: currentWheelData.autoSwimEnabled !== false
+        }));
+    }
+
+    if (typeof showSaveToast === 'function') {
+        showSaveToast(mode === 0 ? "Switched to Classic Mode (v2.8)" : "Switched to Studio Mode (v3.0)");
+    }
+}
+
+function updateModeSwitchButton() {
+    const btn = document.getElementById('btn-ui-mode-switch');
+    if (!btn) return;
+    if (!isEditModeActive()) {
+        btn.style.display = 'none';
+        return;
+    }
+    btn.style.display = 'flex';
+    if (isClassicEditMode()) {
+        btn.innerText = 'Switch to Studio';
+    } else {
+        btn.innerText = 'Switch to Classic';
+    }
 }
 
 function setTyping(state) {
@@ -226,12 +436,14 @@ function getKeyName(dxCode) {
     return '0x' + dxCode.toString(16).toUpperCase();
 }
 
-function hideAllMenus() {
+function hideAllMenus(e) {
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
     const menus = ['slot-context-menu', 'wheel-context-menu', 'item-context-menu', 'transfer-all-context-menu'];
     menus.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
+    if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
 }
 
 function isAnyModalOpen() {
@@ -295,21 +507,23 @@ function getInventoryBySourceId(sourceId) {
     return [];
 }
 
+var isOpenWheelRunning = false;
 window.openWheel = function(argument) {
-    applyAutoResolutionScale();
-
-    var previousOffsetX = currentWheelData.wheelOffsetX;
-    var previousOffsetY = currentWheelData.wheelOffsetY;
-    var previousScale = currentWheelData.wheelScale;
-    var prevInvSource = activeInventorySource;
-
+    if (isOpenWheelRunning) return;
+    isOpenWheelRunning = true;
     try {
-        if (typeof argument === 'string' && argument.trim().length > 0) {
-            currentWheelData = JSON.parse(argument);
-        } else if (typeof argument === 'object' && argument !== null) {
-            currentWheelData = argument;
-        }
-    } catch (e) {}
+        var previousOffsetX = currentWheelData.wheelOffsetX;
+        var previousOffsetY = currentWheelData.wheelOffsetY;
+        var previousScale = currentWheelData.wheelScale;
+        var prevInvSource = activeInventorySource;
+
+        try {
+            if (typeof argument === 'string' && argument.trim().length > 0) {
+                currentWheelData = JSON.parse(argument);
+            } else if (typeof argument === 'object' && argument !== null) {
+                currentWheelData = argument;
+            }
+        } catch (e) {}
 
     if (!currentWheelData || typeof currentWheelData !== 'object') {
         currentWheelData = { slots: [], followers: [], inventory: [] };
@@ -325,24 +539,89 @@ window.openWheel = function(argument) {
         currentWheelData.wheelScale = previousScale !== undefined ? previousScale : tempScale;
     }
 
+    const storedUiScale = parseFloat(safeGetStorage('outfit_wheeler_ui_scale', ''));
+    if (!isNaN(storedUiScale) && storedUiScale >= 0.5 && storedUiScale <= 3.0) {
+        if (currentWheelData.uiScale === undefined || currentWheelData.uiScale === 1.0) {
+            currentWheelData.uiScale = storedUiScale;
+        } else {
+            safeSetStorage('outfit_wheeler_ui_scale', String(currentWheelData.uiScale));
+        }
+    } else if (currentWheelData.uiScale !== undefined) {
+        safeSetStorage('outfit_wheeler_ui_scale', String(currentWheelData.uiScale));
+    }
+
+    const storedInvSort = safeGetStorage('outfit_wheeler_inv_sort', '');
+    if (storedInvSort) {
+        activeInventorySort = storedInvSort;
+        const storedSortLabel = safeGetStorage('outfit_wheeler_inv_sort_label', '');
+        const sortLabelEl = document.getElementById('custom-sort-label');
+        if (sortLabelEl && storedSortLabel) sortLabelEl.innerText = storedSortLabel;
+        document.querySelectorAll('.custom-sort-list .sort-item').forEach(it => {
+            if (it.getAttribute('data-sort') === storedInvSort) {
+                it.classList.add('active');
+            } else {
+                it.classList.remove('active');
+            }
+        });
+    }
+    initSortDropdown();
+
+    if (currentWheelData.editModifierKey !== undefined && currentWheelData.editModifierKey !== null) {
+        currentWheelData.editModifierKey = parseInt(currentWheelData.editModifierKey, 10) || 0;
+        safeSetStorage('outfit_wheeler_edit_mod', String(currentWheelData.editModifierKey));
+    }
+
+    if (currentWheelData.playModifierKey !== undefined && currentWheelData.playModifierKey !== null) {
+        currentWheelData.playModifierKey = parseInt(currentWheelData.playModifierKey, 10) || 0;
+        safeSetStorage('outfit_wheeler_play_mod', String(currentWheelData.playModifierKey));
+    }
+
+    if (currentWheelData.editKey !== undefined && currentWheelData.editKey !== null) {
+        currentWheelData.editKey = parseInt(currentWheelData.editKey, 10) || 0x31;
+        safeSetStorage('outfit_wheeler_edit_key', String(currentWheelData.editKey));
+    }
+
+    if (currentWheelData.playKey !== undefined && currentWheelData.playKey !== null) {
+        currentWheelData.playKey = parseInt(currentWheelData.playKey, 10) || 0x2F;
+        safeSetStorage('outfit_wheeler_play_key', String(currentWheelData.playKey));
+    }
+
+    if (currentWheelData.gamepadPlayKey !== undefined && currentWheelData.gamepadPlayKey !== null) {
+        currentWheelData.gamepadPlayKey = parseInt(currentWheelData.gamepadPlayKey, 10) || 0x0008;
+        safeSetStorage('outfit_wheeler_gp_play_key', String(currentWheelData.gamepadPlayKey));
+    }
+
+    if (currentWheelData.gamepadPlayModifier !== undefined && currentWheelData.gamepadPlayModifier !== null) {
+        currentWheelData.gamepadPlayModifier = parseInt(currentWheelData.gamepadPlayModifier, 10) || 0x0100;
+        safeSetStorage('outfit_wheeler_gp_play_mod', String(currentWheelData.gamepadPlayModifier));
+    }
+
     tempOffsetX = currentWheelData.wheelOffsetX || 0.0;
     tempOffsetY = currentWheelData.wheelOffsetY || 0.0;
     tempScale = currentWheelData.wheelScale || 1.0;
+    applyAutoResolutionScale();
 
     gamepadHoverSlotIndex = null;
-    activeWheelContextFilter = 'ALL';
+    if (!activeWheelContextFilter) activeWheelContextFilter = 'ALL';
     activeCategoryFilter = 'ALL';
 
     const sources = getInventorySourcesList();
     if (prevInvSource && sources.some(s => s.id.toUpperCase() === prevInvSource.toUpperCase())) {
         activeInventorySource = prevInvSource;
+    } else if (currentWheelData.activeTargetActorId && currentWheelData.activeTargetActorId.toUpperCase() !== 'CLOUD' && currentWheelData.activeTargetActorId.toUpperCase() !== 'WARDROBE') {
+        const tgtUpper = currentWheelData.activeTargetActorId.toUpperCase();
+        if (sources.some(s => s.id.toUpperCase() === tgtUpper)) {
+            activeInventorySource = currentWheelData.activeTargetActorId;
+        } else {
+            activeInventorySource = '0x00000007';
+        }
     } else {
         activeInventorySource = '0x00000007';
     }
 
     const tabs = document.querySelectorAll('#filter-tabs-container .filter-tab');
     tabs.forEach(tab => {
-        if (tab.getAttribute('data-tag') === 'ALL') tab.classList.add('active');
+        if (tab.getAttribute('data-tag') === activeWheelContextFilter) tab.classList.add('active');
         else tab.classList.remove('active');
     });
 
@@ -360,9 +639,11 @@ window.openWheel = function(argument) {
         }
     }
 
+    const panelSettings = document.getElementById('panel-settings');
+    const isSettingsOpen = panelSettings && (panelSettings.style.display === 'flex' || panelSettings.style.display === 'block');
     hideAllMenus();
-    if (typeof hideAllModals === 'function') hideAllModals();
-    setTyping(false);
+    if (typeof hideAllModals === 'function') hideAllModals(isSettingsOpen);
+    if (!isSettingsOpen) setTyping(false);
     applyModeLayout();
     loadPanelsLayout();
     renderFollowersStrip();
@@ -371,6 +652,18 @@ window.openWheel = function(argument) {
     renderSlotsRail();
     renderDrawerDetails();
     if (typeof updateWheelUI === 'function') updateWheelUI();
+    } catch (err) {
+        console.error(err);
+    } finally {
+        isOpenWheelRunning = false;
+        const wrapper = document.getElementById('ui-wrapper');
+        if (wrapper) {
+            wrapper.classList.add('is-open');
+            wrapper.style.display = 'flex';
+            wrapper.style.pointerEvents = 'auto';
+            void wrapper.offsetHeight;
+        }
+    }
 };
 
 window.setGamepadAngle = function(phiStr) {
@@ -487,16 +780,43 @@ function applyModeLayout() {
 
     if (isEditModeActive()) {
         wrapper.classList.remove('play-mode-active');
-        if (centerModeText) centerModeText.innerText = "EDIT MODE";
+        if (isClassicEditMode()) {
+            wrapper.classList.add('classic-ui-active');
+            wrapper.classList.remove('studio-ui-active');
+            if (centerModeText) centerModeText.innerText = "EDIT MODE";
+        } else {
+            wrapper.classList.remove('classic-ui-active');
+            wrapper.classList.add('studio-ui-active');
+            if (centerModeText) centerModeText.innerText = "EDIT MODE";
+        }
     } else {
         wrapper.classList.add('play-mode-active');
+        wrapper.classList.remove('classic-ui-active');
+        wrapper.classList.remove('studio-ui-active');
         if (centerModeText) centerModeText.innerText = "PLAY MODE";
     }
+    updateModeSwitchButton();
     updateGamepadHintsVisibility();
 }
 
 function handleWrapperClick(e) {
-    if (e.target.closest('.context-menu-popup') || e.target.closest('.custom-sort-dropdown')) return;
+    if (!e || !e.target) return;
+    let target = e.target;
+    while (target && target !== document.body && target !== document.documentElement) {
+        if (target.classList) {
+            if (target.classList.contains('context-menu-popup') ||
+                target.classList.contains('custom-sort-dropdown') ||
+                target.classList.contains('custom-sort-list') ||
+                target.classList.contains('modal-card') ||
+                target.classList.contains('modifier-pill-group') ||
+                target.classList.contains('custom-dropdown') ||
+                target.classList.contains('dropdown-list')) {
+                return;
+            }
+        }
+        if (target.id === 'panel-settings') return;
+        target = target.parentElement;
+    }
     hideAllMenus();
     if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
 }
@@ -597,8 +917,9 @@ function initGlobalInputHandlers() {
     });
 
     document.addEventListener('wheel', (e) => {
-        if (isEditModeActive()) return;
-        if (e.target.closest('#panel-settings') || e.target.closest('.modal-card') || e.target.closest('.wheel-center')) return;
+        if (safeClosest(e.target, '#panel-settings') || safeClosest(e.target, '.modal-card') || safeClosest(e.target, '#panel-inventory') || safeClosest(e.target, '#panel-drawer') || safeClosest(e.target, '.panel-body-scrollable') || safeClosest(e.target, '.custom-sort-list')) return;
+        if (isDraggingWheelCenter && wheelDragButton === 0) return;
+        if (isEditModeActive() && !(typeof isClassicEditMode === 'function' && isClassicEditMode()) && !safeClosest(e.target, '#wheel-container')) return;
         const now = Date.now();
         if (now - lastWheelScrollTimestamp < 150) return;
         lastWheelScrollTimestamp = now;
@@ -614,10 +935,48 @@ function initGlobalInputHandlers() {
             e.preventDefault();
             e.stopPropagation();
 
+            if (e.keyCode === 16 || e.keyCode === 17 || e.keyCode === 18 || e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt') {
+                let modCode = 42;
+                if (e.keyCode === 17 || e.key === 'Control') modCode = 29;
+                else if (e.keyCode === 18 || e.key === 'Alt') modCode = 56;
+
+                if (listeningKeyType === 'edit') {
+                    tempEditMod = modCode;
+                    safeSetStorage('outfit_wheeler_edit_mod', String(modCode));
+                    if (currentWheelData) currentWheelData.editModifierKey = modCode;
+                    const editModText = document.getElementById('dd-edit-text');
+                    if (editModText) editModText.innerText = (typeof modNameMap !== 'undefined' && modNameMap[modCode]) ? modNameMap[modCode] : 'Shift';
+                    if (typeof updateModPillUi === 'function') updateModPillUi('edit', modCode);
+                    const btn = document.getElementById('btn-edit-key');
+                    if (btn) btn.innerText = '[' + ((typeof modNameMap !== 'undefined' && modNameMap[modCode]) ? modNameMap[modCode] : 'Shift') + ' + ...]';
+                } else if (listeningKeyType === 'play') {
+                    tempPlayMod = modCode;
+                    safeSetStorage('outfit_wheeler_play_mod', String(modCode));
+                    if (currentWheelData) currentWheelData.playModifierKey = modCode;
+                    const playModText = document.getElementById('dd-play-text');
+                    if (playModText) playModText.innerText = (typeof modNameMap !== 'undefined' && modNameMap[modCode]) ? modNameMap[modCode] : 'Shift';
+                    if (typeof updateModPillUi === 'function') updateModPillUi('play', modCode);
+                    const btn = document.getElementById('btn-play-key');
+                    if (btn) btn.innerText = '[' + ((typeof modNameMap !== 'undefined' && modNameMap[modCode]) ? modNameMap[modCode] : 'Shift') + ' + ...]';
+                }
+                return;
+            }
+
             const code = getScanCode(e);
             if (code) {
+                let comboMod = 0;
+                if (e.shiftKey) comboMod = 42;
+                else if (e.ctrlKey) comboMod = 29;
+                else if (e.altKey) comboMod = 56;
+
                 if (listeningKeyType === 'edit') {
                     tempEditKey = code;
+                    if (comboMod !== 0) {
+                        tempEditMod = comboMod;
+                        const editModText = document.getElementById('dd-edit-text');
+                        if (editModText) editModText.innerText = (typeof modNameMap !== 'undefined' && modNameMap[comboMod]) ? modNameMap[comboMod] : 'None';
+                        if (typeof updateModPillUi === 'function') updateModPillUi('edit', comboMod);
+                    }
                     const btn = document.getElementById('btn-edit-key');
                     if (btn) {
                         btn.innerText = '[' + getKeyName(code) + ']';
@@ -625,6 +984,12 @@ function initGlobalInputHandlers() {
                     }
                 } else if (listeningKeyType === 'play') {
                     tempPlayKey = code;
+                    if (comboMod !== 0) {
+                        tempPlayMod = comboMod;
+                        const playModText = document.getElementById('dd-play-text');
+                        if (playModText) playModText.innerText = (typeof modNameMap !== 'undefined' && modNameMap[comboMod]) ? modNameMap[comboMod] : 'None';
+                        if (typeof updateModPillUi === 'function') updateModPillUi('play', comboMod);
+                    }
                     const btn = document.getElementById('btn-play-key');
                     if (btn) {
                         btn.innerText = '[' + getKeyName(code) + ']';
@@ -642,19 +1007,26 @@ function initGlobalInputHandlers() {
 
         const pressedScanCode = getScanCode(e);
         const editKey = currentWheelData.editKey || 0x31;
-        const editMod = currentWheelData.editModifierKey || 0;
+        const editMod = currentWheelData.editModifierKey !== undefined ? (parseInt(currentWheelData.editModifierKey, 10) || 0) : 0;
         const playKey = currentWheelData.playKey || 0x2F;
-        const playMod = currentWheelData.playModifierKey || 0;
+        const playMod = currentWheelData.playModifierKey !== undefined ? (parseInt(currentWheelData.playModifierKey, 10) || 0) : 0;
 
         const shiftHold = e.shiftKey;
         const ctrlHold = e.ctrlKey;
         const altHold = e.altKey;
 
+        function checkModMatch(mod) {
+            if (mod === 0) return !shiftHold && !ctrlHold && !altHold;
+            if ((mod === 42 || mod === 54 || mod === 0x2A || mod === 0x36) && shiftHold) return true;
+            if ((mod === 29 || mod === 157 || mod === 0x1D || mod === 0x9D) && ctrlHold) return true;
+            if ((mod === 56 || mod === 184 || mod === 0x38 || mod === 0xB8) && altHold) return true;
+            return false;
+        }
+
+        const editModMatch = checkModMatch(editMod);
+        const playModMatch = checkModMatch(playMod);
         const editRequiresMod = (editMod !== 0);
         const playRequiresMod = (playMod !== 0);
-
-        const editModMatch = (editMod === 0) || (editMod === 42 && shiftHold) || (editMod === 29 && ctrlHold) || (editMod === 56 && altHold);
-        const playModMatch = (playMod === 0) || (playMod === 42 && shiftHold) || (playMod === 29 && ctrlHold) || (playMod === 56 && altHold);
 
         let matchEdit = (pressedScanCode === editKey && editModMatch);
         let matchPlay = (pressedScanCode === playKey && playModMatch);
@@ -673,14 +1045,14 @@ function initGlobalInputHandlers() {
     });
 
     document.addEventListener('mousedown', (e) => {
-        const isInsideMenu = !!e.target.closest('.context-menu-popup');
-        const isInsideSort = !!e.target.closest('.custom-sort-dropdown');
+        const isInsideMenu = !!safeClosest(e.target, '.context-menu-popup');
+        const isInsideDropdown = !!safeClosest(e.target, '.custom-dropdown, .custom-sort-dropdown, .dropdown-list, .custom-sort-list, #panel-settings, .modifier-pill-group');
 
         if (e.button === 0) {
             if (!isInsideMenu) {
                 hideAllMenus();
             }
-            if (!isInsideSort) {
+            if (!isInsideDropdown) {
                 closeAllDropdowns();
             }
             return;
@@ -701,9 +1073,9 @@ function initGlobalInputHandlers() {
                 slotDragGhostElement = null;
             }
 
-            if (isInsideMenu || e.target.closest('.modal-card') || e.target.closest('#panel-settings')) return;
+            if (isInsideMenu || safeClosest(e.target, '.modal-card') || safeClosest(e.target, '#panel-settings')) return;
 
-            const itemElem = e.target.closest('.item-row-card');
+            const itemElem = safeClosest(e.target, '.item-row-card');
             if (itemElem) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -726,7 +1098,7 @@ function initGlobalInputHandlers() {
                 return;
             }
 
-            const slotElem = e.target.closest('[data-slot-index]');
+            const slotElem = safeClosest(e.target, '[data-slot-index]');
             if (slotElem) {
                 const idx = parseInt(slotElem.getAttribute('data-slot-index'), 10);
                 if (!isNaN(idx)) {
@@ -747,7 +1119,7 @@ function initGlobalInputHandlers() {
                 }
             }
 
-            const panelElem = e.target.closest('.draggable-panel, #panel-settings');
+            const panelElem = safeClosest(e.target, '.draggable-panel, #panel-settings, .wheel-center');
             if (panelElem) {
                 return;
             }
@@ -768,7 +1140,7 @@ function initGlobalInputHandlers() {
                 if (typeof showWheelContextMenu === 'function') showWheelContextMenu(clickX, clickY);
                 return;
             } else {
-                if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || e.target.closest('.wheel-center')) {
+                if (e.target.id === 'ui-wrapper' || e.target.id === 'wheel-container' || e.target.id === 'wheel-svg' || safeClosest(e.target, '.wheel-center')) {
                     e.preventDefault();
                     e.stopPropagation();
 
@@ -793,8 +1165,8 @@ function initGlobalInputHandlers() {
 
 function toggleSortDropdown(e) {
     if (e) {
-        e.preventDefault();
-        e.stopPropagation();
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
     }
     const list = document.getElementById('custom-sort-list');
     const dropdown = document.getElementById('custom-sort-dropdown');
@@ -811,38 +1183,79 @@ function toggleSortDropdown(e) {
     }
 }
 
-function selectSortOption(val, labelText, e) {
+function selectSortOption(val, elemOrLabel, e) {
     if (e) {
-        e.preventDefault();
-        e.stopPropagation();
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
     }
-    activeInventorySort = val;
+    let labelText = '';
+    if (typeof elemOrLabel === 'string') {
+        labelText = elemOrLabel;
+    } else if (elemOrLabel && elemOrLabel.textContent) {
+        labelText = elemOrLabel.textContent.trim();
+    } else if (elemOrLabel && elemOrLabel.innerText) {
+        labelText = elemOrLabel.innerText.trim();
+    }
+    if (!val && elemOrLabel && elemOrLabel.getAttribute) {
+        val = elemOrLabel.getAttribute('data-sort');
+    }
+    if (!val) return;
 
-    const labelEl = document.getElementById('custom-sort-label');
-    if (labelEl) labelEl.innerText = labelText;
+    activeInventorySort = val;
+    safeSetStorage('outfit_wheeler_inv_sort', val);
 
     const items = document.querySelectorAll('.custom-sort-list .sort-item');
-    items.forEach(it => it.classList.remove('active'));
-    if (e && e.target) e.target.classList.add('active');
+    items.forEach(it => {
+        if (it.getAttribute('data-sort') === val) {
+            it.classList.add('active');
+            if (!labelText) {
+                labelText = (it.textContent || it.innerText || '').trim();
+            }
+        } else {
+            it.classList.remove('active');
+        }
+    });
+
+    if (labelText) {
+        safeSetStorage('outfit_wheeler_inv_sort_label', labelText);
+        const labelEl = document.getElementById('custom-sort-label');
+        if (labelEl) labelEl.innerText = labelText;
+    }
 
     closeAllDropdowns();
     renderInventoryList();
 }
 
+function initSortDropdown() {
+    const list = document.getElementById('custom-sort-list');
+    if (!list) return;
+    list.querySelectorAll('.sort-item').forEach(item => {
+        const handler = function(e) {
+            if (e) {
+                if (typeof e.preventDefault === 'function') e.preventDefault();
+                if (typeof e.stopPropagation === 'function') e.stopPropagation();
+            }
+            const sortKey = this.getAttribute('data-sort');
+            selectSortOption(sortKey, this, e);
+        };
+        item.onclick = handler;
+        item.onmousedown = handler;
+    });
+}
+
 function initWheelCenterInteraction() {
     let wheelRafId = null;
-    let cachedAutoScale = 1.0;
 
     document.querySelectorAll('.wheel-center').forEach(centerEl => {
         centerEl.addEventListener('mousedown', (e) => {
-            if (e.button === 0) {
+            if (e.button === 0 || e.button === 2) {
                 isDraggingWheelCenter = true;
                 wheelDragMoved = false;
+                wheelDragButton = e.button;
                 wheelDragStartX = e.clientX;
                 wheelDragStartY = e.clientY;
                 wheelStartOffsetX = (currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0;
                 wheelStartOffsetY = (currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0;
-                cachedAutoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
                 centerEl.classList.add('is-dragging');
                 const wheelContainer = document.getElementById('wheel-container');
                 if (wheelContainer) {
@@ -855,26 +1268,32 @@ function initWheelCenterInteraction() {
         });
 
         centerEl.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            let delta = e.deltaY < 0 ? 0.05 : -0.05;
-            let currentScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
-            let newScale = Math.max(0.1, currentScale + delta);
-            currentWheelData.wheelScale = newScale;
-            tempScale = newScale;
+            if (isDraggingWheelCenter && wheelDragButton === 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                let delta = e.deltaY < 0 ? 0.05 : -0.05;
+                let currentScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
+                let newScale = Math.max(0.2, Math.min(3.0, currentScale + delta));
+                currentWheelData.wheelScale = newScale;
+                tempScale = newScale;
 
-            saveWheelPositionToStorage();
-            if (typeof applyTransform === 'function') applyTransform();
-            persistWheelSettings();
+                saveWheelPositionToStorage();
+                if (typeof updateWheelUI === 'function') updateWheelUI();
+                persistWheelSettings();
+            }
         }, { passive: false });
     });
 
     window.addEventListener('mousemove', (e) => {
         if (!isDraggingWheelCenter) return;
-        wheelDragMoved = true;
 
         const dx = e.clientX - wheelDragStartX;
         const dy = e.clientY - wheelDragStartY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+            wheelDragMoved = true;
+        }
+        if (!wheelDragMoved) return;
+
         const newOffsetX = wheelStartOffsetX + dx;
         const newOffsetY = wheelStartOffsetY + dy;
 
@@ -889,15 +1308,16 @@ function initWheelCenterInteraction() {
                 const container = document.getElementById('wheel-container');
                 if (container) {
                     const isEdit = isEditModeActive();
-                    const baseScale = isEdit ? 0.65 : 1.0;
-                    const userScale = currentWheelData.wheelScale || 1.0;
-                    container.style.transform = `translate3d(${newOffsetX}px, ${newOffsetY}px, 0) scale(${baseScale * userScale * cachedAutoScale})`;
+                    const isClassic = typeof isClassicEditMode === 'function' && isClassicEditMode();
+                    const baseScale = (isEdit && !isClassic) ? 0.65 : 1.0;
+                    const userScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
+                    container.style.transform = `translate3d(${newOffsetX}px, ${newOffsetY}px, 0) scale(${baseScale * userScale})`;
                 }
             });
         }
     }, { passive: true });
 
-    window.addEventListener('mouseup', () => {
+    window.addEventListener('mouseup', (e) => {
         if (isDraggingWheelCenter) {
             isDraggingWheelCenter = false;
             if (wheelRafId) {
@@ -913,6 +1333,10 @@ function initWheelCenterInteraction() {
             if (wheelDragMoved) {
                 saveWheelPositionToStorage();
                 persistWheelSettings();
+            } else if (wheelDragButton === 2) {
+                const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
+                const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
+                if (typeof showWheelContextMenu === 'function') showWheelContextMenu(clickX, clickY);
             }
         }
     });
@@ -926,14 +1350,17 @@ function persistWheelSettings() {
             wheelScale: currentWheelData.wheelScale || 1.0,
             wheelOffsetX: currentWheelData.wheelOffsetX || 0.0,
             wheelOffsetY: currentWheelData.wheelOffsetY || 0.0,
-            editKey: currentWheelData.editKey || 0x31,
-            editModifierKey: currentWheelData.editModifierKey || 0,
-            playKey: currentWheelData.playKey || 0x2F,
-            playModifierKey: currentWheelData.playModifierKey || 0,
-            gamepadPlayKey: currentWheelData.gamepadPlayKey || 0x0008,
-            gamepadPlayModifier: currentWheelData.gamepadPlayModifier || 0x0100,
+            uiScale: currentWheelData.uiScale || 1.0,
+            editUiMode: (currentWheelData.editUiMode !== undefined ? currentWheelData.editUiMode : (parseInt(localStorage.getItem('outfit_wheeler_edit_ui_mode')) || 0)),
+            editKey: (currentWheelData.editKey !== undefined && currentWheelData.editKey !== null) ? currentWheelData.editKey : 0x31,
+            editModifierKey: (currentWheelData.editModifierKey !== undefined && currentWheelData.editModifierKey !== null) ? (parseInt(currentWheelData.editModifierKey, 10) || 0) : 0,
+            playKey: (currentWheelData.playKey !== undefined && currentWheelData.playKey !== null) ? currentWheelData.playKey : 0x2F,
+            playModifierKey: (currentWheelData.playModifierKey !== undefined && currentWheelData.playModifierKey !== null) ? (parseInt(currentWheelData.playModifierKey, 10) || 0) : 0,
+            gamepadPlayKey: (currentWheelData.gamepadPlayKey !== undefined && currentWheelData.gamepadPlayKey !== null) ? (parseInt(currentWheelData.gamepadPlayKey, 10) || 0x0008) : 0x0008,
+            gamepadPlayModifier: (currentWheelData.gamepadPlayModifier !== undefined && currentWheelData.gamepadPlayModifier !== null) ? (parseInt(currentWheelData.gamepadPlayModifier, 10) || 0x0100) : 0x0100,
             autoCloseOnEquip: currentWheelData.autoCloseOnEquip !== false,
-            autoStashEnabled: currentWheelData.autoStashEnabled !== false,
+            autoStashEnabled: currentWheelData.autoStashEnabled === true,
+            autoSystemEnabled: currentWheelData.autoSystemEnabled === true,
             autoCityEnabled: currentWheelData.autoCityEnabled !== false,
             autoHomeEnabled: currentWheelData.autoHomeEnabled !== false,
             autoCombatEnabled: currentWheelData.autoCombatEnabled !== false,
@@ -962,6 +1389,10 @@ function equipOutfit(slotIndex, keepOpen) {
     if (now - lastEquipCallTimestamp < 350) return;
     lastEquipCallTimestamp = now;
 
+    const shiftHeld = (typeof isShiftKeyDown !== 'undefined' && isShiftKeyDown) || (window.event && window.event.shiftKey) || false;
+    const autoCloseDisabled = (currentWheelData && currentWheelData.autoCloseOnEquip === false);
+    const finalKeepOpen = (keepOpen === true) || shiftHeld || autoCloseDisabled || isEditModeActive();
+
     lastEquippedSlotIndex = slotIndex;
     if (typeof updateWheelUI === 'function') updateWheelUI();
     if (typeof window.EquipSlot === 'function' && currentWheelData) {
@@ -969,7 +1400,7 @@ function equipOutfit(slotIndex, keepOpen) {
             wheelIndex: currentWheelData.wheelIndex || 0,
             slotIndex: slotIndex,
             editMode: isEditModeActive(),
-            keepOpen: keepOpen === true
+            keepOpen: finalKeepOpen === true
         }));
     }
 }
@@ -984,6 +1415,12 @@ function changeWheel(delta) {
 }
 
 function addWheel() {
+    activeWheelContextFilter = 'ALL';
+    const tabs = document.querySelectorAll('#filter-tabs-container .filter-tab');
+    tabs.forEach(tab => {
+        if (tab.getAttribute('data-tag') === 'ALL') tab.classList.add('active');
+        else tab.classList.remove('active');
+    });
     if (typeof window.AddWheel === 'function' && currentWheelData) {
         window.AddWheel(JSON.stringify({
             editMode: isEditModeActive()
@@ -994,18 +1431,26 @@ function addWheel() {
 function addSlot() {
     if (typeof window.AddSlot === 'function' && currentWheelData) {
         window.AddSlot(JSON.stringify({
-            editMode: isEditModeActive()
+            editMode: isEditModeActive(),
+            contextTag: activeWheelContextFilter && activeWheelContextFilter !== 'ALL' ? activeWheelContextFilter : ""
         }));
     }
 }
 
 function closeWheel() {
+    const wrapper = document.getElementById('ui-wrapper');
+    if (wrapper) {
+        wrapper.classList.remove('is-open');
+        wrapper.style.display = 'none';
+        wrapper.style.pointerEvents = 'none';
+    }
     hideAllMenus();
     if (typeof hideAllModals === 'function') hideAllModals();
     if (typeof window.OnCloseWheel === 'function') {
         window.OnCloseWheel("");
     }
 }
+window.closeWheel = closeWheel;
 
 function setWheelContextFilter(tag, e) {
     if (e) e.stopPropagation();
@@ -1034,31 +1479,70 @@ function setCategoryFilter(cat, e) {
 }
 
 function savePanelsLayout() {
-    const panelIds = ['panel-inventory', 'panel-slots-rail', 'panel-slot-details'];
+    if (!isEditModeActive() || isClassicEditMode()) return;
+    const panelIds = ['panel-inventory', 'right-dock-container'];
     const layout = {};
+    const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
     panelIds.forEach(id => {
         const el = document.getElementById(id);
-        if (el && el.style.display !== 'none') {
+        if (el && el.offsetWidth > 100 && el.offsetHeight > 100) {
             const rect = el.getBoundingClientRect();
-            layout[id] = {
-                left: rect.left,
-                top: rect.top,
-                width: el.offsetWidth,
-                height: el.offsetHeight
-            };
+            if (rect.width > 100 && rect.height > 100) {
+                const w = Math.round(rect.width / scale);
+                const h = Math.round(rect.height / scale);
+                const l = Math.round(rect.left / scale);
+                const t = Math.round(rect.top / scale);
+
+                if (id === 'right-dock-container') {
+                    if (w < 440 || l < 340) return;
+                }
+                if (id === 'panel-inventory') {
+                    if (w < 260) return;
+                }
+
+                layout[id] = {
+                    left: l,
+                    top: t,
+                    width: w,
+                    height: h
+                };
+            }
         }
     });
-    try {
-        localStorage.setItem('outfit_wheeler_panel_layout', JSON.stringify(layout));
-    } catch (err) {}
+    if (Object.keys(layout).length > 0) {
+        try {
+            localStorage.setItem('outfit_wheeler_panel_layout_v5', JSON.stringify(layout));
+        } catch (err) {}
+    }
 }
 
 function loadPanelsLayout() {
     try {
-        const raw = localStorage.getItem('outfit_wheeler_panel_layout');
-        const screenW = window.innerWidth;
-        const screenH = window.innerHeight;
-        const autoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
+        localStorage.removeItem('outfit_wheeler_panel_layout');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v2');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v3');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v4');
+        const raw = localStorage.getItem('outfit_wheeler_panel_layout_v5');
+        const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+        const screenW = Math.round(window.innerWidth / scale);
+        const screenH = Math.round(window.innerHeight / scale);
+
+        const panelIds = ['panel-inventory', 'right-dock-container'];
+        panelIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.style.left = '';
+            el.style.top = '';
+            el.style.right = '';
+            el.style.bottom = '';
+            el.style.width = '';
+            el.style.height = '';
+            el.style.position = '';
+            el.style.transform = '';
+            el.style.margin = '';
+            el.style.maxWidth = '';
+            el.style.maxHeight = '';
+        });
 
         if (raw) {
             const layout = JSON.parse(raw);
@@ -1066,11 +1550,37 @@ function loadPanelsLayout() {
                 if (id === 'panel-settings') return;
                 const data = layout[id];
                 const el = document.getElementById(id);
-                if (el && data) {
-                    let l = Math.max(10, Math.min(data.left, screenW - 80));
-                    let t = Math.max(10, Math.min(data.top, screenH - 60));
-                    let w = Math.max(180, Math.min(data.width, screenW - 20));
+                if (el && data && isFinite(data.left) && isFinite(data.top) && isFinite(data.width) && isFinite(data.height)) {
+                    if (id === 'right-dock-container') {
+                        if (data.width < 440 || data.left < 340 || (data.left + 440 > screenW + 50)) {
+                            el.style.position = 'fixed';
+                            el.style.right = '16px';
+                            el.style.left = 'auto';
+                            el.style.top = '16px';
+                            el.style.bottom = '16px';
+                            el.style.width = '480px';
+                            el.style.height = 'calc(100% - 32px)';
+                            return;
+                        }
+                    }
+                    if (id === 'panel-inventory') {
+                        if (data.width < 260 || data.left > (screenW - 480)) {
+                            el.style.position = 'fixed';
+                            el.style.left = '16px';
+                            el.style.right = 'auto';
+                            el.style.top = '16px';
+                            el.style.bottom = '16px';
+                            el.style.width = '320px';
+                            el.style.height = 'calc(100% - 32px)';
+                            return;
+                        }
+                    }
+
+                    const minW = (id === 'panel-inventory') ? 260 : 440;
+                    let w = Math.max(minW, Math.min(data.width, screenW - 20));
                     let h = Math.max(140, Math.min(data.height, screenH - 20));
+                    let l = Math.max(10, Math.min(data.left, screenW - w - 10));
+                    let t = Math.max(10, Math.min(data.top, screenH - 60));
 
                     el.style.position = 'fixed';
                     el.style.left = l + 'px';
@@ -1079,12 +1589,56 @@ function loadPanelsLayout() {
                     el.style.height = h + 'px';
                     el.style.right = 'auto';
                     el.style.bottom = 'auto';
-                    el.style.maxWidth = 'none';
-                    el.style.maxHeight = 'none';
                 }
             });
         }
     } catch (err) {}
+}
+
+function resetPanelsLayout() {
+    try {
+        localStorage.removeItem('outfit_wheeler_panel_layout');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v2');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v3');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v4');
+        localStorage.removeItem('outfit_wheeler_panel_layout_v5');
+        localStorage.removeItem('outfit_wheeler_rail_width');
+    } catch (err) {}
+
+    const inv = document.getElementById('panel-inventory');
+    if (inv) {
+        inv.style.position = 'fixed';
+        inv.style.left = '16px';
+        inv.style.right = 'auto';
+        inv.style.top = '16px';
+        inv.style.bottom = '16px';
+        inv.style.width = '320px';
+        inv.style.height = 'calc(100% - 32px)';
+        inv.style.transform = 'none';
+        inv.style.margin = '0';
+    }
+
+    const dock = document.getElementById('right-dock-container');
+    if (dock) {
+        dock.style.position = 'fixed';
+        dock.style.right = '16px';
+        dock.style.left = 'auto';
+        dock.style.top = '16px';
+        dock.style.bottom = '16px';
+        dock.style.width = '480px';
+        dock.style.height = 'calc(100% - 32px)';
+        dock.style.transform = 'none';
+        dock.style.margin = '0';
+    }
+
+    const rail = document.getElementById('panel-slots-rail');
+    if (rail) {
+        rail.style.width = '120px';
+    }
+
+    if (typeof showActionToast === 'function') {
+        showActionToast('Layout reset to default');
+    }
 }
 
 function initCarouselScrollHandlers() {
@@ -1111,13 +1665,21 @@ function initCarouselScrollHandlers() {
             cycleInvSource(e.deltaY < 0 ? -1 : 1);
         }, { passive: false });
     }
+
+    const sortList = document.getElementById('custom-sort-list');
+    if (sortList) {
+        sortList.addEventListener('wheel', (e) => {
+            e.stopPropagation();
+        }, { passive: true });
+    }
 }
 
 function initCameraOrbitAndControls() {
     window.addEventListener('mousedown', (e) => {
         if (!isEditModeActive()) return;
+        if (typeof isClassicEditMode === 'function' && isClassicEditMode()) return;
         if (e.button !== 0) return;
-        if (e.target.closest('.glass-panel') || e.target.closest('.fullscreen-modal-backdrop') || e.target.closest('#top-follower-bar') || e.target.closest('.context-menu-popup')) return;
+        if (safeClosest(e.target, '.glass-panel') || safeClosest(e.target, '.fullscreen-modal-backdrop') || safeClosest(e.target, '#top-follower-bar') || safeClosest(e.target, '.context-menu-popup')) return;
 
         isOrbitingCamera = true;
         lastCamMouseX = e.clientX;
@@ -1126,6 +1688,10 @@ function initCameraOrbitAndControls() {
         if (viewport) viewport.classList.add('active');
     });
 
+    let orbitPendingRaf = false;
+    let accumulatedOrbitDx = 0;
+    let accumulatedOrbitDy = 0;
+
     window.addEventListener('mousemove', (e) => {
         if (!isOrbitingCamera) return;
         const dx = e.clientX - lastCamMouseX;
@@ -1133,32 +1699,35 @@ function initCameraOrbitAndControls() {
         lastCamMouseX = e.clientX;
         lastCamMouseY = e.clientY;
 
-        if (typeof window.OrbitCamera === 'function') {
-            window.OrbitCamera(JSON.stringify({ deltaX: dx, deltaY: dy }));
+        accumulatedOrbitDx += dx;
+        accumulatedOrbitDy += dy;
+
+        if (!orbitPendingRaf) {
+            orbitPendingRaf = true;
+            requestAnimationFrame(() => {
+                orbitPendingRaf = false;
+                if (typeof window.OrbitCamera === 'function' && (accumulatedOrbitDx !== 0 || accumulatedOrbitDy !== 0)) {
+                    window.OrbitCamera(JSON.stringify({ deltaX: accumulatedOrbitDx, deltaY: accumulatedOrbitDy }));
+                    accumulatedOrbitDx = 0;
+                    accumulatedOrbitDy = 0;
+                }
+            });
         }
     });
 
     window.addEventListener('mouseup', (e) => {
         if (e.button === 0 && isOrbitingCamera) {
             isOrbitingCamera = false;
+            accumulatedOrbitDx = 0;
+            accumulatedOrbitDy = 0;
             const viewport = document.getElementById('panel-viewport');
             if (viewport) viewport.classList.remove('active');
         }
     });
 
-    window.addEventListener('wheel', (e) => {
-        if (!isEditModeActive()) return;
-        if (e.target.closest('.panel-body-scrollable') || e.target.closest('.slots-rail-list') || e.target.closest('.drawer-items-list') || e.target.closest('.modal-card') || e.target.closest('#top-follower-bar') || e.target.closest('.inv-source-carousel-wrapper') || e.target.closest('.wheel-center')) return;
-
-        e.preventDefault();
-        const delta = Math.sign(e.deltaY);
-        if (typeof window.ZoomCamera === 'function') {
-            window.ZoomCamera(JSON.stringify({ deltaZoom: delta }));
-        }
-    }, { passive: false });
-
     window.addEventListener('keydown', (e) => {
         if (!isEditModeActive()) return;
+        if (typeof isClassicEditMode === 'function' && isClassicEditMode()) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
 
         const key = e.key.toLowerCase();
@@ -1177,22 +1746,14 @@ function initCameraOrbitAndControls() {
 }
 
 function initDraggablePanels() {
-    let panelRafId = null;
+    panelRafId = null;
 
     const targets = document.querySelectorAll('.draggable-panel');
     targets.forEach(panel => {
         if (panel.id === 'panel-settings') return;
         panel.addEventListener('mousedown', (e) => {
-            const isHeader = !!e.target.closest('.panel-drag-handle, .modal-header, .panel-header');
-            if (e.button === 2 || (e.button === 0 && isHeader)) {
-                if (e.target.closest('.item-row-card') ||
-                    e.target.closest('[data-slot-index]') ||
-                    e.target.closest('button') ||
-                    e.target.closest('input') ||
-                    e.target.closest('.context-menu-popup') ||
-                    e.target.closest('.resize-handle')) {
-                    return;
-                }
+            const isHeader = !!safeClosest(e.target, '.panel-drag-handle');
+            if (isHeader && (e.button === 0 || e.button === 2)) {
                 e.preventDefault();
                 startPanelDrag(e, panel.id);
             }
@@ -1214,13 +1775,14 @@ function initDraggablePanels() {
                 const panel = document.getElementById(activeDragPanelId);
                 if (!panel) return;
 
-                const screenW = window.innerWidth;
-                const screenH = window.innerHeight;
+                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const screenW = Math.round(window.innerWidth / scale);
+                const screenH = Math.round(window.innerHeight / scale);
                 const panelW = panel.offsetWidth;
                 const panelH = panel.offsetHeight;
 
-                let rawLeft = panelStartLeft + (currentClientX - dragStartX);
-                let rawTop = panelStartTop + (currentClientY - dragStartY);
+                let rawLeft = panelStartLeft + ((currentClientX - dragStartX) / scale);
+                let rawTop = panelStartTop + ((currentClientY - dragStartY) / scale);
 
                 const SNAP_THRESHOLD = 18;
                 const SCREEN_MARGIN = 14;
@@ -1244,25 +1806,29 @@ function initDraggablePanels() {
                 document.querySelectorAll('.draggable-panel').forEach(other => {
                     if (other.id === activeDragPanelId || other.id === 'panel-settings' || other.style.display === 'none') return;
                     const oRect = other.getBoundingClientRect();
+                    const oLeft = oRect.left / scale;
+                    const oRight = oRect.right / scale;
+                    const oTop = oRect.top / scale;
+                    const oBottom = oRect.bottom / scale;
 
-                    if (Math.abs(snappedLeft - oRect.left) < SNAP_THRESHOLD) {
-                        snappedLeft = oRect.left;
-                    } else if (Math.abs(snappedLeft - (oRect.right + PANEL_GAP)) < SNAP_THRESHOLD) {
-                        snappedLeft = oRect.right + PANEL_GAP;
-                    } else if (Math.abs((snappedLeft + panelW) - oRect.left) < SNAP_THRESHOLD) {
-                        snappedLeft = oRect.left - panelW - PANEL_GAP;
-                    } else if (Math.abs((snappedLeft + panelW) - oRect.right) < SNAP_THRESHOLD) {
-                        snappedLeft = oRect.right - panelW;
+                    if (Math.abs(snappedLeft - oLeft) < SNAP_THRESHOLD) {
+                        snappedLeft = oLeft;
+                    } else if (Math.abs(snappedLeft - (oRight + PANEL_GAP)) < SNAP_THRESHOLD) {
+                        snappedLeft = oRight + PANEL_GAP;
+                    } else if (Math.abs((snappedLeft + panelW) - oLeft) < SNAP_THRESHOLD) {
+                        snappedLeft = oLeft - panelW - PANEL_GAP;
+                    } else if (Math.abs((snappedLeft + panelW) - oRight) < SNAP_THRESHOLD) {
+                        snappedLeft = oRight - panelW;
                     }
 
-                    if (Math.abs(snappedTop - oRect.top) < SNAP_THRESHOLD) {
-                        snappedTop = oRect.top;
-                    } else if (Math.abs(snappedTop - (oRect.bottom + PANEL_GAP)) < SNAP_THRESHOLD) {
-                        snappedTop = oRect.bottom + PANEL_GAP;
-                    } else if (Math.abs((snappedTop + panelH) - oRect.top) < SNAP_THRESHOLD) {
-                        snappedTop = oRect.top - panelH - PANEL_GAP;
-                    } else if (Math.abs((snappedTop + panelH) - oRect.bottom) < SNAP_THRESHOLD) {
-                        snappedTop = oRect.bottom - panelH;
+                    if (Math.abs(snappedTop - oTop) < SNAP_THRESHOLD) {
+                        snappedTop = oTop;
+                    } else if (Math.abs(snappedTop - (oBottom + PANEL_GAP)) < SNAP_THRESHOLD) {
+                        snappedTop = oBottom + PANEL_GAP;
+                    } else if (Math.abs((snappedTop + panelH) - oTop) < SNAP_THRESHOLD) {
+                        snappedTop = oTop - panelH - PANEL_GAP;
+                    } else if (Math.abs((snappedTop + panelH) - oBottom) < SNAP_THRESHOLD) {
+                        snappedTop = oBottom - panelH;
                     }
                 });
 
@@ -1270,26 +1836,34 @@ function initDraggablePanels() {
                 snappedTop = Math.max(SCREEN_MARGIN, Math.min(snappedTop, screenH - panelH - SCREEN_MARGIN));
 
                 panel.style.position = 'fixed';
-                panel.style.left = snappedLeft + 'px';
-                panel.style.top = snappedTop + 'px';
+                panel.style.left = Math.round(snappedLeft) + 'px';
+                panel.style.top = Math.round(snappedTop) + 'px';
                 panel.style.right = 'auto';
                 panel.style.bottom = 'auto';
             });
         }
     }, { passive: true });
 
-    window.addEventListener('mouseup', () => {
-        if (activeDragPanelId) {
-            if (panelRafId) {
-                cancelAnimationFrame(panelRafId);
-                panelRafId = null;
-            }
-            const panel = document.getElementById(activeDragPanelId);
-            if (panel) panel.classList.remove('is-dragging');
-            savePanelsLayout();
-            activeDragPanelId = null;
+    window.addEventListener('mouseup', endPanelDrag, true);
+    window.addEventListener('pointerup', endPanelDrag, true);
+    window.addEventListener('pointercancel', endPanelDrag, true);
+    window.addEventListener('blur', endPanelDrag, true);
+}
+
+function endPanelDrag() {
+    if (activeDragPanelId) {
+        if (panelRafId) {
+            cancelAnimationFrame(panelRafId);
+            panelRafId = null;
         }
-    });
+        const panel = document.getElementById(activeDragPanelId);
+        if (panel) panel.classList.remove('is-dragging');
+        try {
+            savePanelsLayout();
+        } catch (err) {}
+        activeDragPanelId = null;
+    }
+    document.querySelectorAll('.is-dragging').forEach(el => el.classList.remove('is-dragging'));
 }
 
 function handlePanelDragStart(e, panelId) {
@@ -1306,12 +1880,13 @@ function startPanelDrag(e, panelId) {
     const panel = document.getElementById(panelId);
     if (panel) {
         panel.classList.add('is-dragging');
+        const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
         const rect = panel.getBoundingClientRect();
-        panelStartLeft = rect.left;
-        panelStartTop = rect.top;
+        panelStartLeft = rect.left / scale;
+        panelStartTop = rect.top / scale;
         panel.style.position = 'fixed';
-        panel.style.left = panelStartLeft + 'px';
-        panel.style.top = panelStartTop + 'px';
+        panel.style.left = Math.round(panelStartLeft) + 'px';
+        panel.style.top = Math.round(panelStartTop) + 'px';
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
         panel.style.transform = 'none';
@@ -1322,68 +1897,98 @@ function startPanelDrag(e, panelId) {
 }
 
 function initResizablePanels() {
-    window.addEventListener('mousemove', (e) => {
-        if (!activeResizePanelId || activeResizePanelId === 'panel-settings') return;
-        const panel = document.getElementById(activeResizePanelId);
-        if (!panel) return;
+    window.addEventListener('pointermove', handlePanelResizeMove, { passive: true });
+    window.addEventListener('mousemove', handlePanelResizeMove, { passive: true });
 
-        const dx = e.clientX - resizeStartX;
-        const dy = e.clientY - resizeStartY;
-        const screenW = window.innerWidth;
-        const screenH = window.innerHeight;
+    window.addEventListener('pointerup', endPanelResize, true);
+    window.addEventListener('mouseup', endPanelResize, true);
+    window.addEventListener('pointercancel', endPanelResize, true);
+    window.addEventListener('blur', endPanelResize, true);
+}
 
-        let newW = panelStartWidth;
-        let newH = panelStartHeight;
-        let newLeft = panelStartLeft;
-        let newTop = panelStartTop;
+function handlePanelResizeMove(e) {
+    if (!activeResizePanelId || activeResizePanelId === 'panel-settings') return;
+    resizeCurrentClientX = e.clientX;
+    resizeCurrentClientY = e.clientY;
 
-        const SNAP_THRESHOLD = 18;
-        const SCREEN_MARGIN = 14;
-
-        if (resizeDirection.includes('r')) {
-            newW = Math.max(180, panelStartWidth + dx);
-            if (Math.abs((newLeft + newW) - (screenW - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
-                newW = screenW - SCREEN_MARGIN - newLeft;
-            }
-        }
-        if (resizeDirection.includes('l')) {
-            let candidateLeft = panelStartLeft + dx;
-            if (Math.abs(candidateLeft - SCREEN_MARGIN) < SNAP_THRESHOLD) {
-                candidateLeft = SCREEN_MARGIN;
-            }
-            newW = Math.max(180, (panelStartLeft + panelStartWidth) - candidateLeft);
-            newLeft = (panelStartLeft + panelStartWidth) - newW;
-        }
-        if (resizeDirection.includes('b')) {
-            newH = Math.max(150, panelStartHeight + dy);
-            if (Math.abs((newTop + newH) - (screenH - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
-                newH = screenH - SCREEN_MARGIN - newTop;
-            }
-        }
-        if (resizeDirection.includes('t')) {
-            let candidateTop = panelStartTop + dy;
-            if (Math.abs(candidateTop - SCREEN_MARGIN) < SNAP_THRESHOLD) {
-                candidateTop = SCREEN_MARGIN;
-            }
-            newH = Math.max(150, (panelStartTop + panelStartHeight) - candidateTop);
-            newTop = (panelStartTop + panelStartHeight) - newH;
-        }
-
-        panel.style.width = newW + 'px';
-        panel.style.height = newH + 'px';
-        panel.style.left = newLeft + 'px';
-        panel.style.top = newTop + 'px';
-    });
-
-    window.addEventListener('mouseup', () => {
-        if (activeResizePanelId) {
+    if (!resizeRafPending) {
+        resizeRafPending = true;
+        requestAnimationFrame(() => {
+            resizeRafPending = false;
+            if (!activeResizePanelId || activeResizePanelId === 'panel-settings') return;
             const panel = document.getElementById(activeResizePanelId);
-            if (panel) panel.classList.remove('is-resizing');
+            if (!panel) return;
+
+            const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+            const dx = (resizeCurrentClientX - resizeStartX) / scale;
+            const dy = (resizeCurrentClientY - resizeStartY) / scale;
+            const screenW = Math.round(window.innerWidth / scale);
+            const screenH = Math.round(window.innerHeight / scale);
+
+            let newW = panelStartWidth;
+            let newH = panelStartHeight;
+            let newLeft = panelStartLeft;
+            let newTop = panelStartTop;
+
+            const SNAP_THRESHOLD = 18;
+            const SCREEN_MARGIN = 14;
+            const minWidthForPanel = (activeResizePanelId === 'right-dock-container') ? 440 : 260;
+
+            if (resizeDirection.includes('r')) {
+                newW = Math.max(minWidthForPanel, Math.min(screenW - panelStartLeft - SCREEN_MARGIN, panelStartWidth + dx));
+                if (Math.abs((newLeft + newW) - (screenW - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+                    newW = screenW - SCREEN_MARGIN - newLeft;
+                }
+            }
+            if (resizeDirection.includes('l')) {
+                let candidateLeft = panelStartLeft + dx;
+                if (Math.abs(candidateLeft - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+                    candidateLeft = SCREEN_MARGIN;
+                }
+                newW = Math.max(minWidthForPanel, (panelStartLeft + panelStartWidth) - candidateLeft);
+                newLeft = (panelStartLeft + panelStartWidth) - newW;
+            }
+            if (resizeDirection.includes('b')) {
+                newH = Math.max(150, Math.min(screenH - panelStartTop - SCREEN_MARGIN, panelStartHeight + dy));
+                if (Math.abs((newTop + newH) - (screenH - SCREEN_MARGIN)) < SNAP_THRESHOLD) {
+                    newH = screenH - SCREEN_MARGIN - newTop;
+                }
+            }
+            if (resizeDirection.includes('t')) {
+                let candidateTop = panelStartTop + dy;
+                if (Math.abs(candidateTop - SCREEN_MARGIN) < SNAP_THRESHOLD) {
+                    candidateTop = SCREEN_MARGIN;
+                }
+                newH = Math.max(150, (panelStartTop + panelStartHeight) - candidateTop);
+                newTop = (panelStartTop + panelStartHeight) - newH;
+            }
+
+            panel.style.width = Math.round(newW) + 'px';
+            panel.style.height = Math.round(newH) + 'px';
+            panel.style.left = Math.round(newLeft) + 'px';
+            panel.style.top = Math.round(newTop) + 'px';
+        });
+    }
+}
+
+function endPanelResize(e) {
+    if (e && e.target && typeof e.target.releasePointerCapture === 'function' && e.pointerId !== undefined) {
+        try {
+            e.target.releasePointerCapture(e.pointerId);
+        } catch (err) {}
+    }
+    if (activeResizePanelId) {
+        const panel = document.getElementById(activeResizePanelId);
+        if (panel) panel.classList.remove('is-resizing');
+        activeResizePanelId = null;
+        resizeDirection = '';
+        try {
             savePanelsLayout();
-            activeResizePanelId = null;
-            resizeDirection = '';
-        }
-    });
+        } catch (err) {}
+    }
+    document.querySelectorAll('.is-resizing').forEach(el => el.classList.remove('is-resizing'));
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
 }
 
 function handlePanelResizeStart(e, panelId, dir) {
@@ -1394,16 +1999,27 @@ function handlePanelResizeStart(e, panelId, dir) {
     const panel = document.getElementById(panelId);
     if (!panel) return;
 
+    if (e.target && typeof e.target.setPointerCapture === 'function' && e.pointerId !== undefined) {
+        try {
+            e.target.setPointerCapture(e.pointerId);
+        } catch (err) {}
+    }
+
+    document.querySelectorAll('.is-resizing').forEach(el => el.classList.remove('is-resizing'));
     panel.classList.add('is-resizing');
+
+    const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
     const rect = panel.getBoundingClientRect();
-    panelStartLeft = rect.left;
-    panelStartTop = rect.top;
-    panelStartWidth = panel.offsetWidth;
-    panelStartHeight = panel.offsetHeight;
+    panelStartLeft = rect.left / scale;
+    panelStartTop = rect.top / scale;
+    panelStartWidth = rect.width / scale;
+    panelStartHeight = rect.height / scale;
 
     panel.style.position = 'fixed';
-    panel.style.left = panelStartLeft + 'px';
-    panel.style.top = panelStartTop + 'px';
+    panel.style.left = Math.round(panelStartLeft) + 'px';
+    panel.style.top = Math.round(panelStartTop) + 'px';
+    panel.style.width = Math.round(panelStartWidth) + 'px';
+    panel.style.height = Math.round(panelStartHeight) + 'px';
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
     panel.style.maxWidth = 'none';
@@ -1415,6 +2031,81 @@ function handlePanelResizeStart(e, panelId, dir) {
     resizeDirection = dir;
     resizeStartX = e.clientX;
     resizeStartY = e.clientY;
+    resizeCurrentClientX = e.clientX;
+    resizeCurrentClientY = e.clientY;
+
+    if (dir === 't' || dir === 'b') document.body.style.cursor = 'ns-resize';
+    else if (dir === 'l' || dir === 'r') document.body.style.cursor = 'ew-resize';
+    else if (dir === 'tl' || dir === 'br') document.body.style.cursor = 'nwse-resize';
+    else if (dir === 'tr' || dir === 'bl') document.body.style.cursor = 'nesw-resize';
+    document.body.style.userSelect = 'none';
+}
+
+function initSlotsRailResizer() {
+    const splitter = document.getElementById('dock-rail-splitter');
+    const rail = document.getElementById('panel-slots-rail');
+    if (!splitter || !rail) return;
+
+    let isResizingRail = false;
+    let railStartX = 0;
+    let railStartWidth = 120;
+    let railRafId = null;
+
+    const savedWidth = parseInt(localStorage.getItem('outfit_wheeler_rail_width'), 10);
+    if (!isNaN(savedWidth) && savedWidth >= 85 && savedWidth <= 220) {
+        rail.style.width = savedWidth + 'px';
+    }
+
+    splitter.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        isResizingRail = true;
+        railStartX = e.clientX;
+        railStartWidth = rail.offsetWidth;
+        splitter.classList.add('is-dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+    });
+
+    splitter.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        rail.style.width = '120px';
+        localStorage.setItem('outfit_wheeler_rail_width', '120');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isResizingRail) return;
+        const currentClientX = e.clientX;
+
+        if (!railRafId) {
+            railRafId = requestAnimationFrame(() => {
+                railRafId = null;
+                if (!isResizingRail) return;
+                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const dx = (currentClientX - railStartX) / scale;
+                const newWidth = Math.max(85, Math.min(220, railStartWidth + dx));
+                rail.style.width = newWidth + 'px';
+            });
+        }
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (isResizingRail) {
+            isResizingRail = false;
+            if (railRafId) {
+                cancelAnimationFrame(railRafId);
+                railRafId = null;
+            }
+            splitter.classList.remove('is-dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            const finalWidth = rail.offsetWidth;
+            localStorage.setItem('outfit_wheeler_rail_width', String(finalWidth));
+        }
+    });
 }
 
 function initCustomItemDragDrop() {
@@ -1438,17 +2129,20 @@ function initCustomItemDragDrop() {
             }
 
             if (isItemDragging && dragGhostElement) {
-                dragGhostElement.style.left = (e.clientX + 12) + 'px';
-                dragGhostElement.style.top = (e.clientY + 12) + 'px';
+                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
+                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                dragGhostElement.style.left = (pointX + 12) + 'px';
+                dragGhostElement.style.top = (pointY + 12) + 'px';
 
                 document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
 
-                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                const elemBelow = document.elementFromPoint(pointX, pointY);
                 if (elemBelow) {
-                    const targetSlotCard = elemBelow.closest('.vertical-slot-card');
-                    const targetSlicePath = elemBelow.closest('.slice-path');
-                    const targetLabel = elemBelow.closest('.wheel-slot-label');
-                    const targetInspector = elemBelow.closest('#panel-slot-details');
+                    const targetSlotCard = safeClosest(elemBelow, '.vertical-slot-card');
+                    const targetSlicePath = safeClosest(elemBelow, '.slice-path');
+                    const targetLabel = safeClosest(elemBelow, '.wheel-slot-label');
+                    const targetInspector = safeClosest(elemBelow, '#panel-slot-details');
 
                     if (targetSlotCard) targetSlotCard.classList.add('drag-hover-target');
                     else if (targetSlicePath) targetSlicePath.classList.add('drag-hover-target');
@@ -1479,14 +2173,17 @@ function initCustomItemDragDrop() {
             }
 
             if (isSlotDragging && slotDragGhostElement) {
-                slotDragGhostElement.style.left = (e.clientX + 12) + 'px';
-                slotDragGhostElement.style.top = (e.clientY + 12) + 'px';
+                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
+                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                slotDragGhostElement.style.left = (pointX + 12) + 'px';
+                slotDragGhostElement.style.top = (pointY + 12) + 'px';
 
                 document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
 
-                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                const elemBelow = document.elementFromPoint(pointX, pointY);
                 if (elemBelow) {
-                    const targetCard = elemBelow.closest('.vertical-slot-card');
+                    const targetCard = safeClosest(elemBelow, '.vertical-slot-card');
                     if (targetCard) {
                         targetCard.classList.add('slot-drop-hover');
                     }
@@ -1498,12 +2195,15 @@ function initCustomItemDragDrop() {
     window.addEventListener('mouseup', (e) => {
         if (activeDraggedItem) {
             if (isItemDragging) {
-                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
+                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                const elemBelow = document.elementFromPoint(pointX, pointY);
                 if (elemBelow) {
-                    const targetSlotCard = elemBelow.closest('.vertical-slot-card');
-                    const targetSlicePath = elemBelow.closest('.slice-path');
-                    const targetLabel = elemBelow.closest('.wheel-slot-label');
-                    const targetInspector = elemBelow.closest('#panel-slot-details');
+                    const targetSlotCard = safeClosest(elemBelow, '.vertical-slot-card');
+                    const targetSlicePath = safeClosest(elemBelow, '.slice-path');
+                    const targetLabel = safeClosest(elemBelow, '.wheel-slot-label');
+                    const targetInspector = safeClosest(elemBelow, '#panel-slot-details');
 
                     let targetSlotIdx = selectedSlotIndex;
                     let foundTarget = false;
@@ -1609,9 +2309,12 @@ function initCustomItemDragDrop() {
 
         if (activeDraggedSlotIndex !== null) {
             if (isSlotDragging) {
-                const elemBelow = document.elementFromPoint(e.clientX, e.clientY);
+                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
+                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                const elemBelow = document.elementFromPoint(pointX, pointY);
                 if (elemBelow) {
-                    const targetCard = elemBelow.closest('.vertical-slot-card');
+                    const targetCard = safeClosest(elemBelow, '.vertical-slot-card');
                     if (targetCard) {
                         const targetIdx = parseInt(targetCard.getAttribute('data-slot-index'), 10);
                         if (!isNaN(targetIdx) && targetIdx !== activeDraggedSlotIndex && currentWheelData && currentWheelData.slots) {
@@ -1667,6 +2370,30 @@ function initCustomItemDragDrop() {
         activeDraggedSlotIndex = null;
         isSlotDragging = false;
         document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
+
+        if (isDraggingWheelCenter) {
+            isDraggingWheelCenter = false;
+            document.querySelectorAll('.wheel-center').forEach(el => el.classList.remove('is-dragging'));
+        }
+        if (activeDragPanelId) {
+            const panel = document.getElementById(activeDragPanelId);
+            if (panel) panel.classList.remove('is-dragging');
+            activeDragPanelId = null;
+        }
+        if (activeResizePanelId) {
+            const panel = document.getElementById(activeResizePanelId);
+            if (panel) panel.classList.remove('is-resizing');
+            activeResizePanelId = null;
+        }
+        document.querySelectorAll('.is-resizing').forEach(el => el.classList.remove('is-resizing'));
+        document.querySelectorAll('.is-dragging').forEach(el => el.classList.remove('is-dragging'));
+        const splitter = document.getElementById('dock-rail-splitter');
+        if (splitter) splitter.classList.remove('is-dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        isOrbitingCamera = false;
+        const viewport = document.getElementById('panel-viewport');
+        if (viewport) viewport.classList.remove('active');
     });
 }
 
@@ -1731,6 +2458,9 @@ function renderFollowersStrip() {
 }
 
 function selectFollower(targetId) {
+    if (targetId && targetId.toUpperCase() !== 'CLOUD' && targetId.toUpperCase() !== 'WARDROBE') {
+        activeInventorySource = targetId;
+    }
     if (typeof window.SelectTargetActor === 'function') {
         window.SelectTargetActor(JSON.stringify({ id: targetId }));
     }
@@ -1738,17 +2468,17 @@ function selectFollower(targetId) {
 
 function getInventorySourcesList() {
     const sources = [];
-    sources.push({ id: "0x00000007", type: "PLAYER", name: "Player" });
+    sources.push({ id: "0x00000007", type: "PLAYER", name: "🎒 Player" });
 
     const followers = currentWheelData.followers || [];
     followers.forEach(f => {
         const fID = (f.id || '').toUpperCase();
         if (fID !== "0X00000007" && fID !== "0X00000014") {
-            sources.push({ id: f.id, type: "FOLLOWER", name: (f.name || 'Follower') });
+            sources.push({ id: f.id, type: "FOLLOWER", name: ("👤 " + (f.name || 'Follower')) });
         }
     });
 
-    sources.push({ id: "CLOUD", type: "CLOUD", name: "Wardrobe Chest" });
+    sources.push({ id: "CLOUD", type: "CLOUD", name: "📦 Wardrobe Chest" });
     return sources;
 }
 
@@ -1783,10 +2513,8 @@ function renderInventorySourceStrip() {
         activeInventorySource = sources[0].id;
     }
 
-    let displayList = [];
-    if (total <= 3) {
-        displayList = sources;
-    } else {
+    let displayList = sources;
+    if (total > 4) {
         const prevIdx = (activeIdx - 1 + total) % total;
         const nextIdx = (activeIdx + 1) % total;
         displayList = [sources[prevIdx], sources[activeIdx], sources[nextIdx]];
@@ -1837,8 +2565,12 @@ function getSlotOrderWeight(typeStr) {
     return 7;
 }
 
-function getClassOrderWeight(typeStr) {
-    const t = (typeStr || '').toLowerCase();
+function getClassOrderWeight(item) {
+    if (!item) return 4;
+    const typeStr = item.type || '';
+    const armorClass = item.armorClass || '';
+    const tagsStr = (item.tags && Array.isArray(item.tags)) ? item.tags.join(' ') : '';
+    const t = (typeStr + ' ' + armorClass + ' ' + tagsStr).toLowerCase();
     if (t.includes('heavy')) return 0;
     if (t.includes('light')) return 1;
     if (t.includes('cloth') || t.includes('robe')) return 2;
@@ -1865,27 +2597,37 @@ function renderInventoryList() {
     });
 
     items.sort((a, b) => {
-        if (activeInventorySort === 'name_asc') return (a.name || '').localeCompare(b.name || '');
-        if (activeInventorySort === 'name_desc') return (b.name || '').localeCompare(a.name || '');
-        if (activeInventorySort === 'rating_desc') return (b.armor || 0) - (a.armor || 0);
-        if (activeInventorySort === 'rating_asc') return (a.armor || 0) - (b.armor || 0);
-        if (activeInventorySort === 'weight_asc') return (a.weight || 0) - (b.weight || 0);
-        if (activeInventorySort === 'weight_desc') return (b.weight || 0) - (a.weight || 0);
-        if (activeInventorySort === 'value_desc') return (b.value || 0) - (a.value || 0);
-        if (activeInventorySort === 'value_asc') return (a.value || 0) - (b.value || 0);
-        if (activeInventorySort === 'equipped_first') return (b.equipped ? 1 : 0) - (a.equipped ? 1 : 0);
-        if (activeInventorySort === 'enchanted_first') {
-            const aEnch = (a.tags && a.tags.includes('enchanted')) ? 1 : 0;
-            const bEnch = (b.tags && b.tags.includes('enchanted')) ? 1 : 0;
-            return bEnch - aEnch;
+        let diff = 0;
+        if (activeInventorySort === 'name_asc') {
+            diff = (a.name || '').localeCompare(b.name || '');
+        } else if (activeInventorySort === 'name_desc') {
+            diff = (b.name || '').localeCompare(a.name || '');
+        } else if (activeInventorySort === 'rating_desc') {
+            diff = (Number(b.armor) || 0) - (Number(a.armor) || 0);
+        } else if (activeInventorySort === 'rating_asc') {
+            diff = (Number(a.armor) || 0) - (Number(b.armor) || 0);
+        } else if (activeInventorySort === 'weight_asc') {
+            diff = (Number(a.weight) || 0) - (Number(b.weight) || 0);
+        } else if (activeInventorySort === 'weight_desc') {
+            diff = (Number(b.weight) || 0) - (Number(a.weight) || 0);
+        } else if (activeInventorySort === 'value_desc') {
+            diff = (Number(b.value) || 0) - (Number(a.value) || 0);
+        } else if (activeInventorySort === 'value_asc') {
+            diff = (Number(a.value) || 0) - (Number(b.value) || 0);
+        } else if (activeInventorySort === 'equipped_first') {
+            diff = (b.equipped ? 1 : 0) - (a.equipped ? 1 : 0);
+        } else if (activeInventorySort === 'enchanted_first') {
+            const aEnch = (a.tags && Array.isArray(a.tags) && a.tags.includes('enchanted')) ? 1 : 0;
+            const bEnch = (b.tags && Array.isArray(b.tags) && b.tags.includes('enchanted')) ? 1 : 0;
+            diff = bEnch - aEnch;
+        } else if (activeInventorySort === 'slot_order') {
+            diff = getSlotOrderWeight(a.type) - getSlotOrderWeight(b.type);
+        } else if (activeInventorySort === 'class_order') {
+            diff = getClassOrderWeight(a) - getClassOrderWeight(b);
         }
-        if (activeInventorySort === 'slot_order') {
-            return getSlotOrderWeight(a.type) - getSlotOrderWeight(b.type);
-        }
-        if (activeInventorySort === 'class_order') {
-            return getClassOrderWeight(a.type) - getClassOrderWeight(b.type);
-        }
-        return 0;
+
+        if (diff !== 0) return diff;
+        return (a.name || '').localeCompare(b.name || '');
     });
 
     const cAll = document.getElementById('count-all');
@@ -1895,6 +2637,22 @@ function renderInventoryList() {
     if (cAll) cAll.innerText = inv.length;
     if (cArm) cArm.innerText = inv.filter(x => x.category === 'ARMORS').length;
     if (cJwl) cJwl.innerText = inv.filter(x => x.category === 'JEWELRY').length;
+
+    const statWeight = document.getElementById('stat-carry-weight');
+    if (statWeight) {
+        if (srcUpper === 'CLOUD' || srcUpper === 'WARDROBE') {
+            statWeight.innerText = '-- / --';
+        } else {
+            const fList = (currentWheelData && currentWheelData.followers) ? currentWheelData.followers : [];
+            const found = fList.find(f => (f.id || '').toUpperCase() === srcUpper || (srcUpper === 'PLAYER' && (f.type === 'PLAYER' || (f.id || '').toUpperCase() === '0X00000007')));
+            if (found && found.weight) {
+                statWeight.innerText = found.weight;
+            } else {
+                const playerActor = fList.find(f => f.type === 'PLAYER' || (f.id || '').toUpperCase() === '0X00000007');
+                statWeight.innerText = (playerActor && playerActor.weight) ? playerActor.weight : '0 / 300';
+            }
+        }
+    }
 
     if (items.length === 0) {
         let emptyMsg = 'No apparel items found.';
@@ -1910,6 +2668,7 @@ function renderInventoryList() {
         card.className = 'item-row-card ' + (item.equipped ? 'is-equipped-item' : '');
 
         let badgeTagsHtml = '';
+        if (item.equipped) badgeTagsHtml += '<span class="badge-tag tag-equipped" style="background:rgba(16,185,129,0.2); color:#10b981; border:1px solid #10b981; font-weight:bold;">EQUIPPED</span>';
         if (item.source === 'CLOUD' || srcUpper === 'CLOUD') badgeTagsHtml += '<span class="badge-tag" style="background:rgba(82,165,245,0.2); color:#52a5f5; border:1px solid #52a5f5;">WARDROBE</span>';
         if (item.tags && item.tags.includes('enchanted')) badgeTagsHtml += '<span class="badge-tag tag-enchanted">ENCH</span>';
         if (item.tags && item.tags.includes('stolen')) badgeTagsHtml += '<span class="badge-tag tag-stolen">STOLEN</span>';
@@ -1920,7 +2679,7 @@ function renderInventoryList() {
             <div class="item-left-info">
                 <div class="item-meta-titles">
                     <span class="item-name-text">${item.name}</span>
-                    <span class="item-sub-desc">${item.type || 'Apparel'} • Wt ${Number(item.weight || 0).toFixed(1)} • ${item.value || 0}g</span>
+                    <span class="item-sub-desc">${item.type || 'Apparel'} &bull; Wt ${Number(item.weight || 0).toFixed(1)} &bull; ${item.value || 0}g</span>
                 </div>
             </div>
             <div class="item-right-stats">
@@ -2136,9 +2895,14 @@ function ctxItemEquipToggle(e) {
         e.stopPropagation();
     }
     if (inspectedItemObject && typeof window.ToggleItemEquip === 'function') {
+        const rawIdVal = inspectedItemObject.rawID || inspectedItemObject.formID || parseInt(inspectedItemObject.id, 16) || 0;
+        const idStrVal = inspectedItemObject.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
         window.ToggleItemEquip(JSON.stringify({
-            rawID: inspectedItemObject.rawID,
-            id: inspectedItemObject.id,
+            rawID: rawIdVal,
+            id: idStrVal,
+            uniqueID: inspectedItemObject.uniqueID || 0,
+            enchantmentID: inspectedItemObject.enchantmentID || 0,
+            customName: inspectedItemObject.customName || '',
             source: inspectedItemObject.source || activeInventorySource
         }));
     }
@@ -2232,7 +2996,7 @@ function renderSlotsRail() {
 
         let pipHtml = '';
         if (s.isAddon && isWornOrEquipped) {
-            pipHtml = '<span class="slot-status-pip pip-addon-equipped">ADDON • ON</span>';
+            pipHtml = '<span class="slot-status-pip pip-addon-equipped">ADDON &bull; ON</span>';
         } else if (s.isAddon) {
             pipHtml = '<span class="slot-status-pip pip-addon">ADDON</span>';
         } else if (isWornOrEquipped) {
@@ -2242,7 +3006,7 @@ function renderSlotsRail() {
         const displayName = (s.name && s.name.trim().length > 0) ? s.name : ('Outfit ' + (realIdx + 1));
         const itemCount = (s.items && s.items.length > 0) ? s.items.length : (s.count || 0);
 
-        card.innerHTML = '<div class="slot-card-texts"><span class="slot-card-name">' + displayName + '</span><span class="slot-card-sub">Slot ' + (realIdx + 1) + ' • ' + itemCount + ' pcs</span></div>' + pipHtml;
+        card.innerHTML = '<div class="slot-card-texts"><span class="slot-card-name">' + displayName + '</span><span class="slot-card-sub">Slot ' + (realIdx + 1) + ' &bull; ' + itemCount + ' pcs</span></div>' + pipHtml;
 
         card.addEventListener('mousedown', (e) => {
             if (e.button === 0) {
@@ -2256,11 +3020,35 @@ function renderSlotsRail() {
         card.onclick = (e) => {
             if (isSlotDragging) return;
             selectedSlotIndex = realIdx;
+            if (activeWheelContextFilter && activeWheelContextFilter !== 'ALL') {
+                const tag = (s.contextTag || '').toLowerCase().trim();
+                const f = activeWheelContextFilter.toLowerCase().trim();
+                let matches = tag.includes(f);
+                if (f === 'city' && (tag.includes('town') || tag.includes('village'))) matches = true;
+                if (f === 'home' && (tag.includes('house') || tag.includes('playerhome') || tag.includes('inn') || tag.includes('tavern') || tag.includes('bed') || tag.includes('sleep') || tag.includes('rest'))) matches = true;
+                if (f === 'combat' && (tag.includes('fight') || tag.includes('war') || tag.includes('military') || tag.includes('dungeon'))) matches = true;
+                if (f === 'swim' && (tag.includes('water') || tag.includes('inwater') || tag.includes('in_water'))) matches = true;
+                if (!matches) {
+                    activeWheelContextFilter = 'ALL';
+                    const tabs = document.querySelectorAll('#filter-tabs-container .filter-tab');
+                    tabs.forEach(tab => {
+                        if (tab.getAttribute('data-tag') === 'ALL') tab.classList.add('active');
+                        else tab.classList.remove('active');
+                    });
+                    if (typeof updateWheelUI === 'function') updateWheelUI();
+                }
+            }
             renderSlotsRail();
             renderDrawerDetails();
             if (s.hasOutfit && s.items && s.items.length > 0) {
-                const keepOpen = (e.shiftKey === true || currentWheelData.autoCloseOnEquip === false);
-                equipOutfit(realIdx, keepOpen);
+                equipOutfit(realIdx, true);
+            }
+        };
+
+        card.ondblclick = (e) => {
+            e.stopPropagation();
+            if (s.hasOutfit && s.items && s.items.length > 0) {
+                equipOutfit(realIdx, true);
             }
         };
 
@@ -2326,6 +3114,11 @@ function renderDrawerDetails() {
 
     if (btnSaveMain) {
         btnSaveMain.innerText = slot.isAddon ? 'Save All Worn to Addon' : 'Save Current Gear';
+    }
+
+    const btnEquipSlot = document.getElementById('btn-equip-drawer-slot');
+    if (btnEquipSlot) {
+        btnEquipSlot.style.display = (slot && slot.hasOutfit && slot.items && slot.items.length > 0) ? 'inline-flex' : 'none';
     }
 
     const currentStars = (slot && slot.preferenceStars !== undefined) ? slot.preferenceStars : 3;
@@ -2606,6 +3399,7 @@ function toggleContextTagDirect(ctxKey) {
     const newTagStr = currentTags.join(', ');
     slot.contextTag = newTagStr;
     renderDrawerContextChips();
+    if (typeof updateWheelUI === 'function') updateWheelUI();
 
     if (typeof window.SetSlotContext === 'function' && currentWheelData) {
         window.SetSlotContext(JSON.stringify({
@@ -2620,6 +3414,19 @@ function saveCurrentEquippedToSlot() {
     saveOutfit(selectedSlotIndex);
 }
 
+function equipCurrentSelectedSlot() {
+    if (selectedSlotIndex === null || !currentWheelData || !currentWheelData.slots) return;
+    const slot = currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex];
+    if (slot && slot.hasOutfit && slot.items && slot.items.length > 0) {
+        equipOutfit(selectedSlotIndex, true);
+    }
+}
+
 function clearSelectedSlot() {
     ctxClearSlot();
+}
+
+initSortDropdown();
+if (typeof document !== 'undefined' && document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSortDropdown);
 }

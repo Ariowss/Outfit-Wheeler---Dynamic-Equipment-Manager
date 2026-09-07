@@ -1,4 +1,4 @@
-﻿set_xmakever("2.8.2")
+set_xmakever("2.8.2")
 
 add_requires("nlohmann_json")
 
@@ -30,3 +30,11 @@ target("OutfitWheeler-DynamicEquipmentManager")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
+
+target("OutfitWheeler-BackendTests")
+    set_kind("binary")
+    set_default(false)
+    add_packages("nlohmann_json")
+    add_files("tests/test_backend.cpp")
+    add_files("src/Settings.cpp")
+    add_includedirs("src")

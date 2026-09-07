@@ -1,10 +1,66 @@
+if (typeof window.safeGetStorage === 'undefined') {
+    window.safeGetStorage = function(key, defaultVal) {
+        try {
+            const val = localStorage.getItem(key);
+            return (val !== null && val !== undefined) ? val : defaultVal;
+        } catch (err) {
+            return defaultVal;
+        }
+    };
+}
+if (typeof window.safeSetStorage === 'undefined') {
+    window.safeSetStorage = function(key, val) {
+        try {
+            localStorage.setItem(key, String(val));
+        } catch (err) {}
+    };
+}
+var safeGetStorage = window.safeGetStorage;
+var safeSetStorage = window.safeSetStorage;
+
 var renameTargetMode = 'slot';
 var tempStars = 3;
 var lastMenuOpenTime = 0;
 var toastTimeout = null;
 
-var modNameMap = { 0: 'None', 42: 'Shift', 29: 'Ctrl', 56: 'Alt' };
-var gpModNameMap = { 0: 'None', 256: 'LB', 512: 'RB', 9: 'LT', 10: 'RT' };
+var modNameMap = {
+    0: 'None',
+    '0': 'None',
+    42: 'Shift',
+    '42': 'Shift',
+    54: 'Shift',
+    '54': 'Shift',
+    0x2A: 'Shift',
+    0x36: 'Shift',
+    29: 'Ctrl',
+    '29': 'Ctrl',
+    157: 'Ctrl',
+    '157': 'Ctrl',
+    0x1D: 'Ctrl',
+    0x9D: 'Ctrl',
+    56: 'Alt',
+    '56': 'Alt',
+    184: 'Alt',
+    '184': 'Alt',
+    0x38: 'Alt',
+    0xB8: 'Alt'
+};
+var gpModNameMap = {
+    0: 'None',
+    '0': 'None',
+    256: 'LB',
+    '256': 'LB',
+    0x0100: 'LB',
+    512: 'RB',
+    '512': 'RB',
+    0x0200: 'RB',
+    9: 'LT',
+    '9': 'LT',
+    0x0009: 'LT',
+    10: 'RT',
+    '10': 'RT',
+    0x000A: 'RT'
+};
 
 const ALL_CONDITIONS_LIST = [
     { id: "combat", label: "Combat", cat: "action" },
@@ -14,6 +70,7 @@ const ALL_CONDITIONS_LIST = [
     { id: "mount", label: "Mounting", cat: "action" },
 
     { id: "world", label: "World (Adventure)", cat: "generic" },
+    { id: "adventure", label: "Adventure", cat: "generic" },
     { id: "town", label: "Town", cat: "generic" },
     { id: "city", label: "City", cat: "generic" },
     { id: "day", label: "Day", cat: "modifier" },
@@ -45,26 +102,18 @@ function showSaveToast(text) {
     }, 1500);
 }
 
-function hideAllModals() {
+function hideAllModals(keepSettingsOpen) {
     ['rename-modal', 'context-modal'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
-    const panelSettings = document.getElementById('panel-settings');
-    if (panelSettings) panelSettings.style.display = 'none';
-
-    listeningKeyType = null;
-    listeningGamepadType = null;
-    closeAllDropdowns();
-    setTyping(false);
-}
-
-function hideAllMenus(e) {
-    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
-    ['slot-context-menu', 'wheel-context-menu', 'item-context-menu', 'transfer-all-context-menu'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-    });
+    if (!keepSettingsOpen) {
+        const panelSettings = document.getElementById('panel-settings');
+        if (panelSettings) panelSettings.style.display = 'none';
+        listeningKeyType = null;
+        listeningGamepadType = null;
+        setTyping(false);
+    }
     closeAllDropdowns();
 }
 
@@ -188,6 +237,8 @@ function handleCenterRightClick(e) {
         e.preventDefault();
         e.stopPropagation();
     }
+    if (typeof isDraggingWheelCenter !== 'undefined' && isDraggingWheelCenter) return;
+    if (typeof wheelDragMoved !== 'undefined' && wheelDragMoved) return;
     const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
     const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
     showWheelContextMenu(clickX, clickY);
@@ -211,21 +262,51 @@ function openSettingsModal(e) {
     panel.style.top = '50%';
     panel.style.transform = 'translate(-50%, -50%)';
 
+    const chkAutoSystem = document.getElementById('chk-auto-system');
+    if (chkAutoSystem) chkAutoSystem.checked = (currentWheelData.autoSystemEnabled === true);
+
     const chkAutoClose = document.getElementById('chk-auto-close-equip');
     if (chkAutoClose) chkAutoClose.checked = (currentWheelData.autoCloseOnEquip !== false);
 
     const chkAutoStash = document.getElementById('chk-auto-stash');
     if (chkAutoStash) chkAutoStash.checked = (currentWheelData.autoStashEnabled === true);
 
-    const chkAutoSystem = document.getElementById('chk-auto-system');
-    if (chkAutoSystem) chkAutoSystem.checked = (currentWheelData.autoSystemEnabled !== false);
 
-    tempEditKey = currentWheelData.editKey || 0x31;
-    tempEditMod = currentWheelData.editModifierKey || 0;
-    tempPlayKey = currentWheelData.playKey || 0x2F;
-    tempPlayMod = currentWheelData.playModifierKey || 0;
-    tempGamepadPlayKey = currentWheelData.gamepadPlayKey || 0x0008;
-    tempGamepadPlayMod = currentWheelData.gamepadPlayModifier || 0x0100;
+
+    const uiScaleSlider = document.getElementById('slider-ui-scale');
+    const uiScaleTxt = document.getElementById('txt-ui-scale');
+    const curUiScale = (currentWheelData && currentWheelData.uiScale) ? currentWheelData.uiScale : (parseFloat(safeGetStorage('outfit_wheeler_ui_scale', '1.0')) || 1.0);
+    if (uiScaleSlider) uiScaleSlider.value = curUiScale;
+    if (uiScaleTxt) uiScaleTxt.innerText = curUiScale.toFixed(2) + 'x';
+
+    const curMode = (currentWheelData && currentWheelData.editUiMode !== undefined) ? currentWheelData.editUiMode : (parseInt(safeGetStorage('outfit_wheeler_edit_ui_mode', '0')) || 0);
+    const btnClassic = document.getElementById('btn-mode-classic');
+    const btnStudio = document.getElementById('btn-mode-studio');
+    if (btnClassic && btnStudio) {
+        if (curMode === 0) {
+            btnClassic.classList.add('active');
+            btnStudio.classList.remove('active');
+        } else {
+            btnStudio.classList.add('active');
+            btnClassic.classList.remove('active');
+        }
+    }
+
+    const storedEditKey = parseInt(safeGetStorage('outfit_wheeler_edit_key', ''), 10);
+    const storedEditMod = parseInt(safeGetStorage('outfit_wheeler_edit_mod', ''), 10);
+    const storedPlayKey = parseInt(safeGetStorage('outfit_wheeler_play_key', ''), 10);
+    const storedPlayMod = parseInt(safeGetStorage('outfit_wheeler_play_mod', ''), 10);
+    const storedGpKey = parseInt(safeGetStorage('outfit_wheeler_gp_play_key', ''), 10);
+    const storedGpMod = parseInt(safeGetStorage('outfit_wheeler_gp_play_mod', ''), 10);
+
+    tempEditKey = (currentWheelData && currentWheelData.editKey !== undefined && currentWheelData.editKey !== null) ? (parseInt(currentWheelData.editKey, 10) || 0x31) : (!isNaN(storedEditKey) ? storedEditKey : 0x31);
+    tempEditMod = (currentWheelData && currentWheelData.editModifierKey !== undefined && currentWheelData.editModifierKey !== null) ? (parseInt(currentWheelData.editModifierKey, 10) || 0) : (!isNaN(storedEditMod) ? storedEditMod : 0);
+
+    tempPlayKey = (currentWheelData && currentWheelData.playKey !== undefined && currentWheelData.playKey !== null) ? (parseInt(currentWheelData.playKey, 10) || 0x2F) : (!isNaN(storedPlayKey) ? storedPlayKey : 0x2F);
+    tempPlayMod = (currentWheelData && currentWheelData.playModifierKey !== undefined && currentWheelData.playModifierKey !== null) ? (parseInt(currentWheelData.playModifierKey, 10) || 0) : (!isNaN(storedPlayMod) ? storedPlayMod : 0);
+
+    tempGamepadPlayKey = (currentWheelData && currentWheelData.gamepadPlayKey !== undefined && currentWheelData.gamepadPlayKey !== null) ? (parseInt(currentWheelData.gamepadPlayKey, 10) || 0x0008) : (!isNaN(storedGpKey) ? storedGpKey : 0x0008);
+    tempGamepadPlayMod = (currentWheelData && currentWheelData.gamepadPlayModifier !== undefined && currentWheelData.gamepadPlayModifier !== null) ? (parseInt(currentWheelData.gamepadPlayModifier, 10) || 0x0100) : (!isNaN(storedGpMod) ? storedGpMod : 0x0100);
 
     const editBtn = document.getElementById('btn-edit-key');
     const playBtn = document.getElementById('btn-play-key');
@@ -238,9 +319,13 @@ function openSettingsModal(e) {
     if (playBtn) playBtn.innerText = '[' + getKeyName(tempPlayKey) + ']';
     if (gpPlayBtn) gpPlayBtn.innerText = '[' + (gamepadNames[tempGamepadPlayKey] ? gamepadNames[tempGamepadPlayKey] : ('0x' + tempGamepadPlayKey.toString(16).toUpperCase())) + ']';
 
-    if (editModText) editModText.innerText = modNameMap[tempEditMod] || 'None';
-    if (playModText) playModText.innerText = modNameMap[tempPlayMod] || 'None';
-    if (gpPlayModText) gpPlayModText.innerText = gpModNameMap[tempGamepadPlayMod] || 'None';
+    if (editModText) editModText.innerText = (typeof modNameMap !== 'undefined' && modNameMap[tempEditMod]) ? modNameMap[tempEditMod] : (tempEditMod === 0 ? 'None' : 'Shift');
+    if (playModText) playModText.innerText = (typeof modNameMap !== 'undefined' && modNameMap[tempPlayMod]) ? modNameMap[tempPlayMod] : (tempPlayMod === 0 ? 'None' : 'Shift');
+    if (gpPlayModText) gpPlayModText.innerText = (typeof gpModNameMap !== 'undefined' && gpModNameMap[tempGamepadPlayMod]) ? gpModNameMap[tempGamepadPlayMod] : (tempGamepadPlayMod === 0 ? 'None' : 'LB');
+
+    updateModPillUi('edit', tempEditMod);
+    updateModPillUi('play', tempPlayMod);
+    updateModPillUi('gp-play', tempGamepadPlayMod);
 
     panel.style.display = 'flex';
     setTyping(true);
@@ -257,18 +342,35 @@ function hideSettingsModal() {
 }
 
 function saveSettings() {
+    const chkAutoSystem = document.getElementById('chk-auto-system');
+    const autoSystemVal = chkAutoSystem ? chkAutoSystem.checked : false;
+
     const chkAutoClose = document.getElementById('chk-auto-close-equip');
     const autoCloseVal = chkAutoClose ? chkAutoClose.checked : true;
 
     const chkAutoStash = document.getElementById('chk-auto-stash');
     const autoStashVal = chkAutoStash ? chkAutoStash.checked : false;
 
-    const chkAutoSystem = document.getElementById('chk-auto-system');
-    const autoSystemVal = chkAutoSystem ? chkAutoSystem.checked : true;
+    const uiScaleSlider = document.getElementById('slider-ui-scale');
+    const savedUiScale = uiScaleSlider ? (parseFloat(uiScaleSlider.value) || 1.0) : 1.0;
 
+    currentWheelData.autoSystemEnabled = autoSystemVal;
     currentWheelData.autoCloseOnEquip = autoCloseVal;
     currentWheelData.autoStashEnabled = autoStashVal;
-    currentWheelData.autoSystemEnabled = autoSystemVal;
+    currentWheelData.autoCombatEnabled = true;
+    currentWheelData.autoSwimEnabled = true;
+    currentWheelData.autoCityEnabled = true;
+    currentWheelData.autoHomeEnabled = true;
+    currentWheelData.uiScale = savedUiScale;
+
+    safeSetStorage('outfit_wheeler_ui_scale', String(savedUiScale));
+    safeSetStorage('outfit_wheeler_edit_key', String(tempEditKey));
+    safeSetStorage('outfit_wheeler_edit_mod', String(tempEditMod));
+    safeSetStorage('outfit_wheeler_play_key', String(tempPlayKey));
+    safeSetStorage('outfit_wheeler_play_mod', String(tempPlayMod));
+    safeSetStorage('outfit_wheeler_gp_play_key', String(tempGamepadPlayKey));
+    safeSetStorage('outfit_wheeler_gp_play_mod', String(tempGamepadPlayMod));
+    applyAutoResolutionScale();
 
     currentWheelData.editKey = tempEditKey;
     currentWheelData.editModifierKey = tempEditMod;
@@ -278,7 +380,6 @@ function saveSettings() {
     currentWheelData.gamepadPlayModifier = tempGamepadPlayMod;
 
     if (typeof saveWheelPositionToStorage === 'function') saveWheelPositionToStorage();
-    if (typeof savePanelsLayout === 'function') savePanelsLayout();
 
     if (typeof window.SaveSettings === 'function') {
         window.SaveSettings(JSON.stringify({
@@ -286,6 +387,8 @@ function saveSettings() {
             wheelScale: currentWheelData.wheelScale || 1.0,
             wheelOffsetX: currentWheelData.wheelOffsetX || 0.0,
             wheelOffsetY: currentWheelData.wheelOffsetY || 0.0,
+            uiScale: savedUiScale,
+            editUiMode: (currentWheelData && currentWheelData.editUiMode !== undefined ? currentWheelData.editUiMode : 0),
             editKey: tempEditKey,
             editModifierKey: tempEditMod,
             playKey: tempPlayKey,
@@ -341,11 +444,18 @@ function hideContextModal() {
 }
 
 function setStarRating(num) {
+    if (tempStars === 1 && num === 1) {
+        num = 0;
+    }
     tempStars = num;
     document.querySelectorAll('#modal-stars-widget .star').forEach((s, idx) => {
         if (idx < num) s.classList.add('active');
         else s.classList.remove('active');
     });
+    const label = document.getElementById('modal-stars-value-label');
+    if (label) {
+        label.innerText = num === 0 ? '(Excluded from Auto)' : '(' + num + ' Stars)';
+    }
 }
 
 function saveSlotContextAndRating() {
@@ -414,25 +524,43 @@ function confirmRename() {
     }
 
     if (renameTargetMode === 'slot' && selectedSlotIndex !== null) {
-        if (typeof window.RenameSlot === 'function' && currentWheelData) {
+        const slotIdx = parseInt(selectedSlotIndex, 10);
+        const wheelIdx = parseInt(currentWheelData ? currentWheelData.wheelIndex : 0, 10) || 0;
+        const realSlotIdx = isNaN(slotIdx) ? 0 : slotIdx;
+        if (typeof window.RenameSlot === 'function') {
             window.RenameSlot(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex || 0,
-                slotIndex: selectedSlotIndex,
+                wheelIndex: wheelIdx,
+                slotIndex: realSlotIdx,
                 newName: val
             }));
         }
+        const currentSlot = (currentWheelData && currentWheelData.slots) ? ((currentWheelData.slots || []).find(s => (s.index !== undefined ? s.index : 0) === realSlotIdx) || (currentWheelData.slots || [])[realSlotIdx]) : null;
+        if (currentSlot) {
+            currentSlot.name = val;
+        }
+        const drawerName = document.getElementById('drawer-outfit-name');
+        if (drawerName) drawerName.innerText = val;
+        if (typeof renderSlotsRail === 'function') renderSlotsRail();
+        if (typeof renderDrawerDetails === 'function') renderDrawerDetails();
+        if (typeof updateWheelUI === 'function') updateWheelUI();
     } else if (renameTargetMode === 'wheel') {
-        if (typeof window.RenameWheel === 'function' && currentWheelData) {
+        const wheelIdx = parseInt(currentWheelData ? currentWheelData.wheelIndex : 0, 10) || 0;
+        if (typeof window.RenameWheel === 'function') {
             window.RenameWheel(JSON.stringify({
-                wheelIndex: currentWheelData.wheelIndex || 0,
+                wheelIndex: wheelIdx,
                 newName: val
             }));
         }
+        if (currentWheelData) currentWheelData.wheelName = val;
+        const wheelNameEl = document.getElementById('wheel-name');
+        if (wheelNameEl) wheelNameEl.innerText = val;
+        if (typeof updateWheelUI === 'function') updateWheelUI();
     }
     hideRenameModal();
 }
 
 function handleRenameKey(e) {
+    if (e) e.stopPropagation();
     if (e.key === 'Enter') confirmRename();
     else if (e.key === 'Escape') hideRenameModal();
 }
@@ -585,38 +713,91 @@ function ctxDeleteWheel(e) {
 }
 
 function toggleDropdown(type, e) {
-    if (e) e.stopPropagation();
-    const map = {
-        'edit': document.getElementById('dd-edit-list'),
-        'play': document.getElementById('dd-play-list'),
-        'gp-play': document.getElementById('dd-gp-play-list')
-    };
-    for (let key in map) {
-        if (map[key]) {
-            if (key === type) map[key].style.display = map[key].style.display === 'none' ? 'flex' : 'none';
-            else map[key].style.display = 'none';
-        }
+    if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+    const targetList = document.getElementById(type === 'edit' ? 'dd-edit-list' : (type === 'play' ? 'dd-play-list' : 'dd-gp-play-list'));
+    if (!targetList) return;
+    const isVisible = targetList.style.display === 'flex';
+    closeAllDropdowns();
+    if (!isVisible) {
+        targetList.style.display = 'flex';
     }
 }
 
 function selectMod(type, val, text, e) {
-    if (e) e.stopPropagation();
-    if (type === 'edit') {
-        tempEditMod = val;
-        document.getElementById('dd-edit-text').innerText = text;
-    } else if (type === 'play') {
-        tempPlayMod = val;
-        document.getElementById('dd-play-text').innerText = text;
-    } else if (type === 'gp-play') {
-        tempGamepadPlayMod = val;
-        document.getElementById('dd-gp-play-text').innerText = text;
+    if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
     }
+    const numVal = parseInt(val, 10) || 0;
+    if (type === 'edit') {
+        tempEditMod = numVal;
+        const el = document.getElementById('dd-edit-text');
+        if (el) el.innerText = text;
+        safeSetStorage('outfit_wheeler_edit_mod', String(numVal));
+        if (currentWheelData) currentWheelData.editModifierKey = numVal;
+    } else if (type === 'play') {
+        tempPlayMod = numVal;
+        const el = document.getElementById('dd-play-text');
+        if (el) el.innerText = text;
+        safeSetStorage('outfit_wheeler_play_mod', String(numVal));
+        if (currentWheelData) currentWheelData.playModifierKey = numVal;
+    } else if (type === 'gp-play') {
+        tempGamepadPlayMod = numVal;
+        const el = document.getElementById('dd-gp-play-text');
+        if (el) el.innerText = text;
+        safeSetStorage('outfit_wheeler_gp_play_mod', String(numVal));
+        if (currentWheelData) currentWheelData.gamepadPlayModifier = numVal;
+    }
+    updateModPillUi(type, numVal);
     closeAllDropdowns();
 }
 
-function closeAllDropdowns() {
-    ['dd-edit-list', 'dd-play-list', 'dd-gp-play-list'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
+function selectModPill(type, val, e) {
+    if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+    const textMap = {
+        0: 'None',
+        42: 'Shift',
+        29: 'Ctrl',
+        56: 'Alt',
+        256: 'LB',
+        512: 'RB',
+        9: 'LT',
+        10: 'RT'
+    };
+    selectMod(type, val, textMap[val] || 'None', e);
+}
+
+function updateModPillUi(type, val) {
+    const groupId = type === 'edit' ? 'group-edit-mod' : (type === 'play' ? 'group-play-mod' : 'group-gp-play-mod');
+    const group = document.getElementById(groupId);
+    if (!group) return;
+    const pills = group.querySelectorAll('.mod-pill');
+    pills.forEach(p => {
+        const modVal = parseInt(p.getAttribute('data-mod'), 10) || 0;
+        if (modVal === val) {
+            p.classList.add('active');
+        } else {
+            p.classList.remove('active');
+        }
     });
 }
+
+if (typeof window.closeAllDropdowns === 'undefined') {
+    window.closeAllDropdowns = function() {
+        ['dd-edit-list', 'dd-play-list', 'dd-gp-play-list'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+        const sortList = document.getElementById('custom-sort-list');
+        const sortDropdown = document.getElementById('custom-sort-dropdown');
+        if (sortList) sortList.style.display = 'none';
+        if (sortDropdown) sortDropdown.classList.remove('open');
+    };
+}
+var closeAllDropdowns = window.closeAllDropdowns;

@@ -98,9 +98,10 @@ void ExecutionQueue::RegisterEventsInternal() {
     g_eventsRegistered.store(true, std::memory_order_release);
 
     static std::atomic<bool> s_timerStarted{ false };
+    static std::atomic<bool> s_timerShutdown{ false };
     if (!s_timerStarted.exchange(true)) {
         std::thread([]() {
-            while (true) {
+            while (!s_timerShutdown.load(std::memory_order_acquire)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 if (g_gameFullyLoaded.load(std::memory_order_acquire)) {
                     SKSE::GetTaskInterface()->AddTask([]() {
@@ -252,13 +253,10 @@ ContextFlags ExecutionQueue::GatherActorContext(RE::Actor* a_actor, bool a_isPla
         return ContextFlags::Combat;
     }
 
-    float waterHeight = a_actor->GetWaterHeight();
-    float posZ = a_actor->GetPositionZ();
-    if (actorState && actorState->IsSwimming()) {
-        return ContextFlags::Swim;
-    }
-    if (waterHeight > posZ + 15.0f && waterHeight < posZ + 80.0f) {
-        return ContextFlags::InWater;
+    if (g_autoSwimEnabled) {
+        if (actorState && actorState->IsSwimming()) {
+            return ContextFlags::Swim;
+        }
     }
 
     auto parentCell = a_actor->GetParentCell();
@@ -345,23 +343,79 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::MenuOpenCloseEve
 
     if (a_event->menuName == MENU_SLEEP_WAIT) {
         EvaluateAndQueueChange(true);
-    } else if (!a_event->opening && (a_event->menuName == RE::LoadingMenu::MENU_NAME || a_event->menuName == RE::FaderMenu::MENU_NAME || a_event->menuName == RE::TweenMenu::MENU_NAME || a_event->menuName == RE::InventoryMenu::MENU_NAME)) {
+    } else if (!a_event->opening && a_event->menuName == RE::InventoryMenu::MENU_NAME) {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (player) {
+            auto manager = AdaptiveWardrobeManager::GetSingleton();
+            auto wardrobe = manager->GetWardrobe(0x00000007);
+            auto worn = GetEquippedInventoryEntries(player);
+            std::string matchedID = "";
+            for (const auto& outfit : wardrobe) {
+                if (outfit.items.empty() && outfit.itemIDs.empty()) continue;
+                size_t matchCount = 0;
+                if (!outfit.items.empty()) {
+                    for (const auto& itm : outfit.items) {
+                        for (const auto& w : worn) {
+                            if (MatchesWornEntry(w, itm)) {
+                                matchCount++;
+                                break;
+                            }
+                        }
+                    }
+                    if (matchCount == outfit.items.size() && matchCount == worn.size()) {
+                        matchedID = outfit.id;
+                        break;
+                    }
+                } else {
+                    std::unordered_set<RE::FormID> wornSet;
+                    for (const auto& w : worn) {
+                        if (w.object) wornSet.insert(w.object->GetFormID());
+                    }
+                    for (auto fID : outfit.itemIDs) {
+                        if (wornSet.find(fID) != wornSet.end()) matchCount++;
+                    }
+                    if (matchCount == outfit.itemIDs.size() && matchCount == wornSet.size()) {
+                        matchedID = outfit.id;
+                        break;
+                    }
+                }
+            }
+            ContextFlags curCtx = GatherCurrentContext();
+            if (!matchedID.empty()) {
+                manager->RecordOutfitEquipped(0x00000007, matchedID, 0);
+            } else {
+                manager->SetManualOverride(0x00000007, curCtx);
+            }
+        }
+    } else if (!a_event->opening && (a_event->menuName == RE::LoadingMenu::MENU_NAME || a_event->menuName == RE::FaderMenu::MENU_NAME || a_event->menuName == RE::TweenMenu::MENU_NAME)) {
         EvaluateAndQueueChange(false);
     }
     return RE::BSEventNotifyControl::kContinue;
 }
 
 void ExecutionQueue::Update() {
+    if (!g_autoSystemEnabled) return;
     if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return;
 
     auto ui = RE::UI::GetSingleton();
-    if (!ui || ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || ui->IsMenuOpen(RE::FaderMenu::MENU_NAME)) {
+    if (!ui || ui->GameIsPaused() ||
+        ui->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::FaderMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::BarterMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::MagicMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::CraftingMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::Console::MENU_NAME) ||
+        ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME)) {
         return;
     }
 
     uint64_t currentTick = GetTickCount64();
     uint64_t lastTick = g_lastPeriodicTick.load(std::memory_order_acquire);
-    if (currentTick - lastTick < 400) {
+    if (currentTick - lastTick < 1000) {
         return;
     }
     g_lastPeriodicTick.store(currentTick, std::memory_order_release);
@@ -374,7 +428,18 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
     if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return;
 
     auto uiRef = RE::UI::GetSingleton();
-    if (!uiRef || uiRef->IsMenuOpen(RE::MainMenu::MENU_NAME) || uiRef->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || uiRef->IsMenuOpen(RE::FaderMenu::MENU_NAME)) {
+    if (!uiRef || uiRef->GameIsPaused() ||
+        uiRef->IsMenuOpen(RE::MainMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::LoadingMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::FaderMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::InventoryMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::ContainerMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::BarterMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::MagicMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::CraftingMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::DialogueMenu::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::Console::MENU_NAME) ||
+        uiRef->IsMenuOpen(RE::RaceSexMenu::MENU_NAME)) {
         return;
     }
 
@@ -428,8 +493,8 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
                 auto actor = handle.get();
                 if (actor && actor.get() != playerRef && actor->IsPlayerTeammate() && !actor->IsDead() && actor->Is3DLoaded() && IsHumanoidNPC(actor.get())) {
                     RE::FormID aID = actor->GetFormID();
+                    if (!manager->HasWardrobe(aID)) continue;
                     auto fWardrobe = manager->GetWardrobe(aID);
-                    if (fWardrobe.empty()) continue;
 
                     lastActorContexts[aID] = GatherActorContext(actor.get(), false);
                     auto fWorn = GetEquippedInventoryEntries(actor.get());
@@ -470,15 +535,6 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
 
         AutoStashInactiveSlotItems(playerRef);
 
-        if (processLists) {
-            for (auto& handle : processLists->highActorHandles) {
-                auto actor = handle.get();
-                if (actor && actor.get() != playerRef && actor->IsPlayerTeammate() && !actor->IsDead() && actor->Is3DLoaded() && IsHumanoidNPC(actor.get())) {
-                    AutoStashInactiveSlotItems(actor.get());
-                }
-            }
-        }
-
         g_skipInitialLoadEval.store(false, std::memory_order_release);
         return;
     }
@@ -500,7 +556,7 @@ void ExecutionQueue::EvaluateAndQueueChange(bool isEmergency) {
             auto actor = handle.get();
             if (actor && actor.get() != playerRef && actor->IsPlayerTeammate() && !actor->IsDead() && actor->Is3DLoaded() && IsHumanoidNPC(actor.get())) {
                 RE::FormID aID = actor->GetFormID();
-                if (!manager->GetWardrobe(aID).empty()) {
+                if (manager->HasWardrobe(aID)) {
                     targetActors.push_back(actor.get());
                 }
             }

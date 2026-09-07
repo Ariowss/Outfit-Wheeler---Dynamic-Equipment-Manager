@@ -1,7 +1,7 @@
 var svgPlusIcon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="#6c829c" stroke-width="1.5" stroke-dasharray="3 3"/><path d="M12 8V16M8 12H16" stroke="#a3b8cc" stroke-width="2" stroke-linecap="round"/></svg>';
 
 function resolvePngIcon(slot) {
-    if (!slot) return 'action_combat.png';
+    if (!slot) return 'default.png';
 
     if (slot.icon && typeof slot.icon === 'string' && slot.icon.trim().length > 0) {
         let ic = slot.icon.trim();
@@ -11,7 +11,9 @@ function resolvePngIcon(slot) {
         return ic;
     }
 
-    const tag = (slot.contextTag || '').toLowerCase();
+    const tag = (slot.contextTag || '').toLowerCase().trim();
+    if (!tag) return 'default.png';
+
     if (tag.includes('sleep')) return 'action_sleep.png';
     if (tag.includes('mount') || tag.includes('horse')) return 'action_mount.png';
     if (tag.includes('swim') || tag.includes('water')) return 'action_swim.png';
@@ -33,9 +35,9 @@ function resolvePngIcon(slot) {
     if (tag.includes('snow') || tag.includes('cold')) return 'badge_snow.png';
     if (tag.includes('night')) return 'badge_night.png';
     if (tag.includes('day')) return 'day.png';
-    if (tag.includes('world')) return 'world.png';
+    if (tag.includes('world') || tag.includes('adventure')) return 'world.png';
 
-    return 'action_combat.png';
+    return 'default.png';
 }
 
 function describeArc(x, y, innerRadius, outerRadius, startAngle, endAngle) {
@@ -71,13 +73,12 @@ function updateWheelUI() {
     if (!svg || !labelsContainer || !container) return;
 
     const isEdit = isEditModeActive();
-    const baseScale = isEdit ? 0.65 : 1.0;
+    const baseScale = (isEdit && !(typeof isClassicEditMode === 'function' && isClassicEditMode())) ? 0.65 : 1.0;
     const userScale = (currentWheelData && currentWheelData.wheelScale !== undefined) ? currentWheelData.wheelScale : 1.0;
-    const autoScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--auto-ui-scale')) || 1.0;
     const offsetX = (currentWheelData && currentWheelData.wheelOffsetX !== undefined) ? currentWheelData.wheelOffsetX : 0.0;
     const offsetY = (currentWheelData && currentWheelData.wheelOffsetY !== undefined) ? currentWheelData.wheelOffsetY : 0.0;
 
-    container.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${baseScale * userScale * autoScale})`;
+    container.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${baseScale * userScale})`;
 
     if (wheelIndexLbl) {
         wheelIndexLbl.innerText = `WHEEL ${(currentWheelData.wheelIndex || 0) + 1} OF ${currentWheelData.totalWheels || 1}`;
@@ -97,14 +98,38 @@ function updateWheelUI() {
     const rawSlots = currentWheelData.slots || [];
     let displaySlots = [];
 
-    if (!isEdit && activeWheelContextFilter && activeWheelContextFilter !== 'ALL') {
-        const filterTag = activeWheelContextFilter.toLowerCase();
-        displaySlots = rawSlots.map((slot, idx) => ({ ...slot, realIndex: idx })).filter(slot => {
-            if (!slot.hasOutfit || !slot.contextTag) return false;
-            return slot.contextTag.toLowerCase().includes(filterTag);
+    function matchesContext(s, filter) {
+        if (!s) return false;
+        if (!filter || filter === 'ALL' || filter.toUpperCase() === 'ALL') return true;
+        const tag = (s.contextTag || '').toLowerCase().trim();
+        if (!tag) return false;
+        const f = filter.toLowerCase().trim();
+        if (tag.includes(f)) return true;
+        if (f === 'city' && (tag.includes('town') || tag.includes('village'))) return true;
+        if (f === 'home' && (tag.includes('house') || tag.includes('playerhome') || tag.includes('inn') || tag.includes('tavern') || tag.includes('bed') || tag.includes('sleep') || tag.includes('rest'))) return true;
+        if (f === 'combat' && (tag.includes('fight') || tag.includes('war') || tag.includes('military') || tag.includes('dungeon'))) return true;
+        if (f === 'swim' && (tag.includes('water') || tag.includes('inwater') || tag.includes('in_water'))) return true;
+        return false;
+    }
+
+    if (activeWheelContextFilter && activeWheelContextFilter !== 'ALL') {
+        rawSlots.forEach((s, idx) => {
+            const realIdx = (s && s.index !== undefined) ? s.index : idx;
+            const hasOutfit = s && (s.hasOutfit === true || (s.items && s.items.length > 0) || (s.count !== undefined && s.count > 0));
+            if (matchesContext(s, activeWheelContextFilter)) {
+                if (isEdit || hasOutfit) {
+                    displaySlots.push({ ...s, realIndex: realIdx });
+                }
+            }
         });
     } else {
-        displaySlots = rawSlots.map((slot, idx) => ({ ...slot, realIndex: idx }));
+        rawSlots.forEach((s, idx) => {
+            const realIdx = (s && s.index !== undefined) ? s.index : idx;
+            const hasOutfit = s && (s.hasOutfit === true || (s.items && s.items.length > 0) || (s.count !== undefined && s.count > 0));
+            if (isEdit || hasOutfit) {
+                displaySlots.push({ ...s, realIndex: realIdx });
+            }
+        });
     }
 
     const total = displaySlots.length;
@@ -208,11 +233,33 @@ function updateWheelUI() {
         pathEl.onclick = (e) => {
             if (e && e.button === 0) {
                 if (isEditModeActive()) {
-                    selectedSlotIndex = realSlotIndex;
-                    renderSlotsRail();
-                    renderDrawerDetails();
+                    if (typeof isClassicEditMode === 'function' && isClassicEditMode()) {
+                        saveOutfit(realSlotIndex);
+                    } else {
+                        selectedSlotIndex = realSlotIndex;
+                        renderSlotsRail();
+                        renderDrawerDetails();
+                        const slotObj = (currentWheelData.slots || []).find(s => (s.index !== undefined ? s.index : 0) === realSlotIndex) || (currentWheelData.slots || [])[realSlotIndex];
+                        if (slotObj && slotObj.hasOutfit && slotObj.items && slotObj.items.length > 0) {
+                            equipOutfit(realSlotIndex, true);
+                        }
+                    }
                 } else {
-                    equipOutfit(realSlotIndex);
+                    const keepOpen = (e && e.shiftKey === true) || (typeof isShiftKeyDown !== 'undefined' && isShiftKeyDown) || (currentWheelData && currentWheelData.autoCloseOnEquip === false);
+                    equipOutfit(realSlotIndex, keepOpen);
+                }
+            }
+        };
+
+        pathEl.oncontextmenu = (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            if (isEditModeActive()) {
+                selectedSlotIndex = realSlotIndex;
+                if (typeof showSlotContextMenu === 'function') {
+                    showSlotContextMenu(e ? e.clientX : 0, e ? e.clientY : 0, realSlotIndex);
                 }
             }
         };
@@ -227,6 +274,40 @@ function updateWheelUI() {
         labelEl.style.left = (cx + lx) + 'px';
         labelEl.style.top = (cy + ly) + 'px';
         labelEl.setAttribute("data-slot-index", realSlotIndex);
+
+        labelEl.onclick = (e) => {
+            if (e && e.button === 0) {
+                if (isEditModeActive()) {
+                    if (typeof isClassicEditMode === 'function' && isClassicEditMode()) {
+                        saveOutfit(realSlotIndex);
+                    } else {
+                        selectedSlotIndex = realSlotIndex;
+                        renderSlotsRail();
+                        renderDrawerDetails();
+                        const slotObj = (currentWheelData.slots || []).find(s => (s.index !== undefined ? s.index : 0) === realSlotIndex) || (currentWheelData.slots || [])[realSlotIndex];
+                        if (slotObj && slotObj.hasOutfit && slotObj.items && slotObj.items.length > 0) {
+                            equipOutfit(realSlotIndex, true);
+                        }
+                    }
+                } else {
+                    const keepOpen = (e && e.shiftKey === true) || (typeof isShiftKeyDown !== 'undefined' && isShiftKeyDown) || (currentWheelData && currentWheelData.autoCloseOnEquip === false);
+                    equipOutfit(realSlotIndex, keepOpen);
+                }
+            }
+        };
+
+        labelEl.oncontextmenu = (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            if (isEditModeActive()) {
+                selectedSlotIndex = realSlotIndex;
+                if (typeof showSlotContextMenu === 'function') {
+                    showSlotContextMenu(e ? e.clientX : 0, e ? e.clientY : 0, realSlotIndex);
+                }
+            }
+        };
 
         if (hasOutfit) {
             const iconName = resolvePngIcon(slot);
@@ -244,16 +325,4 @@ function updateWheelUI() {
 
     svg.appendChild(svgFragment);
     labelsContainer.appendChild(labelFragment);
-}
-
-function handleCenterRightClick(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (typeof isEditModeActive === 'function' && isEditModeActive()) {
-        const clickX = (e && typeof e.clientX === 'number' && e.clientX > 0) ? e.clientX : (window.innerWidth / 2);
-        const clickY = (e && typeof e.clientY === 'number' && e.clientY > 0) ? e.clientY : (window.innerHeight / 2);
-        if (typeof showWheelContextMenu === 'function') {
-            showWheelContextMenu(clickX, clickY);
-        }
-    }
 }

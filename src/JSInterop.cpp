@@ -10,6 +10,11 @@
 #include <unordered_map>
 #include <cctype>
 #include <SKSE/SKSE.h>
+#include <RE/B/BipedAnim.h>
+#include <RE/P/PlayerInputHandler.h>
+#include <RE/P/PlayerControls.h>
+#include <RE/T/TogglePOVHandler.h>
+#include <RE/F/FirstPersonState.h>
 
 extern PRISMA_UI_API::IVPrismaUI2* PrismaUI;
 extern PrismaView view;
@@ -96,6 +101,16 @@ static void SetActorRestrainedAndDontMove(RE::Actor* a_actor, bool a_enable) {
 
 void OnDomReadyCallbackFunc(PrismaView v) {
     SKSE::log::info("OnDomReadyCallbackFunc fired for View ID: {}", v);
+    SKSE::GetTaskInterface()->AddTask([v]() {
+        if (PrismaUI && v != 0) {
+            PrismaUI->Unfocus(v);
+            PrismaUI->Hide(v);
+        }
+        auto controlMap = RE::ControlMap::GetSingleton();
+        if (controlMap) {
+            controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, true);
+        }
+    });
 }
 
 void OnConsoleMessageCallbackFunc(PrismaView v, PRISMA_UI_API::ConsoleMessageLevel level, const char* message) {
@@ -124,6 +139,66 @@ void InitializeStudioStage() {
     }
 }
 
+void SetCameraInputHandlingEnabled(bool a_enabled) {
+    auto controlMap = RE::ControlMap::GetSingleton();
+    if (controlMap) {
+        using UEFlag = RE::ControlMap::UEFlag;
+        uint32_t flags = static_cast<uint32_t>(UEFlag::kPOVSwitch) |
+                         static_cast<uint32_t>(UEFlag::kWheelZoom);
+        controlMap->ToggleControls(static_cast<UEFlag>(flags), a_enabled);
+    }
+
+    auto playerControls = RE::PlayerControls::GetSingleton();
+    if (playerControls) {
+        playerControls->blockPlayerInput = !a_enabled;
+        if (playerControls->togglePOVHandler) {
+            playerControls->togglePOVHandler->SetInputEventHandlingEnabled(a_enabled);
+        }
+    }
+
+    auto cam = RE::PlayerCamera::GetSingleton();
+    if (!cam) return;
+
+    auto& rtData = cam->GetRuntimeData();
+    auto& firstPtr = rtData.cameraStates[RE::CameraStates::kFirstPerson];
+    if (firstPtr) {
+        auto* firstState = static_cast<RE::FirstPersonState*>(firstPtr.get());
+        if (firstState) {
+            static_cast<RE::PlayerInputHandler*>(firstState)->SetInputEventHandlingEnabled(a_enabled);
+        }
+    }
+    auto& tpPtr = rtData.cameraStates[RE::CameraStates::kThirdPerson];
+    if (tpPtr) {
+        auto* tpState = static_cast<RE::ThirdPersonState*>(tpPtr.get());
+        if (tpState) {
+            static_cast<RE::PlayerInputHandler*>(tpState)->SetInputEventHandlingEnabled(a_enabled);
+        }
+    }
+    auto& mountPtr = rtData.cameraStates[RE::CameraStates::kMount];
+    if (mountPtr) {
+        auto* mountState = static_cast<RE::ThirdPersonState*>(mountPtr.get());
+        if (mountState) {
+            static_cast<RE::PlayerInputHandler*>(mountState)->SetInputEventHandlingEnabled(a_enabled);
+        }
+    }
+
+    if (cam->currentState) {
+        if (cam->currentState->id == RE::CameraState::kFirstPerson) {
+            auto* fpState = static_cast<RE::FirstPersonState*>(cam->currentState.get());
+            if (fpState) {
+                static_cast<RE::PlayerInputHandler*>(fpState)->SetInputEventHandlingEnabled(a_enabled);
+            }
+        } else if (cam->currentState->id == RE::CameraState::kThirdPerson ||
+            cam->currentState->id == RE::CameraState::kMount ||
+            cam->currentState->id == RE::CameraState::kAutoVanity) {
+            auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
+            if (tpState) {
+                static_cast<RE::PlayerInputHandler*>(tpState)->SetInputEventHandlingEnabled(a_enabled);
+            }
+        }
+    }
+}
+
 void SetupStudioCameraAndControls(bool enableStudio) {
     auto controlMap = RE::ControlMap::GetSingleton();
     if (controlMap) {
@@ -132,9 +207,12 @@ void SetupStudioCameraAndControls(bool enableStudio) {
                          static_cast<uint32_t>(UEFlag::kMovement) |
                          static_cast<uint32_t>(UEFlag::kJumping) |
                          static_cast<uint32_t>(UEFlag::kSneaking) |
-                         static_cast<uint32_t>(UEFlag::kActivate);
+                         static_cast<uint32_t>(UEFlag::kActivate) |
+                         static_cast<uint32_t>(UEFlag::kPOVSwitch) |
+                         static_cast<uint32_t>(UEFlag::kWheelZoom);
         controlMap->ToggleControls(static_cast<UEFlag>(flags), !enableStudio);
     }
+    SetCameraInputHandlingEnabled(!enableStudio);
 
     auto player = RE::PlayerCharacter::GetSingleton();
     auto cam = RE::PlayerCamera::GetSingleton();
@@ -168,6 +246,23 @@ void SetupStudioCameraAndControls(bool enableStudio) {
             }
         } else {
             RestoreStudioActors();
+            if (controlMap) {
+                controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, true);
+            }
+            if (g_hasSavedCameraState && cam->currentState) {
+                if (cam->currentState->id == RE::CameraState::kThirdPerson || cam->currentState->id == RE::CameraState::kAutoVanity) {
+                    auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
+                    if (tpState) {
+                        tpState->freeRotation.x = g_savedFreeRotationX;
+                        tpState->freeRotation.y = g_savedFreeRotationY;
+                        tpState->targetZoomOffset = g_savedZoomOffset;
+                    }
+                }
+                if (g_wasFirstPerson) {
+                    cam->ForceFirstPerson();
+                }
+                g_hasSavedCameraState = false;
+            }
         }
     }
 }
@@ -246,22 +341,7 @@ void OrbitCameraListener(const char* data) {
     } catch (...) {}
 }
 
-void ZoomCameraListener(const char* data) {
-    try {
-        json req = json::parse(data);
-        float deltaZoom = req.value("deltaZoom", 0.0f);
-
-        SKSE::GetTaskInterface()->AddTask([deltaZoom]() {
-            auto cam = RE::PlayerCamera::GetSingleton();
-            if (!cam || !cam->currentState) return;
-            if (cam->currentState->id == RE::CameraState::kThirdPerson || cam->currentState->id == RE::CameraState::kAutoVanity) {
-                auto* tpState = static_cast<RE::ThirdPersonState*>(cam->currentState.get());
-                if (tpState) {
-                    tpState->targetZoomOffset = std::clamp(tpState->targetZoomOffset + (deltaZoom * 0.08f), 0.15f, 2.5f);
-                }
-            }
-        });
-    } catch (...) {}
+void ZoomCameraListener(const char*) {
 }
 
 void PanCameraListener(const char* data) {
@@ -419,26 +499,54 @@ void SaveSettingsListener(const char* data) {
         if (req.contains("wheelScale")) g_wheelScale = req.value("wheelScale", 1.0f);
         if (req.contains("wheelOffsetX")) g_wheelOffsetX = req.value("wheelOffsetX", 0.0f);
         if (req.contains("wheelOffsetY")) g_wheelOffsetY = req.value("wheelOffsetY", 0.0f);
-        if (req.contains("editKey")) g_editKey = req.value("editKey", 0x31);
-        if (req.contains("editModifierKey")) g_editModifierKey = req.value("editModifierKey", 0x00);
-        if (req.contains("playKey")) g_playKey = req.value("playKey", 0x2F);
-        if (req.contains("playModifierKey")) g_playModifierKey = req.value("playModifierKey", 0x00);
-
-        if (req.contains("gamepadPlayKey")) g_gamepadPlayKey = req.value("gamepadPlayKey", 0x0008);
-        if (req.contains("gamepadPlayModifier")) g_gamepadPlayModifier = req.value("gamepadPlayModifier", 0x0100);
+        if (req.contains("uiScale")) g_uiScale = req.value("uiScale", 1.0f);
+        if (req.contains("editUiMode")) g_editUiMode = req.value("editUiMode", 1);
+        if (req.contains("editKey")) {
+            if (req["editKey"].is_number()) g_editKey = req["editKey"].get<uint32_t>();
+            else if (req["editKey"].is_string()) { try { g_editKey = std::stoul(req["editKey"].get<std::string>()); } catch (...) {} }
+        }
+        if (req.contains("editModifierKey")) {
+            if (req["editModifierKey"].is_number()) g_editModifierKey = req["editModifierKey"].get<uint32_t>();
+            else if (req["editModifierKey"].is_string()) { try { g_editModifierKey = std::stoul(req["editModifierKey"].get<std::string>()); } catch (...) {} }
+        }
+        if (req.contains("playKey")) {
+            if (req["playKey"].is_number()) g_playKey = req["playKey"].get<uint32_t>();
+            else if (req["playKey"].is_string()) { try { g_playKey = std::stoul(req["playKey"].get<std::string>()); } catch (...) {} }
+        }
+        if (req.contains("playModifierKey")) {
+            if (req["playModifierKey"].is_number()) g_playModifierKey = req["playModifierKey"].get<uint32_t>();
+            else if (req["playModifierKey"].is_string()) { try { g_playModifierKey = std::stoul(req["playModifierKey"].get<std::string>()); } catch (...) {} }
+        }
+        if (req.contains("gamepadPlayKey")) {
+            if (req["gamepadPlayKey"].is_number()) g_gamepadPlayKey = req["gamepadPlayKey"].get<uint32_t>();
+            else if (req["gamepadPlayKey"].is_string()) { try { g_gamepadPlayKey = std::stoul(req["gamepadPlayKey"].get<std::string>()); } catch (...) {} }
+        }
+        if (req.contains("gamepadPlayModifier")) {
+            if (req["gamepadPlayModifier"].is_number()) g_gamepadPlayModifier = req["gamepadPlayModifier"].get<uint32_t>();
+            else if (req["gamepadPlayModifier"].is_string()) { try { g_gamepadPlayModifier = std::stoul(req["gamepadPlayModifier"].get<std::string>()); } catch (...) {} }
+        }
         if (req.contains("thumbstickDeadzone")) g_thumbstickDeadzone = req.value("thumbstickDeadzone", 0.25f);
 
         if (req.contains("autoCloseOnEquip")) g_autoCloseOnEquip = req.value("autoCloseOnEquip", true);
         if (req.contains("autoStashEnabled")) g_autoStashEnabled = req.value("autoStashEnabled", false);
-        if (req.contains("autoSystemEnabled")) g_autoSystemEnabled = req.value("autoSystemEnabled", true);
+        if (req.contains("autoSystemEnabled")) g_autoSystemEnabled = req.value("autoSystemEnabled", false);
         if (req.contains("autoCityEnabled")) g_autoCityEnabled = req.value("autoCityEnabled", true);
         if (req.contains("autoHomeEnabled")) g_autoHomeEnabled = req.value("autoHomeEnabled", true);
         if (req.contains("autoCombatEnabled")) g_autoCombatEnabled = req.value("autoCombatEnabled", true);
         if (req.contains("autoSwimEnabled")) g_autoSwimEnabled = req.value("autoSwimEnabled", true);
 
         SaveINI();
+        SaveDataInternal();
 
         SKSE::GetTaskInterface()->AddTask([editMode]() {
+            if (editMode) {
+                if (g_editUiMode == 0) {
+                    SetupStudioCameraAndControls(false);
+                } else {
+                    InitializeStudioStage();
+                    SetupStudioCameraAndControls(true);
+                }
+            }
             if (PrismaUI && view != 0) {
                 std::string jsCmd = GetWheelJson(editMode);
                 PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
@@ -451,15 +559,30 @@ void SaveSettingsListener(const char* data) {
 void SetTypingModeListener(const char* data) {
     try {
         json req = json::parse(data);
-        g_isTyping.store(req.value("typing", false), std::memory_order_release);
+        bool typing = req.value("typing", false);
+        g_isTyping.store(typing, std::memory_order_release);
+        SKSE::GetTaskInterface()->AddTask([typing]() {
+            auto controlMap = RE::ControlMap::GetSingleton();
+            if (controlMap) {
+                controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, !typing);
+            }
+        });
     } catch (...) {}
 }
 
 void SaveOutfitListener(const char* data) {
     try {
         json req = json::parse(data);
-        size_t wheelIdx = req.value("wheelIndex", 0);
-        size_t slotIdx = req.value("slotIndex", 0);
+        size_t wheelIdx = 0;
+        if (req.contains("wheelIndex")) {
+            if (req["wheelIndex"].is_number()) wheelIdx = req["wheelIndex"].get<size_t>();
+            else if (req["wheelIndex"].is_string()) { try { wheelIdx = std::stoull(req["wheelIndex"].get<std::string>()); } catch (...) {} }
+        }
+        size_t slotIdx = 0;
+        if (req.contains("slotIndex")) {
+            if (req["slotIndex"].is_number()) slotIdx = req["slotIndex"].get<size_t>();
+            else if (req["slotIndex"].is_string()) { try { slotIdx = std::stoull(req["slotIndex"].get<std::string>()); } catch (...) {} }
+        }
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx]() {
             SaveOutfitToSlotImpl(wheelIdx, slotIdx);
@@ -478,35 +601,53 @@ void SaveOutfitToSlotListener(const char* data) {
 void RenameSlotListener(const char* data) {
     try {
         json req = json::parse(data);
-        size_t wheelIdx = req.value("wheelIndex", 0);
-        size_t slotIdx = req.value("slotIndex", 0);
+        size_t wheelIdx = 0;
+        if (req.contains("wheelIndex")) {
+            if (req["wheelIndex"].is_number()) wheelIdx = req["wheelIndex"].get<size_t>();
+            else if (req["wheelIndex"].is_string()) { try { wheelIdx = std::stoull(req["wheelIndex"].get<std::string>()); } catch (...) {} }
+        }
+        size_t slotIdx = 0;
+        if (req.contains("slotIndex")) {
+            if (req["slotIndex"].is_number()) slotIdx = req["slotIndex"].get<size_t>();
+            else if (req["slotIndex"].is_string()) { try { slotIdx = std::stoull(req["slotIndex"].get<std::string>()); } catch (...) {} }
+        }
         std::string newName = req.value("newName", "");
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, newName]() {
             std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
             auto& wheels = g_manager.GetActiveWheels();
-            if (wheelIdx < wheels.size() && slotIdx < wheels[wheelIdx].slots.size()) {
-                if (wheels[wheelIdx].slots[slotIdx].outfit.has_value()) {
-                    if (!newName.empty()) {
-                        wheels[wheelIdx].slots[slotIdx].outfit->name = newName;
-                    }
-                } else {
-                    Outfit o;
-                    o.name = newName.empty() ? ("Outfit " + std::to_string(slotIdx + 1)) : newName;
-                    o.contextTag = "";
-                    o.preferenceStars = 3;
-                    o.controlState = ControlState::Normal;
-                    o.isAddon = false;
-                    wheels[wheelIdx].slots[slotIdx].outfit = o;
-                }
+            if (wheels.empty()) {
+                Wheel defaultWheel;
+                defaultWheel.name = "Wheel 1";
+                wheels.push_back(defaultWheel);
+            }
+            size_t wIdx = wheelIdx;
+            if (wIdx >= wheels.size()) wIdx = 0;
+            while (wheels[wIdx].slots.size() <= slotIdx) {
+                Slot s;
+                wheels[wIdx].slots.push_back(s);
+            }
 
-                SaveDataInternal();
-                RE::DebugNotification(("Renamed outfit to " + newName).c_str());
-
-                if (PrismaUI && view != 0) {
-                    std::string jsCmd = GetWheelJsonInternal(true);
-                    PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            if (wheels[wIdx].slots[slotIdx].outfit.has_value()) {
+                if (!newName.empty()) {
+                    wheels[wIdx].slots[slotIdx].outfit->name = newName;
                 }
+            } else {
+                Outfit o;
+                o.name = newName.empty() ? ("Outfit " + std::to_string(slotIdx + 1)) : newName;
+                o.contextTag = "";
+                o.preferenceStars = 3;
+                o.controlState = ControlState::Normal;
+                o.isAddon = false;
+                wheels[wIdx].slots[slotIdx].outfit = o;
+            }
+
+            SaveDataInternal();
+            RE::DebugNotification(("Renamed outfit to " + newName).c_str());
+
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
             }
         });
     } catch (...) {}
@@ -515,7 +656,11 @@ void RenameSlotListener(const char* data) {
 void RenameWheelListener(const char* data) {
     try {
         json req = json::parse(data);
-        size_t wheelIdx = req.value("wheelIndex", 0);
+        size_t wheelIdx = 0;
+        if (req.contains("wheelIndex")) {
+            if (req["wheelIndex"].is_number()) wheelIdx = req["wheelIndex"].get<size_t>();
+            else if (req["wheelIndex"].is_string()) { try { wheelIdx = std::stoull(req["wheelIndex"].get<std::string>()); } catch (...) {} }
+        }
         std::string newName = req.value("newName", "");
 
         SKSE::GetTaskInterface()->AddTask([wheelIdx, newName]() {
@@ -607,6 +752,9 @@ void EquipSlotListener(const char* data) {
         bool editMode = req.value("editMode", false);
         bool keepOpen = req.value("keepOpen", false);
 
+        bool shiftHeld = ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) || ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0) || ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0);
+        if (shiftHeld) keepOpen = true;
+
         SKSE::GetTaskInterface()->AddTask([wheelIdx, slotIdx, editMode, keepOpen]() {
             EquipSlotImpl(wheelIdx, slotIdx);
 
@@ -691,19 +839,27 @@ void AddWheelListener(const char* data) {
 
 void AddSlotListener(const char* data) {
     bool editMode = true;
+    std::string initialContextTag = "";
     try {
         if (data && data[0] != 0) {
             json req = json::parse(data);
             editMode = req.value("editMode", true);
+            initialContextTag = req.value("contextTag", "");
         }
     } catch (...) {}
 
-    SKSE::GetTaskInterface()->AddTask([editMode]() {
+    SKSE::GetTaskInterface()->AddTask([editMode, initialContextTag]() {
         std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
         auto& wheels = g_manager.GetActiveWheels();
         size_t activeIdx = g_manager.GetActiveWheelIndex();
         if (!wheels.empty() && activeIdx < wheels.size()) {
             Slot s;
+            if (!initialContextTag.empty() && initialContextTag != "ALL") {
+                Outfit o;
+                o.name = "Outfit " + std::to_string(wheels[activeIdx].slots.size() + 1);
+                o.contextTag = initialContextTag;
+                s.outfit = o;
+            }
             wheels[activeIdx].slots.push_back(s);
             SaveDataInternal();
 
@@ -891,54 +1047,91 @@ void ToggleItemEquipListener(const char* data) {
                         }
                     }
                 }
+                if (!isWorn && entryData && entryData->IsWorn()) {
+                    isWorn = true;
+                }
+                if (!isWorn) {
+                    if (const auto& biped = targetActor->GetCurrentBiped()) {
+                        for (size_t i = 0; i < 42; ++i) {
+                            if (biped->objects[i].item && biped->objects[i].item->GetFormID() == bound->GetFormID()) {
+                                isWorn = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!isWorn) {
+                        if (const auto& biped2 = targetActor->GetActorRuntimeData().biped) {
+                            for (size_t i = 0; i < 42; ++i) {
+                                if (biped2->objects[i].item && biped2->objects[i].item->GetFormID() == bound->GetFormID()) {
+                                    isWorn = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (isWorn) {
                     equipManager->UnequipObject(targetActor, bound, targetExtra, 1, nullptr, false, false, true, true);
                     RE::DebugNotification(("Unequipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
                 } else {
-                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
+                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
                     RE::DebugNotification(("Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
                 }
             } else {
-                auto* wardrobe = GetWardrobeContainer();
-                bool transferred = false;
-
-                if (wardrobe) {
-                    auto wInv = wardrobe->GetInventory();
-                    auto wIt = wInv.find(bound);
-                    if (wIt != wInv.end() && wIt->second.first > 0) {
-                        wardrobe->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
-                        equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
-                        RE::DebugNotification(("Transferred from Wardrobe Chest & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
-                        transferred = true;
+                bool isAlreadyWorn = false;
+                if (const auto& biped = targetActor->GetCurrentBiped()) {
+                    for (size_t i = 0; i < 42; ++i) {
+                        if (biped->objects[i].item && biped->objects[i].item->GetFormID() == bound->GetFormID()) {
+                            isAlreadyWorn = true;
+                            break;
+                        }
                     }
                 }
+                if (isAlreadyWorn) {
+                    equipManager->UnequipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
+                    RE::DebugNotification(("Unequipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                } else {
+                    auto* wardrobe = GetWardrobeContainer();
+                    bool transferred = false;
 
-                if (!transferred && targetActor != player && player) {
-                    auto pInv = player->GetInventory();
-                    auto pIt = pInv.find(bound);
-                    if (pIt != pInv.end() && pIt->second.first > 0) {
-                        player->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
-                        equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
-                        RE::DebugNotification(("Transferred from Player & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
-                        transferred = true;
+                    if (wardrobe) {
+                        auto wInv = wardrobe->GetInventory();
+                        auto wIt = wInv.find(bound);
+                        if (wIt != wInv.end() && wIt->second.first > 0) {
+                            wardrobe->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
+                            equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
+                            RE::DebugNotification(("Transferred from Wardrobe Chest & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                            transferred = true;
+                        }
                     }
-                }
 
-                if (!transferred) {
-                    auto processLists = RE::ProcessLists::GetSingleton();
-                    if (processLists) {
-                        for (auto& handle : processLists->highActorHandles) {
-                            auto otherActor = handle.get();
-                            if (otherActor && otherActor.get() != targetActor && otherActor->IsPlayerTeammate() && !otherActor->IsDead()) {
-                                auto oInv = otherActor->GetInventory();
-                                auto oIt = oInv.find(bound);
-                                if (oIt != oInv.end() && oIt->second.first > 0) {
-                                    otherActor->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
-                                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, true, true, true);
-                                    RE::DebugNotification(("Transferred & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
-                                    transferred = true;
-                                    break;
+                    if (!transferred && targetActor != player && player) {
+                        auto pInv = player->GetInventory();
+                        auto pIt = pInv.find(bound);
+                        if (pIt != pInv.end() && pIt->second.first > 0) {
+                            player->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
+                            equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
+                            RE::DebugNotification(("Transferred from Player & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                            transferred = true;
+                        }
+                    }
+
+                    if (!transferred) {
+                        auto processLists = RE::ProcessLists::GetSingleton();
+                        if (processLists) {
+                            for (auto& handle : processLists->highActorHandles) {
+                                auto otherActor = handle.get();
+                                if (otherActor && otherActor.get() != targetActor && otherActor->IsPlayerTeammate() && !otherActor->IsDead()) {
+                                    auto oInv = otherActor->GetInventory();
+                                    auto oIt = oInv.find(bound);
+                                    if (oIt != oInv.end() && oIt->second.first > 0) {
+                                        otherActor->RemoveItem(bound, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, targetActor);
+                                        equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
+                                        RE::DebugNotification(("Transferred & Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
+                                        transferred = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
