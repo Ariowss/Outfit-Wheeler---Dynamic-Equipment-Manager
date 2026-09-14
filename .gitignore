@@ -8,7 +8,10 @@
 # folders
 build/
 vs*/
+lib/
 
 # files
 *.zip
 compile_commands.json
+inventory_cas_demo.html
+scratch_demo_data.json
