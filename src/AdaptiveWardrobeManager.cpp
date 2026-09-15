@@ -156,7 +156,7 @@ std::optional<SelectionResult> AdaptiveWardrobeManager::SelectOptimalOutfit(RE::
         data.isManualOverride = false;
     }
 
-    if (!isEmergency && !data.currentOutfitID.empty()) {
+    if (!data.currentOutfitID.empty()) {
         for (const auto& outfit : data.wardrobe) {
             if (outfit.id == data.currentOutfitID && outfit.controlState != ControlState::Excluded && outfit.preferenceStars > 0) {
                 for (const auto& rule : outfit.suitabilities) {

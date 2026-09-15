@@ -13,7 +13,10 @@
 #include "OutfitManager.h"
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "ExecutionQueue.h"
 #include "Settings.h"
+#include "thumbnail/ItemThumbnailService.h"
+#include "thumbnail/ThumbnailDiskCache.h"
 #include <windows.h>
 #include <xinput.h>
 #include <filesystem>
@@ -32,6 +35,7 @@ std::recursive_mutex g_dataMutex;
 static const std::string g_savePath = "Data/SKSE/Plugins/PrismaOutfitWheel.json";
 static const std::string g_fallbackSavePath1 = "Data/SKSE/Plugins/OutfitWheeler.json";
 static const std::string g_fallbackSavePath2 = "Data/SKSE/Plugins/Wheeler.json";
+static const std::string g_fallbackSavePath3 = "Data/SKSE/Plugins/PrismaOutfitWheeler.json";
 
 static std::string ToLowerString(std::string str) {
     std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
@@ -236,7 +240,17 @@ static json SerializeFormID(RE::FormID formID) {
 }
 
 static json SerializeOutfitItem(const OutfitItem& itm) {
-    json j = SerializeFormID(itm.formID);
+    json j;
+    if (itm.formID != 0) {
+        j = SerializeFormID(itm.formID);
+    } else {
+        std::string pName = !itm.pluginName.empty() ? itm.pluginName : "Skyrim.esm";
+        j = json{
+            {"plugin", pName},
+            {"localID", FormatFormID(itm.localFormID)},
+            {"rawID", 0}
+        };
+    }
     j["uniqueID"] = itm.uniqueID;
     j["enchantmentID"] = static_cast<uint32_t>(itm.enchantmentID);
     std::string safeName = (itm.customName == "Apparel") ? "" : itm.customName;
@@ -310,6 +324,22 @@ static OutfitItem DeserializeOutfitItem(const json& jItem) {
         if (itm.customName == "Apparel") {
             itm.customName = "";
         }
+        itm.pluginName = jItem.value("plugin", "");
+        if (jItem.contains("localID")) {
+            if (jItem.at("localID").is_number_unsigned() || jItem.at("localID").is_number_integer()) {
+                itm.localFormID = jItem.at("localID").get<uint32_t>();
+            } else if (jItem.at("localID").is_string()) {
+                std::string s = jItem.at("localID").get<std::string>();
+                if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
+                    s = s.substr(2);
+                }
+                try {
+                    itm.localFormID = static_cast<uint32_t>(std::stoul(s, nullptr, 16));
+                } catch (...) {
+                    itm.localFormID = 0;
+                }
+            }
+        }
     }
     return itm;
 }
@@ -325,7 +355,7 @@ static json SerializeProfile(const ActorWheelProfile& prof) {
         for (const auto& slot : wheel.slots) {
             json sJson;
             if (slot.outfit.has_value()) {
-                sJson["hasOutfit"] = (!slot.outfit->items.empty() || !slot.outfit->itemIDs.empty());
+                sJson["hasOutfit"] = (!slot.outfit->items.empty() || !slot.outfit->itemIDs.empty() || !slot.outfit->name.empty());
                 sJson["name"] = SanitizeUtf8(slot.outfit->name);
                 sJson["contextTag"] = SanitizeUtf8(slot.outfit->contextTag);
                 sJson["preferenceStars"] = slot.outfit->preferenceStars;
@@ -402,9 +432,11 @@ static ActorWheelProfile DeserializeProfile(const json& profJson) {
                         if (hasItems) {
                             for (const auto& jItem : sJson["items"]) {
                                 OutfitItem resolvedItm = DeserializeOutfitItem(jItem);
-                                if (resolvedItm.formID != 0) {
+                                if (resolvedItm.formID != 0 || !resolvedItm.pluginName.empty() || resolvedItm.localFormID != 0) {
                                     o.items.push_back(resolvedItm);
-                                    o.itemIDs.push_back(resolvedItm.formID);
+                                    if (resolvedItm.formID != 0) {
+                                        o.itemIDs.push_back(resolvedItm.formID);
+                                    }
                                 }
                             }
                         }
@@ -489,6 +521,13 @@ void SaveDataInternal() {
         root["settings"] = settingsJson;
 
         std::filesystem::create_directories("Data/SKSE/Plugins");
+
+        if (std::filesystem::exists(g_savePath)) {
+            std::string bakPath = g_savePath + ".bak";
+            std::error_code ecBak;
+            std::filesystem::copy_file(g_savePath, bakPath, std::filesystem::copy_options::overwrite_existing, ecBak);
+        }
+
         std::string tmpPath = g_savePath + ".tmp";
         {
             std::ofstream file(tmpPath);
@@ -516,6 +555,10 @@ void LoadData() {
             targetPath = g_fallbackSavePath1;
         } else if (std::filesystem::exists(g_fallbackSavePath2)) {
             targetPath = g_fallbackSavePath2;
+        } else if (std::filesystem::exists(g_fallbackSavePath3)) {
+            targetPath = g_fallbackSavePath3;
+        } else if (std::filesystem::exists(g_savePath + ".bak")) {
+            targetPath = g_savePath + ".bak";
         } else {
             return;
         }
@@ -586,7 +629,204 @@ void LoadData() {
 
         g_manager.GetProfile(0x00000007);
         SyncWheelOutfitsToAdaptiveWardrobe();
+        if (g_gameFullyLoaded.load(std::memory_order_acquire)) {
+            QueueAllLoadedItemThumbnails();
+        }
     } catch (...) {}
+}
+
+void QueueAllLoadedItemThumbnails() {
+    std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+    auto* dataHandler = RE::TESDataHandler::GetSingleton();
+    if (!dataHandler) return;
+
+    auto& thumbnailService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
+    size_t count = 0;
+    for (const auto& [actorID, profile] : g_manager.actorProfiles) {
+        for (const auto& wheel : profile.wheels) {
+            for (const auto& slot : wheel.slots) {
+                if (slot.outfit.has_value()) {
+                    for (const auto& item : slot.outfit->items) {
+                        if (item.formID != 0) {
+                            auto* form = RE::TESForm::LookupByID(item.formID);
+                            if (form && IsPureApparel(form)) {
+                                if (auto* bound = form->As<RE::TESBoundObject>()) {
+                                    thumbnailService.QueueItem(bound, true);
+                                    count++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (count > 0) {
+        logger::info("[Thumbnail] Queued {} outfit apparel items for 3D thumbnail background generation", count);
+    }
+}
+
+void QueuePlayerInventoryThumbnails() {
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player) return;
+
+    auto inv = player->GetInventory();
+    auto& thumbnailService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
+    std::vector<RE::TESBoundObject*> wornItems;
+    std::vector<RE::TESBoundObject*> otherItems;
+    for (const auto& [item, data] : inv) {
+        if (!item || data.first <= 0) continue;
+        if (!IsPureApparel(item)) continue;
+        auto* bound = item->As<RE::TESBoundObject>();
+        if (!bound) continue;
+        bool isWorn = data.second && data.second->IsWorn();
+        if (isWorn) {
+            wornItems.push_back(bound);
+        } else {
+            otherItems.push_back(bound);
+        }
+    }
+    if (!wornItems.empty()) {
+        thumbnailService.QueueItems(wornItems, true);
+    }
+    if (!otherItems.empty()) {
+        thumbnailService.QueueItems(otherItems, false);
+    }
+    if (!wornItems.empty() || !otherItems.empty()) {
+        logger::info("[Thumbnail] Queued {} worn and {} inventory apparel items for generation", wornItems.size(), otherItems.size());
+    }
+}
+
+void QueueWardrobeInventoryThumbnails() {
+    auto* wardrobe = GetWardrobeContainer();
+    if (!wardrobe) return;
+
+    auto inv = wardrobe->GetInventory();
+    auto& thumbnailService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
+    std::vector<RE::TESBoundObject*> items;
+    items.reserve(inv.size());
+    for (const auto& [item, data] : inv) {
+        if (!item || data.first <= 0) continue;
+        if (!IsPureApparel(item)) continue;
+        auto* bound = item->As<RE::TESBoundObject>();
+        if (!bound) continue;
+        items.push_back(bound);
+    }
+    if (!items.empty()) {
+        thumbnailService.QueueItems(items, false);
+        logger::info("[Thumbnail] Queued {} wardrobe chest apparel items for background generation", items.size());
+    }
+}
+
+void QueueFollowerInventoryThumbnails() {
+    auto* processLists = RE::ProcessLists::GetSingleton();
+    if (!processLists) return;
+
+    auto& thumbnailService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
+    std::vector<RE::TESBoundObject*> items;
+    for (auto handle : processLists->highActorHandles) {
+        auto actorPtr = handle.get();
+        if (!actorPtr) continue;
+        auto* actor = actorPtr.get();
+        if (!actor || !actor->IsPlayerTeammate()) continue;
+        auto inv = actor->GetInventory();
+        for (const auto& [item, data] : inv) {
+            if (!item || data.first <= 0) continue;
+            if (!IsPureApparel(item)) continue;
+            auto* bound = item->As<RE::TESBoundObject>();
+            if (!bound) continue;
+            items.push_back(bound);
+        }
+    }
+    if (!items.empty()) {
+        thumbnailService.QueueItems(items, false);
+        logger::info("[Thumbnail] Queued {} follower apparel items for background generation", items.size());
+    }
+}
+
+std::string ExportConfigToString() {
+    try {
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        json root;
+        root["activeTargetActorID"] = static_cast<uint32_t>(g_manager.activeTargetActorID);
+        root["wardrobeContainerFormID"] = 0;
+
+        json actorsJson = json::object();
+        for (const auto& [actorID, profile] : g_manager.actorProfiles) {
+            json actorNode;
+            actorNode["profile"] = SerializeProfile(profile);
+            actorNode["formMeta"] = SerializeFormID(actorID);
+            actorsJson[FormatFormID(actorID)] = actorNode;
+        }
+        root["actors"] = actorsJson;
+
+        json settingsJson;
+        settingsJson["editKey"] = g_editKey;
+        settingsJson["editModifierKey"] = g_editModifierKey;
+        settingsJson["playKey"] = g_playKey;
+        settingsJson["playModifierKey"] = g_playModifierKey;
+        settingsJson["gamepadPlayKey"] = g_gamepadPlayKey;
+        settingsJson["gamepadPlayModifier"] = g_gamepadPlayModifier;
+        settingsJson["thumbstickDeadzone"] = g_thumbstickDeadzone;
+        settingsJson["wheelScale"] = g_wheelScale;
+        settingsJson["wheelOffsetX"] = g_wheelOffsetX;
+        settingsJson["wheelOffsetY"] = g_wheelOffsetY;
+        settingsJson["uiScale"] = g_uiScale;
+        settingsJson["editUiMode"] = g_editUiMode;
+        settingsJson["autoCloseOnEquip"] = g_autoCloseOnEquip.load(std::memory_order_relaxed);
+        settingsJson["autoStashEnabled"] = g_autoStashEnabled.load(std::memory_order_relaxed);
+        settingsJson["autoSystemEnabled"] = g_autoSystemEnabled.load(std::memory_order_relaxed);
+        settingsJson["autoCityEnabled"] = g_autoCityEnabled.load(std::memory_order_relaxed);
+        settingsJson["autoHomeEnabled"] = g_autoHomeEnabled.load(std::memory_order_relaxed);
+        settingsJson["autoCombatEnabled"] = g_autoCombatEnabled.load(std::memory_order_relaxed);
+        settingsJson["autoSwimEnabled"] = g_autoSwimEnabled.load(std::memory_order_relaxed);
+        root["settings"] = settingsJson;
+
+        return root.dump(2, ' ', false, json::error_handler_t::replace);
+    } catch (...) {
+        return "{}";
+    }
+}
+
+bool ImportConfigFromString(const std::string& jsonStr) {
+    if (jsonStr.empty()) return false;
+    try {
+        json root = json::parse(jsonStr, nullptr, false);
+        if (root.is_discarded()) return false;
+
+        std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+        if (root.contains("actors") && root["actors"].is_object()) {
+            g_manager.actorProfiles.clear();
+            for (auto& [keyStr, actorDataJson] : root["actors"].items()) {
+                RE::FormID aID = 0x00000007;
+
+                if (actorDataJson.is_object() && actorDataJson.contains("formMeta")) {
+                    RE::FormID resolvedActor = DeserializeFormID(actorDataJson["formMeta"]);
+                    if (resolvedActor != 0) aID = resolvedActor;
+                }
+
+                if (aID == 0x00000007 && (keyStr.rfind("0x", 0) == 0 || keyStr.rfind("0X", 0) == 0)) {
+                    try {
+                        aID = static_cast<RE::FormID>(std::stoul(keyStr.substr(2), nullptr, 16));
+                    } catch (...) { aID = 0x00000007; }
+                }
+
+                if (actorDataJson.is_object() && actorDataJson.contains("profile")) {
+                    g_manager.actorProfiles[aID] = DeserializeProfile(actorDataJson["profile"]);
+                } else {
+                    g_manager.actorProfiles[aID] = DeserializeProfile(actorDataJson);
+                }
+            }
+        } else if (root.contains("wheels")) {
+            g_manager.actorProfiles.clear();
+            g_manager.actorProfiles[0x00000007] = DeserializeProfile(root);
+        }
+
+        SaveDataInternal();
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 static bool CheckGamepadConnected() {
@@ -737,6 +977,19 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
         auto* armor = item->As<RE::TESObjectARMO>();
         if (!armor) continue;
 
+        std::string thumbPath = "";
+        std::string bMod = "Skyrim.esm";
+        if (auto* bound = item->As<RE::TESBoundObject>()) {
+            auto* bFile = bound->GetFile(0);
+            if (bFile && !bFile->GetFilename().empty()) {
+                bMod = bFile->GetFilename();
+            }
+            uint32_t bLoc = bound->GetLocalFormID();
+            if (OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().HasThumbnail(bMod, bLoc)) {
+                thumbPath = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().GetRelativePath(bMod, bLoc);
+            }
+        }
+
         std::string typeStr = GetApparelTypeString(armor);
         std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
         std::string armorClassStr = armor->IsHeavyArmor() ? "Heavy" : (armor->IsLightArmor() ? "Light" : "Clothing");
@@ -756,16 +1009,13 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                 }
             }
             bool assignedWorn = false;
+            int xListCount = 0;
             for (auto* xList : *entryData->extraLists) {
                 if (!xList) continue;
+                xListCount++;
 
-                std::string displayName = item->GetName() ? item->GetName() : "Apparel";
-                std::string customName = "";
-                auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
-                if (xName && xName->displayName.c_str()) {
-                    customName = xName->displayName.c_str();
-                    displayName = customName;
-                }
+                std::string displayName = GetTrueItemDisplayName(xList, armor);
+                std::string customName = GetTrueItemCustomName(xList);
 
                 uint16_t uniqueID = 0;
                 auto* xUID = xList->GetByType<RE::ExtraUniqueID>();
@@ -778,14 +1028,10 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                 else if (armor->IsLightArmor()) tags.push_back("light");
                 else if (armor->IsClothing()) tags.push_back("clothing");
 
-                auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
-                if (xEnch && xEnch->enchantment) {
-                    enchantmentID = xEnch->enchantment->GetFormID();
-                    enchName = SanitizeUtf8(xEnch->enchantment->GetName() ? xEnch->enchantment->GetName() : "Enchanted");
-                    tags.push_back("enchanted");
-                } else if (armor->formEnchanting) {
-                    enchantmentID = armor->formEnchanting->GetFormID();
-                    enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                auto* ench = GetTrueItemEnchantment(xList, armor);
+                if (ench) {
+                    enchantmentID = ench->GetFormID();
+                    enchName = SanitizeUtf8(ench->GetName() ? ench->GetName() : "Enchanted");
                     tags.push_back("enchanted");
                 }
 
@@ -813,7 +1059,48 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     {"tags", tags},
                     {"equipped", isWorn},
                     {"count", 1},
-                    {"source", sourceTag}
+                    {"source", sourceTag},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
+                });
+            }
+
+            int plainCount = data.first - xListCount;
+            if (plainCount > 0) {
+                std::string rawName = item->GetName() ? item->GetName() : "Apparel";
+                std::string enchName = "";
+                std::vector<std::string> tags;
+                if (armor->IsHeavyArmor()) tags.push_back("heavy");
+                else if (armor->IsLightArmor()) tags.push_back("light");
+                else if (armor->IsClothing()) tags.push_back("clothing");
+                RE::FormID baseEnchID = 0;
+                if (armor->formEnchanting) {
+                    baseEnchID = armor->formEnchanting->GetFormID();
+                    enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                    tags.push_back("enchanted");
+                }
+
+                arr.push_back(json{
+                    {"id", FormatFormID(item->GetFormID())},
+                    {"rawID", static_cast<uint32_t>(item->GetFormID())},
+                    {"uniqueID", 0},
+                    {"enchantmentID", static_cast<uint32_t>(baseEnchID)},
+                    {"customName", ""},
+                    {"name", SanitizeUtf8(rawName)},
+                    {"category", catStr},
+                    {"type", typeStr},
+                    {"armorClass", armorClassStr},
+                    {"damage", 0},
+                    {"armor", static_cast<int>(armRating)},
+                    {"weight", wt},
+                    {"value", val},
+                    {"enchantment", enchName},
+                    {"tags", tags},
+                    {"equipped", false},
+                    {"count", plainCount},
+                    {"source", sourceTag},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
                 });
             }
         } else {
@@ -850,7 +1137,9 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     {"tags", tags},
                     {"equipped", true},
                     {"count", 1},
-                    {"source", sourceTag}
+                    {"source", sourceTag},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
                 });
                 arr.push_back(json{
                     {"id", FormatFormID(item->GetFormID())},
@@ -870,7 +1159,9 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     {"tags", tags},
                     {"equipped", false},
                     {"count", data.first - 1},
-                    {"source", sourceTag}
+                    {"source", sourceTag},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
                 });
             } else {
                 arr.push_back(json{
@@ -891,7 +1182,9 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     {"tags", tags},
                     {"equipped", isWorn},
                     {"count", data.first},
-                    {"source", sourceTag}
+                    {"source", sourceTag},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
                 });
             }
         }
@@ -902,6 +1195,20 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
             if (f && IsPureApparel(f)) {
                 auto* armor = f->As<RE::TESObjectARMO>();
                 if (!armor) continue;
+                std::string thumbPath = "";
+                std::string bMod = "Skyrim.esm";
+                if (auto* bound = f->As<RE::TESBoundObject>()) {
+                    auto* bFile = bound->GetFile(0);
+                    if (bFile && !bFile->GetFilename().empty()) {
+                        bMod = bFile->GetFilename();
+                    }
+                    uint32_t bLoc = bound->GetLocalFormID();
+                    if (OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().HasThumbnail(bMod, bLoc)) {
+                        thumbPath = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().GetRelativePath(bMod, bLoc);
+                    } else {
+                        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound, false);
+                    }
+                }
                 std::string typeStr = GetApparelTypeString(armor);
                 std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
                 std::string armorClassStr = armor->IsHeavyArmor() ? "Heavy" : (armor->IsLightArmor() ? "Light" : "Clothing");
@@ -938,7 +1245,9 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     {"tags", tags},
                     {"equipped", true},
                     {"count", 1},
-                    {"source", sourceTag}
+                    {"source", sourceTag},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
                 });
                 addedItemFormIDs.insert(fID);
             }
@@ -960,6 +1269,19 @@ static json GetCloudWardrobeInventoryJson() {
         auto* armor = item->As<RE::TESObjectARMO>();
         if (!armor) continue;
 
+        std::string thumbPath = "";
+        std::string bMod = "Skyrim.esm";
+        if (auto* bound = item->As<RE::TESBoundObject>()) {
+            auto* bFile = bound->GetFile(0);
+            if (bFile && !bFile->GetFilename().empty()) {
+                bMod = bFile->GetFilename();
+            }
+            uint32_t bLoc = bound->GetLocalFormID();
+            if (OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().HasThumbnail(bMod, bLoc)) {
+                thumbPath = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().GetRelativePath(bMod, bLoc);
+            }
+        }
+
         std::string typeStr = GetApparelTypeString(armor);
         std::string catStr = (typeStr == "Ring" || typeStr == "Amulet") ? "JEWELRY" : "ARMORS";
         std::string armorClassStr = armor->IsHeavyArmor() ? "Heavy" : (armor->IsLightArmor() ? "Light" : "Clothing");
@@ -970,16 +1292,13 @@ static json GetCloudWardrobeInventoryJson() {
 
         auto* entryData = data.second.get();
         if (entryData && entryData->extraLists && !entryData->extraLists->empty()) {
+            int xListCount = 0;
             for (auto* xList : *entryData->extraLists) {
                 if (!xList) continue;
+                xListCount++;
 
-                std::string displayName = item->GetName() ? item->GetName() : "Apparel";
-                std::string customName = "";
-                auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
-                if (xName && xName->displayName.c_str()) {
-                    customName = xName->displayName.c_str();
-                    displayName = customName;
-                }
+                std::string displayName = GetTrueItemDisplayName(xList, armor);
+                std::string customName = GetTrueItemCustomName(xList);
 
                 uint16_t uniqueID = 0;
                 auto* xUID = xList->GetByType<RE::ExtraUniqueID>();
@@ -992,14 +1311,10 @@ static json GetCloudWardrobeInventoryJson() {
                 else if (armor->IsLightArmor()) tags.push_back("light");
                 else if (armor->IsClothing()) tags.push_back("clothing");
 
-                auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
-                if (xEnch && xEnch->enchantment) {
-                    enchantmentID = xEnch->enchantment->GetFormID();
-                    enchName = SanitizeUtf8(xEnch->enchantment->GetName() ? xEnch->enchantment->GetName() : "Enchanted");
-                    tags.push_back("enchanted");
-                } else if (armor->formEnchanting) {
-                    enchantmentID = armor->formEnchanting->GetFormID();
-                    enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                auto* ench = GetTrueItemEnchantment(xList, armor);
+                if (ench) {
+                    enchantmentID = ench->GetFormID();
+                    enchName = SanitizeUtf8(ench->GetName() ? ench->GetName() : "Enchanted");
                     tags.push_back("enchanted");
                 }
 
@@ -1021,7 +1336,48 @@ static json GetCloudWardrobeInventoryJson() {
                     {"tags", tags},
                     {"equipped", false},
                     {"count", 1},
-                    {"source", "CLOUD"}
+                    {"source", "CLOUD"},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
+                });
+            }
+
+            int plainCount = data.first - xListCount;
+            if (plainCount > 0) {
+                std::string rawName = item->GetName() ? item->GetName() : "Apparel";
+                std::string enchName = "";
+                std::vector<std::string> tags;
+                if (armor->IsHeavyArmor()) tags.push_back("heavy");
+                else if (armor->IsLightArmor()) tags.push_back("light");
+                else if (armor->IsClothing()) tags.push_back("clothing");
+                RE::FormID baseEnchID = 0;
+                if (armor->formEnchanting) {
+                    baseEnchID = armor->formEnchanting->GetFormID();
+                    enchName = SanitizeUtf8(armor->formEnchanting->GetName() ? armor->formEnchanting->GetName() : "Enchanted");
+                    tags.push_back("enchanted");
+                }
+
+                arr.push_back(json{
+                    {"id", FormatFormID(item->GetFormID())},
+                    {"rawID", static_cast<uint32_t>(item->GetFormID())},
+                    {"uniqueID", 0},
+                    {"enchantmentID", static_cast<uint32_t>(baseEnchID)},
+                    {"customName", ""},
+                    {"name", SanitizeUtf8(rawName)},
+                    {"category", catStr},
+                    {"type", typeStr},
+                    {"armorClass", armorClassStr},
+                    {"damage", 0},
+                    {"armor", static_cast<int>(armRating)},
+                    {"weight", wt},
+                    {"value", val},
+                    {"enchantment", enchName},
+                    {"tags", tags},
+                    {"equipped", false},
+                    {"count", plainCount},
+                    {"source", "CLOUD"},
+                    {"thumbnail", thumbPath},
+                    {"modName", bMod}
                 });
             }
         } else {
@@ -1056,7 +1412,9 @@ static json GetCloudWardrobeInventoryJson() {
                 {"tags", tags},
                 {"equipped", false},
                 {"count", data.first},
-                {"source", "CLOUD"}
+                {"source", "CLOUD"},
+                {"thumbnail", thumbPath},
+                {"modName", bMod}
             });
         }
     }
@@ -1185,12 +1543,12 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         for (const auto& slot : activeWheel.slots) {
             json sJson;
             sJson["index"] = slotIdx;
-            bool hasRealOutfit = slot.outfit.has_value() && (!slot.outfit->items.empty() || !slot.outfit->itemIDs.empty());
+            bool hasRealOutfit = slot.outfit.has_value() && (!slot.outfit->items.empty() || !slot.outfit->itemIDs.empty() || !slot.outfit->name.empty());
             bool isAddon = slot.outfit.has_value() ? slot.outfit->isAddon : false;
 
             sJson["hasOutfit"] = hasRealOutfit;
             sJson["name"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->name) : ("Outfit " + std::to_string(slotIdx + 1));
-            sJson["count"] = slot.outfit.has_value() ? slot.outfit->itemIDs.size() : 0;
+            sJson["count"] = slot.outfit.has_value() ? (!slot.outfit->items.empty() ? slot.outfit->items.size() : slot.outfit->itemIDs.size()) : 0;
             sJson["icon"] = slot.outfit.has_value() ? slot.outfit->icon : "";
             sJson["contextTag"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->contextTag) : "";
             sJson["preferenceStars"] = slot.outfit.has_value() ? slot.outfit->preferenceStars : 3;
@@ -1208,6 +1566,17 @@ std::string GetWheelJsonInternal(bool isEditMode) {
                             std::string dName = (!itm.customName.empty() && itm.customName != "Apparel") ? itm.customName : (f->GetName() ? f->GetName() : "Apparel");
                             std::string cName = (itm.customName == "Apparel") ? "" : itm.customName;
 
+                            std::string thumbPath = "";
+                            if (auto* bound = f->As<RE::TESBoundObject>()) {
+                                OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound, true);
+                                auto* bFile = bound->GetFile(0);
+                                std::string bMod = bFile ? std::string(bFile->GetFilename()) : "Skyrim.esm";
+                                uint32_t bLoc = bound->GetLocalFormID();
+                                if (OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().HasThumbnail(bMod, bLoc)) {
+                                    thumbPath = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().GetRelativePath(bMod, bLoc);
+                                }
+                            }
+
                             itemObjects.push_back(json{
                                 {"id", FormatFormID(itm.formID)},
                                 {"rawID", static_cast<uint32_t>(itm.formID)},
@@ -1215,7 +1584,24 @@ std::string GetWheelJsonInternal(bool isEditMode) {
                                 {"enchantmentID", static_cast<uint32_t>(itm.enchantmentID)},
                                 {"customName", SanitizeUtf8(cName)},
                                 {"name", SanitizeUtf8(dName)},
-                                {"type", tStr}
+                                {"type", tStr},
+                                {"thumbnail", thumbPath}
+                            });
+                        } else if (!itm.pluginName.empty() || itm.localFormID != 0) {
+                            std::string dName = (!itm.customName.empty() && itm.customName != "Apparel") ? itm.customName : (!itm.pluginName.empty() ? ("Apparel (" + itm.pluginName + ")") : "Apparel");
+                            std::string cName = (itm.customName == "Apparel") ? "" : itm.customName;
+
+                            itemObjects.push_back(json{
+                                {"id", "0x00000000"},
+                                {"rawID", 0},
+                                {"uniqueID", itm.uniqueID},
+                                {"enchantmentID", static_cast<uint32_t>(itm.enchantmentID)},
+                                {"customName", SanitizeUtf8(cName)},
+                                {"name", SanitizeUtf8(dName)},
+                                {"type", "Armor"},
+                                {"isMissingMod", true},
+                                {"plugin", itm.pluginName},
+                                {"thumbnail", ""}
                             });
                         }
                     }
@@ -1226,11 +1612,23 @@ std::string GetWheelJsonInternal(bool isEditMode) {
                             auto* arm = f->As<RE::TESObjectARMO>();
                             std::string tStr = GetApparelTypeString(arm);
 
+                            std::string thumbPath = "";
+                            if (auto* bound = f->As<RE::TESBoundObject>()) {
+                                OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound, true);
+                                auto* bFile = bound->GetFile(0);
+                                std::string bMod = bFile ? std::string(bFile->GetFilename()) : "Skyrim.esm";
+                                uint32_t bLoc = bound->GetLocalFormID();
+                                if (OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().HasThumbnail(bMod, bLoc)) {
+                                    thumbPath = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().GetRelativePath(bMod, bLoc);
+                                }
+                            }
+
                             itemObjects.push_back(json{
                                 {"id", FormatFormID(fID)},
                                 {"rawID", static_cast<uint32_t>(fID)},
                                 {"name", SanitizeUtf8(f->GetName() ? f->GetName() : "Apparel")},
-                                {"type", tStr}
+                                {"type", tStr},
+                                {"thumbnail", thumbPath}
                             });
                         }
                     }

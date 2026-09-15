@@ -18,6 +18,8 @@ struct OutfitItem {
     uint16_t uniqueID{ 0 };
     RE::FormID enchantmentID{ 0 };
     std::string customName{};
+    std::string pluginName{};
+    uint32_t localFormID{ 0 };
 };
 
 inline void to_json(json& j, const OutfitItem& itm) {
@@ -25,7 +27,9 @@ inline void to_json(json& j, const OutfitItem& itm) {
         {"formID", itm.formID},
         {"uniqueID", itm.uniqueID},
         {"enchantmentID", static_cast<uint32_t>(itm.enchantmentID)},
-        {"customName", itm.customName}
+        {"customName", itm.customName},
+        {"plugin", itm.pluginName},
+        {"localID", itm.localFormID}
     };
 }
 
@@ -34,6 +38,8 @@ inline void from_json(const json& j, OutfitItem& itm) {
     itm.uniqueID = j.value("uniqueID", static_cast<uint16_t>(0));
     itm.enchantmentID = static_cast<RE::FormID>(j.value("enchantmentID", static_cast<uint32_t>(0)));
     itm.customName = j.value("customName", "");
+    itm.pluginName = j.value("plugin", "");
+    itm.localFormID = j.value("localID", static_cast<uint32_t>(0));
 }
 
 enum class ContextFlags : uint64_t {

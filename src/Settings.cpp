@@ -22,10 +22,10 @@ uint32_t g_editUiMode = 1;
 std::atomic<bool> g_autoCloseOnEquip{ true };
 std::atomic<bool> g_autoStashEnabled{ false };
 std::atomic<bool> g_autoSystemEnabled{ false };
-std::atomic<bool> g_autoCityEnabled{ true };
-std::atomic<bool> g_autoHomeEnabled{ true };
-std::atomic<bool> g_autoCombatEnabled{ true };
-std::atomic<bool> g_autoSwimEnabled{ true };
+std::atomic<bool> g_autoCityEnabled{ false };
+std::atomic<bool> g_autoHomeEnabled{ false };
+std::atomic<bool> g_autoCombatEnabled{ false };
+std::atomic<bool> g_autoSwimEnabled{ false };
 
 static std::string GetIniPath() {
     std::filesystem::create_directories("Data/SKSE/Plugins");
@@ -112,10 +112,10 @@ void LoadINI() {
     g_autoCloseOnEquip.store(GetPrivateProfileIntA("AutoSystem", "bAutoCloseOnEquip", 1, path.c_str()) != 0, std::memory_order_relaxed);
     g_autoStashEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoStashInactive", 0, path.c_str()) != 0, std::memory_order_relaxed);
     g_autoSystemEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoSystem", 0, path.c_str()) != 0, std::memory_order_relaxed);
-    g_autoCityEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoCity", 1, path.c_str()) != 0, std::memory_order_relaxed);
-    g_autoHomeEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoHome", 1, path.c_str()) != 0, std::memory_order_relaxed);
-    g_autoCombatEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoCombat", 1, path.c_str()) != 0, std::memory_order_relaxed);
-    g_autoSwimEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoSwim", 1, path.c_str()) != 0, std::memory_order_relaxed);
+    g_autoCityEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoCity", 0, path.c_str()) != 0, std::memory_order_relaxed);
+    g_autoHomeEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoHome", 0, path.c_str()) != 0, std::memory_order_relaxed);
+    g_autoCombatEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoCombat", 0, path.c_str()) != 0, std::memory_order_relaxed);
+    g_autoSwimEnabled.store(GetPrivateProfileIntA("AutoSystem", "bAutoSwim", 0, path.c_str()) != 0, std::memory_order_relaxed);
 
     char buffer[64];
     if (GetPrivateProfileStringA("Appearance", "fWheelScale", "1.0", buffer, sizeof(buffer), path.c_str())) {

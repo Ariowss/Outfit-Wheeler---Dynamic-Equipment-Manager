@@ -55,6 +55,12 @@ extern std::recursive_mutex g_dataMutex;
 
 void LoadData();
 void SaveDataInternal();
+std::string ExportConfigToString();
+bool ImportConfigFromString(const std::string& jsonStr);
 std::string GetWheelJson(bool isEditMode);
 std::string GetWheelJsonInternal(bool isEditMode);
 void SyncWheelOutfitsToAdaptiveWardrobe();
+void QueueAllLoadedItemThumbnails();
+void QueuePlayerInventoryThumbnails();
+void QueueWardrobeInventoryThumbnails();
+void QueueFollowerInventoryThumbnails();

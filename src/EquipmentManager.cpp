@@ -17,6 +17,7 @@
 #include "AdaptiveWardrobeManager.h"
 #include "ExecutionQueue.h"
 #include "Settings.h"
+#include "thumbnail/ItemThumbnailService.h"
 #include <windows.h>
 #include <SKSE/SKSE.h>
 #include <RE/B/BipedAnim.h>
@@ -194,8 +195,78 @@ std::vector<InventoryWornEntry> GetEquippedInventoryEntries(RE::Actor* a_actor) 
     return equipped;
 }
 
+std::string GetTrueItemDisplayName(RE::ExtraDataList* a_xList, RE::TESBoundObject* a_boundObj) {
+    if (!a_boundObj) return "Apparel";
+    if (a_xList) {
+        const char* dispName = a_xList->GetDisplayName(a_boundObj);
+        if (dispName && dispName[0] != '\0') {
+            return std::string(dispName);
+        }
+    }
+    const char* baseName = a_boundObj->GetName();
+    return (baseName && baseName[0] != '\0') ? std::string(baseName) : "Apparel";
+}
+
+std::string GetTrueItemCustomName(RE::ExtraDataList* a_xList) {
+    if (!a_xList) return "";
+    auto* xText = a_xList->GetExtraTextDisplayData();
+    if (xText && xText->displayName.c_str() && xText->displayName.c_str()[0] != '\0') {
+        return std::string(xText->displayName.c_str());
+    }
+    return "";
+}
+
+RE::EnchantmentItem* GetTrueItemEnchantment(RE::ExtraDataList* a_xList, RE::TESBoundObject* a_boundObj) {
+    if (a_xList) {
+        auto* xEnch = a_xList->GetByType<RE::ExtraEnchantment>();
+        if (xEnch && xEnch->enchantment) {
+            return xEnch->enchantment;
+        }
+        auto* xRef = a_xList->GetByType<RE::ExtraReferenceHandle>();
+        auto ref = xRef ? xRef->GetOriginalReference() : nullptr;
+        if (ref && !ref->IsDeleted()) {
+            auto* refEnch = ref->extraList.GetByType<RE::ExtraEnchantment>();
+            if (refEnch && refEnch->enchantment) {
+                return refEnch->enchantment;
+            }
+        }
+    }
+    if (a_boundObj) {
+        auto* arm = a_boundObj->As<RE::TESObjectARMO>();
+        if (arm && arm->formEnchanting) {
+            return arm->formEnchanting;
+        }
+        auto* wep = a_boundObj->As<RE::TESObjectWEAP>();
+        if (wep && wep->formEnchanting) {
+            return wep->formEnchanting;
+        }
+    }
+    return nullptr;
+}
+
 bool MatchesWornEntry(const InventoryWornEntry& entry, const OutfitItem& target) {
     if (!entry.object || entry.object->GetFormID() != target.formID) return false;
+
+    auto* boundObj = entry.object->As<RE::TESBoundObject>();
+    auto* wornEnch = GetTrueItemEnchantment(entry.extraList, boundObj);
+    RE::FormID wornEnchID = wornEnch ? wornEnch->GetFormID() : 0;
+
+    if (target.enchantmentID != 0) {
+        if (wornEnchID != target.enchantmentID) return false;
+    } else {
+        if (wornEnchID != 0) return false;
+    }
+
+    if (target.uniqueID != 0 && entry.extraList) {
+        auto* xUID = entry.extraList->GetByType<RE::ExtraUniqueID>();
+        if (xUID && xUID->uniqueID != target.uniqueID) return false;
+    }
+
+    if (!target.customName.empty() && entry.extraList) {
+        std::string wornCustom = GetTrueItemCustomName(entry.extraList);
+        if (!wornCustom.empty() && wornCustom != target.customName) return false;
+    }
+
     return true;
 }
 
@@ -212,53 +283,47 @@ RE::ExtraDataList* FindBestMatchingExtraList(RE::InventoryEntryData* entryData, 
             continue;
         }
 
-        int score = 10;
+        auto* candEnch = GetTrueItemEnchantment(xList, boundObj);
+        RE::FormID candEnchID = candEnch ? candEnch->GetFormID() : 0;
+
+        if (target.enchantmentID != 0) {
+            if (candEnchID != target.enchantmentID) {
+                continue;
+            }
+        } else {
+            if (candEnchID != 0) {
+                continue;
+            }
+        }
+
+        int score = 100;
 
         if (target.uniqueID != 0) {
             auto* xUID = xList->GetByType<RE::ExtraUniqueID>();
             if (xUID && xUID->uniqueID == target.uniqueID) {
-                score += 10000;
+                score += 20000;
             }
         }
 
-        auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
-        std::string candidateName = (xName && xName->displayName.c_str()) ? xName->displayName.c_str() : "";
-
+        std::string candCustom = GetTrueItemCustomName(xList);
         if (!target.customName.empty()) {
-            if (candidateName == target.customName) {
+            if (candCustom == target.customName) {
+                score += 10000;
+            } else if (candCustom.empty()) {
+                score += 1000;
+            } else {
+                continue;
+            }
+        } else {
+            if (candCustom.empty()) {
                 score += 5000;
             } else {
-                continue;
-            }
-        } else {
-            if (!candidateName.empty()) {
-                continue;
-            }
-            score += 1000;
-        }
-
-        auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
-        RE::FormID candidateEnchID = 0;
-        if (xEnch && xEnch->enchantment) {
-            candidateEnchID = xEnch->enchantment->GetFormID();
-        } else {
-            auto* arm = boundObj ? boundObj->As<RE::TESObjectARMO>() : nullptr;
-            if (arm && arm->formEnchanting) {
-                candidateEnchID = arm->formEnchanting->GetFormID();
+                score += 500;
             }
         }
 
-        if (target.enchantmentID != 0) {
-            if (candidateEnchID == target.enchantmentID) {
-                score += 3000;
-            } else {
-                continue;
-            }
-        } else {
-            if (xEnch && xEnch->enchantment) {
-                continue;
-            }
-            score += 1000;
+        if (target.enchantmentID != 0 && candEnchID == target.enchantmentID) {
+            score += 5000;
         }
 
         if (score > highestScore) {
@@ -267,10 +332,13 @@ RE::ExtraDataList* FindBestMatchingExtraList(RE::InventoryEntryData* entryData, 
         }
     }
 
-    if (!bestCandidate && entryData->extraLists && !entryData->extraLists->empty()) {
+    if (!bestCandidate && target.enchantmentID == 0) {
         for (auto* xList : *entryData->extraLists) {
             if (xList && !xList->HasType(RE::ExtraDataType::kWorn) && !xList->HasType(RE::ExtraDataType::kWornLeft)) {
-                return xList;
+                auto* candEnch = GetTrueItemEnchantment(xList, boundObj);
+                if (!candEnch) {
+                    return xList;
+                }
             }
         }
     }
@@ -467,6 +535,10 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
         if (it != freshInventory.end() && it->second.first > 0) {
             auto* entryData = it->second.second.get();
             RE::ExtraDataList* targetExtra = FindBestMatchingExtraList(entryData, itm, boundObj);
+            if (itm.enchantmentID != 0 && !targetExtra) {
+                SKSE::log::warn("PerformOutfitSwap: Required enchanted item {:08X} (ench {:08X}) not found in inventory, skipping equip to prevent wrong item equip", itm.formID, itm.enchantmentID);
+                continue;
+            }
             equipManager->EquipObject(targetActor, boundObj, targetExtra, 1, nullptr, false, false, true, true);
         }
     }
@@ -529,21 +601,26 @@ void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx) {
                         itm.uniqueID = xUID->uniqueID;
                     }
 
-                    auto* xEnch = entry.extraList->GetByType<RE::ExtraEnchantment>();
-                    if (xEnch && xEnch->enchantment) {
-                        itm.enchantmentID = xEnch->enchantment->GetFormID();
+                    auto* bound = entry.object ? entry.object->As<RE::TESBoundObject>() : nullptr;
+                    auto* ench = GetTrueItemEnchantment(entry.extraList, bound);
+                    if (ench) {
+                        itm.enchantmentID = ench->GetFormID();
                     }
 
-                    auto* xName = entry.extraList->GetByType<RE::ExtraTextDisplayData>();
-                    if (xName && xName->displayName.c_str()) {
-                        itm.customName = xName->displayName.c_str();
+                    itm.customName = GetTrueItemCustomName(entry.extraList);
+                }
+
+                if (itm.enchantmentID == 0 && entry.object) {
+                    auto* bound = entry.object->As<RE::TESBoundObject>();
+                    auto* ench = GetTrueItemEnchantment(nullptr, bound);
+                    if (ench) {
+                        itm.enchantmentID = ench->GetFormID();
                     }
                 }
 
-                if (itm.enchantmentID == 0) {
-                    auto* arm = entry.object->As<RE::TESObjectARMO>();
-                    if (arm && arm->formEnchanting) {
-                        itm.enchantmentID = arm->formEnchanting->GetFormID();
+                if (entry.object) {
+                    if (auto* bound = entry.object->As<RE::TESBoundObject>()) {
+                        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound);
                     }
                 }
 
@@ -684,6 +761,10 @@ void EquipSlotImpl(size_t wheelIdx, size_t slotIdx) {
                 if (it != freshInventory.end() && it->second.first > 0) {
                     auto* entryData = it->second.second.get();
                     RE::ExtraDataList* targetExtra = FindBestMatchingExtraList(entryData, itm, boundObj);
+                    if (itm.enchantmentID != 0 && !targetExtra) {
+                        SKSE::log::warn("EquipSlotImpl (Addon): Required enchanted item {:08X} (ench {:08X}) not found in inventory, skipping", itm.formID, itm.enchantmentID);
+                        continue;
+                    }
                     equipManager->EquipObject(targetActor, boundObj, targetExtra, 1, nullptr, false, false, true, true);
                 }
             }

@@ -15,6 +15,9 @@ bool IsItemInAnyWheelOutfit(RE::FormID a_formID);
 RE::TESObjectREFR* GetWardrobeContainer();
 std::vector<InventoryWornEntry> GetEquippedInventoryEntries(RE::Actor* a_actor);
 bool MatchesWornEntry(const InventoryWornEntry& entry, const OutfitItem& target);
+std::string GetTrueItemDisplayName(RE::ExtraDataList* a_xList, RE::TESBoundObject* a_boundObj);
+std::string GetTrueItemCustomName(RE::ExtraDataList* a_xList);
+RE::EnchantmentItem* GetTrueItemEnchantment(RE::ExtraDataList* a_xList, RE::TESBoundObject* a_boundObj);
 RE::ExtraDataList* FindBestMatchingExtraList(RE::InventoryEntryData* entryData, const OutfitItem& target, RE::TESBoundObject* boundObj);
 
 void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManager, const std::vector<OutfitItem>& targetItems);
