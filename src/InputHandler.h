@@ -9,6 +9,7 @@ extern std::atomic<bool> g_isTyping;
 extern std::atomic<bool> g_isEditModeOpen;
 extern std::atomic<bool> g_gameFullyLoaded;
 extern std::atomic<bool> g_inputRegistered;
+extern std::atomic<bool> g_hotkeysEnabled;
 
 void OpenWheel(bool isEditMode);
 void ShowWheel(bool isEditMode);

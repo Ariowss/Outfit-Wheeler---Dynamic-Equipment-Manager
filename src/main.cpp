@@ -6,6 +6,7 @@
 #include "InputHandler.h"
 #include "JSInterop.h"
 #include "ExecutionQueue.h"
+#include "thumbnail/ItemThumbnailService.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -59,6 +60,7 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         LoadINI();
         LoadData();
+        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().Initialize();
         EnsurePrismaView();
         WheelInputHandler::Register();
     } else if (message->type == SKSE::MessagingInterface::kPreLoadGame) {
@@ -77,8 +79,14 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
     } else if (message->type == SKSE::MessagingInterface::kPostLoadGame || message->type == SKSE::MessagingInterface::kNewGame) {
         LoadINI();
         LoadData();
+        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().Initialize();
         ExecutionQueue::GetSingleton()->ResetEnvironmentState();
         g_gameFullyLoaded.store(true, std::memory_order_release);
+        QueueAllLoadedItemThumbnails();
+        QueuePlayerInventoryThumbnails();
+        QueueWardrobeInventoryThumbnails();
+        QueueFollowerInventoryThumbnails();
+        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().StartProcessing();
         ExecutionQueue::GetSingleton()->RegisterEvents();
         isMenuOpen.store(false, std::memory_order_release);
         g_isEditModeOpen.store(false, std::memory_order_release);
@@ -97,8 +105,8 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
 }
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
-    InitLog();
     SKSE::Init(a_skse);
+    InitLog();
     auto messaging = SKSE::GetMessagingInterface();
     if (!messaging) return false;
     messaging->RegisterListener(SKSEMessageHandler);

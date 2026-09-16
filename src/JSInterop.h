@@ -51,4 +51,8 @@ void AddItemToSlotListener(const char* data);
 void RemoveItemFromSlotListener(const char* data);
 void MoveSlotListener(const char* data);
 void MoveWheelListener(const char* data);
+void ExportConfigListener(const char* data);
+void ImportConfigListener(const char* data);
+void RequestThumbnailListener(const char* data);
+void NotifyThumbnailReady(uint32_t a_formID, const std::string& a_relPath);
 void RegisterJSListeners(PrismaView v);

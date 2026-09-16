@@ -5,7 +5,11 @@
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
 #include "InputHandler.h"
+#include "thumbnail/ItemThumbnailService.h"
 #include <algorithm>
+#include <chrono>
+#include <sstream>
+#include <fstream>
 #include <cmath>
 #include <unordered_map>
 #include <cctype>
@@ -106,9 +110,11 @@ void OnDomReadyCallbackFunc(PrismaView v) {
             PrismaUI->Unfocus(v);
             PrismaUI->Hide(v);
         }
-        auto controlMap = RE::ControlMap::GetSingleton();
-        if (controlMap) {
-            controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, true);
+        if (g_gameFullyLoaded.load(std::memory_order_acquire)) {
+            auto controlMap = RE::ControlMap::GetSingleton();
+            if (controlMap) {
+                controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, true);
+            }
         }
     });
 }
@@ -854,12 +860,12 @@ void AddSlotListener(const char* data) {
         size_t activeIdx = g_manager.GetActiveWheelIndex();
         if (!wheels.empty() && activeIdx < wheels.size()) {
             Slot s;
+            Outfit o;
+            o.name = "Outfit " + std::to_string(wheels[activeIdx].slots.size() + 1);
             if (!initialContextTag.empty() && initialContextTag != "ALL") {
-                Outfit o;
-                o.name = "Outfit " + std::to_string(wheels[activeIdx].slots.size() + 1);
                 o.contextTag = initialContextTag;
-                s.outfit = o;
             }
+            s.outfit = o;
             wheels[activeIdx].slots.push_back(s);
             SaveDataInternal();
 
@@ -1017,7 +1023,11 @@ void ToggleItemEquipListener(const char* data) {
         }
         if (rawID == 0) return;
 
-        SKSE::GetTaskInterface()->AddTask([rawID]() {
+        uint16_t reqUniqueID = req.value("uniqueID", static_cast<uint16_t>(0));
+        RE::FormID reqEnchID = req.value("enchantmentID", static_cast<RE::FormID>(0));
+        std::string reqCustomName = req.value("customName", "");
+
+        SKSE::GetTaskInterface()->AddTask([rawID, reqUniqueID, reqEnchID, reqCustomName]() {
             RE::Actor* targetActor = ResolveActiveTargetActor();
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto equipManager = RE::ActorEquipManager::GetSingleton();
@@ -1027,6 +1037,12 @@ void ToggleItemEquipListener(const char* data) {
             if (!form || !IsPureApparel(form)) return;
             auto* bound = form->As<RE::TESBoundObject>();
             if (!bound) return;
+
+            OutfitItem itm;
+            itm.formID = rawID;
+            itm.uniqueID = reqUniqueID;
+            itm.enchantmentID = reqEnchID;
+            itm.customName = reqCustomName;
 
             auto inv = targetActor->GetInventory();
             auto it = inv.find(bound);
@@ -1038,8 +1054,9 @@ void ToggleItemEquipListener(const char* data) {
 
                 if (entryData && entryData->extraLists) {
                     for (auto* xList : *entryData->extraLists) {
-                        if (xList) {
-                            if (xList->HasType(RE::ExtraDataType::kWorn) || xList->HasType(RE::ExtraDataType::kWornLeft)) {
+                        if (xList && (xList->HasType(RE::ExtraDataType::kWorn) || xList->HasType(RE::ExtraDataType::kWornLeft))) {
+                            InventoryWornEntry entry{ bound, xList };
+                            if (MatchesWornEntry(entry, itm)) {
                                 isWorn = true;
                                 targetExtra = xList;
                                 break;
@@ -1047,22 +1064,14 @@ void ToggleItemEquipListener(const char* data) {
                         }
                     }
                 }
-                if (!isWorn && entryData && entryData->IsWorn()) {
+                if (!isWorn && entryData && entryData->IsWorn() && itm.enchantmentID == 0) {
                     isWorn = true;
                 }
                 if (!isWorn) {
                     if (const auto& biped = targetActor->GetCurrentBiped()) {
                         for (size_t i = 0; i < 42; ++i) {
                             if (biped->objects[i].item && biped->objects[i].item->GetFormID() == bound->GetFormID()) {
-                                isWorn = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!isWorn) {
-                        if (const auto& biped2 = targetActor->GetActorRuntimeData().biped) {
-                            for (size_t i = 0; i < 42; ++i) {
-                                if (biped2->objects[i].item && biped2->objects[i].item->GetFormID() == bound->GetFormID()) {
+                                if (itm.enchantmentID == 0) {
                                     isWorn = true;
                                     break;
                                 }
@@ -1075,7 +1084,12 @@ void ToggleItemEquipListener(const char* data) {
                     equipManager->UnequipObject(targetActor, bound, targetExtra, 1, nullptr, false, false, true, true);
                     RE::DebugNotification(("Unequipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
                 } else {
-                    equipManager->EquipObject(targetActor, bound, nullptr, 1, nullptr, false, false, true, true);
+                    targetExtra = FindBestMatchingExtraList(entryData, itm, bound);
+                    if (itm.enchantmentID != 0 && !targetExtra) {
+                        RE::DebugNotification("Matching enchanted item not found in inventory!");
+                        return;
+                    }
+                    equipManager->EquipObject(targetActor, bound, targetExtra, 1, nullptr, false, false, true, true);
                     RE::DebugNotification(("Equipped " + std::string(bound->GetName() ? bound->GetName() : "item")).c_str());
                 }
             } else {
@@ -1377,16 +1391,13 @@ void AddItemToSlotListener(const char* data) {
                                 if (!xUID || xUID->uniqueID != reqUniqueID) match = false;
                             }
                             if (!reqCustomName.empty()) {
-                                auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
-                                if (!xName || !xName->displayName.c_str() || reqCustomName != xName->displayName.c_str()) match = false;
+                                std::string candCustom = GetTrueItemCustomName(xList);
+                                if (candCustom != reqCustomName) match = false;
                             }
                             if (reqEnchID != 0) {
-                                auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
-                                if (!xEnch || !xEnch->enchantment || xEnch->enchantment->GetFormID() != reqEnchID) {
-                                    auto* arm = bound->As<RE::TESObjectARMO>();
-                                    if (!arm || !arm->formEnchanting || arm->formEnchanting->GetFormID() != reqEnchID) {
-                                        match = false;
-                                    }
+                                auto* candEnch = GetTrueItemEnchantment(xList, bound);
+                                if (!candEnch || candEnch->GetFormID() != reqEnchID) {
+                                    match = false;
                                 }
                             }
 
@@ -1394,11 +1405,11 @@ void AddItemToSlotListener(const char* data) {
                                 auto* xUID = xList->GetByType<RE::ExtraUniqueID>();
                                 if (xUID) newItm.uniqueID = xUID->uniqueID;
 
-                                auto* xEnch = xList->GetByType<RE::ExtraEnchantment>();
-                                if (xEnch && xEnch->enchantment) newItm.enchantmentID = xEnch->enchantment->GetFormID();
+                                auto* candEnch = GetTrueItemEnchantment(xList, bound);
+                                if (candEnch) newItm.enchantmentID = candEnch->GetFormID();
 
-                                auto* xName = xList->GetByType<RE::ExtraTextDisplayData>();
-                                if (xName && xName->displayName.c_str()) newItm.customName = xName->displayName.c_str();
+                                std::string cName = GetTrueItemCustomName(xList);
+                                if (!cName.empty()) newItm.customName = cName;
 
                                 return true;
                             }
@@ -1558,6 +1569,149 @@ void MoveWheelListener(const char* data) {
     } catch (...) {}
 }
 
+void ExportConfigListener(const char* data) {
+    (void)data;
+    try {
+        SKSE::GetTaskInterface()->AddTask([]() {
+            std::string jsonStr = ExportConfigToString();
+            std::filesystem::create_directories("Data/SKSE/Plugins/backups");
+
+            auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            std::tm tm{};
+            localtime_s(&tm, &now);
+            char buf[64];
+            std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm);
+            std::string backupPath = "Data/SKSE/Plugins/backups/OutfitWheeler_" + std::string(buf) + ".json";
+
+            std::ofstream out(backupPath);
+            if (out.is_open()) {
+                out << jsonStr;
+                out.close();
+                RE::DebugNotification(("Config backed up to: " + backupPath).c_str());
+            }
+
+            if (PrismaUI && view != 0) {
+                json res;
+                res["success"] = true;
+                res["path"] = backupPath;
+                res["configJson"] = jsonStr;
+                PrismaUI->InteropCall(view, "onConfigExported", res.dump().c_str());
+            }
+        });
+    } catch (...) {}
+}
+
+void ImportConfigListener(const char* data) {
+    try {
+        std::string jsonPayload = "";
+        if (data && data[0] != '\0') {
+            try {
+                json req = json::parse(data);
+                if (req.is_string()) {
+                    jsonPayload = req.get<std::string>();
+                } else if (req.contains("configJson") && req["configJson"].is_string()) {
+                    jsonPayload = req["configJson"].get<std::string>();
+                } else if (req.contains("config") && req["config"].is_object()) {
+                    jsonPayload = req["config"].dump();
+                } else if (req.contains("path") && req["path"].is_string()) {
+                    std::ifstream in(req["path"].get<std::string>());
+                    if (in.is_open()) {
+                        std::stringstream ss;
+                        ss << in.rdbuf();
+                        jsonPayload = ss.str();
+                    }
+                } else if (req.is_object() && (req.contains("actors") || req.contains("wheels"))) {
+                    jsonPayload = req.dump();
+                }
+            } catch (...) {
+                jsonPayload = data;
+            }
+        }
+
+        SKSE::GetTaskInterface()->AddTask([jsonPayload]() {
+            bool success = ImportConfigFromString(jsonPayload);
+            if (success) {
+                RE::DebugNotification("Configuration successfully restored!");
+            } else {
+                RE::DebugNotification("Failed to restore configuration.");
+            }
+
+            if (PrismaUI && view != 0) {
+                std::string jsCmd = GetWheelJsonInternal(true);
+                PrismaUI->InteropCall(view, "openWheel", jsCmd.c_str());
+            }
+        });
+    } catch (...) {}
+}
+
+void RequestThumbnailListener(const char* data) {
+    try {
+        json req = json::parse(data);
+        std::vector<uint32_t> ids;
+        bool highPriority = false;
+        if (req.contains("highPriority") && req["highPriority"].is_boolean()) {
+            highPriority = req["highPriority"].get<bool>();
+        }
+        if (req.contains("rawIDs") && req["rawIDs"].is_array()) {
+            for (const auto& el : req["rawIDs"]) {
+                if (el.is_number()) {
+                    ids.push_back(el.get<uint32_t>());
+                } else if (el.is_string()) {
+                    try { ids.push_back(static_cast<uint32_t>(std::stoul(el.get<std::string>(), nullptr, 16))); } catch (...) {}
+                }
+            }
+        } else if (req.is_array()) {
+            for (const auto& el : req) {
+                if (el.is_number()) {
+                    ids.push_back(el.get<uint32_t>());
+                } else if (el.is_string()) {
+                    try { ids.push_back(static_cast<uint32_t>(std::stoul(el.get<std::string>(), nullptr, 16))); } catch (...) {}
+                }
+            }
+        } else {
+            uint32_t rawID = 0;
+            if (req.contains("rawID") && req["rawID"].is_number()) {
+                rawID = req["rawID"].get<uint32_t>();
+            } else if (req.contains("id") && req["id"].is_string()) {
+                std::string idStr = req["id"].get<std::string>();
+                try { rawID = static_cast<uint32_t>(std::stoul(idStr, nullptr, 16)); } catch (...) {}
+            }
+            if (rawID != 0) {
+                ids.push_back(rawID);
+            }
+        }
+
+        if (!ids.empty()) {
+            SKSE::GetTaskInterface()->AddTask([ids = std::move(ids), highPriority]() {
+                auto& thumbService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
+                std::vector<RE::TESBoundObject*> bounds;
+                bounds.reserve(ids.size());
+                for (uint32_t rID : ids) {
+                    auto* form = RE::TESForm::LookupByID(rID);
+                    if (auto* bound = form ? form->As<RE::TESBoundObject>() : nullptr) {
+                        bounds.push_back(bound);
+                    }
+                }
+                if (!bounds.empty()) {
+                    thumbService.QueueItems(bounds, highPriority);
+                }
+            });
+        }
+    } catch (...) {}
+}
+
+void NotifyThumbnailReady(uint32_t a_formID, const std::string& a_relPath) {
+    if (!PrismaUI || view == 0) return;
+    try {
+        json msg = {
+            { "formID", a_formID },
+            { "rawID", a_formID },
+            { "thumbnail", a_relPath }
+        };
+        PrismaUI->InteropCall(view, "onThumbnailReady", msg.dump().c_str());
+    } catch (...) {}
+}
+
 void RegisterJSListeners(PrismaView v) {
     if (!PrismaUI || !v) return;
 
@@ -1595,4 +1749,7 @@ void RegisterJSListeners(PrismaView v) {
     PrismaUI->RegisterJSListener(v, "RemoveItemFromSlot", RemoveItemFromSlotListener);
     PrismaUI->RegisterJSListener(v, "MoveSlot", MoveSlotListener);
     PrismaUI->RegisterJSListener(v, "MoveWheel", MoveWheelListener);
+    PrismaUI->RegisterJSListener(v, "ExportConfig", ExportConfigListener);
+    PrismaUI->RegisterJSListener(v, "ImportConfig", ImportConfigListener);
+    PrismaUI->RegisterJSListener(v, "RequestThumbnail", RequestThumbnailListener);
 }

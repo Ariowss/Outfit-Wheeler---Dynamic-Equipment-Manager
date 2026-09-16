@@ -20,6 +20,9 @@
 
 #pragma comment(lib, "Xinput.lib")
 
+#define OUTFITWHEELER_EXPORTS
+#include "OutfitWheelerAPI.h"
+
 extern PRISMA_UI_API::IVPrismaUI2* PrismaUI;
 extern PrismaView view;
 
@@ -27,6 +30,7 @@ std::atomic<bool> isMenuOpen{ false };
 std::atomic<bool> g_isTyping{ false };
 std::atomic<bool> g_isEditModeOpen{ false };
 std::atomic<bool> g_inputRegistered{ false };
+std::atomic<bool> g_hotkeysEnabled{ true };
 
 static std::chrono::steady_clock::time_point g_lastToggleTime{};
 static std::chrono::steady_clock::time_point g_lastFilterTime{};
@@ -365,11 +369,12 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                             return RE::BSEventNotifyControl::kStop;
                         }
 
+                        bool hotkeysEnabled = g_hotkeysEnabled.load(std::memory_order_acquire);
                         bool editModMatch = IsModifierMatch(g_editModifierKey, shift, ctrl, alt);
                         bool playModMatch = IsModifierMatch(g_playModifierKey, shift, ctrl, alt);
 
-                        bool triggerEdit = (keyCode == g_editKey && editModMatch);
-                        bool triggerPlay = (keyCode == g_playKey && playModMatch);
+                        bool triggerEdit = hotkeysEnabled && (keyCode == g_editKey && editModMatch);
+                        bool triggerPlay = hotkeysEnabled && (keyCode == g_playKey && playModMatch);
 
                         if (triggerEdit || triggerPlay) {
                             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastToggleTime).count() < 200) {
@@ -441,7 +446,7 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
                             return RE::BSEventNotifyControl::kContinue;
                         }
                     } else if (!currentlyOpen) {
-                        if (!isTypingActive) {
+                        if (!isTypingActive && g_hotkeysEnabled.load(std::memory_order_acquire)) {
                             bool gpPlayModMatch = (g_gamepadPlayModifier == 0) || ((g_currentGamepadMask & g_gamepadPlayModifier) != 0);
                             bool gpTriggerPlay = (keyCode == g_gamepadPlayKey && gpPlayModMatch);
 
@@ -462,3 +467,72 @@ RE::BSEventNotifyControl WheelInputHandler::ProcessEvent(RE::InputEvent* const* 
     }
     return RE::BSEventNotifyControl::kContinue;
 }
+
+static bool CanOpenWheelFromAPI() {
+    if (!PrismaUI || view == 0) return false;
+    if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return false;
+
+    auto player = RE::PlayerCharacter::GetSingleton();
+    if (!player || !player->Is3DLoaded() || player->IsDead()) return false;
+
+    auto ui = RE::UI::GetSingleton();
+    if (!ui) return false;
+
+    bool isInventoryOpen = ui->IsMenuOpen(MENU_INVENTORY);
+    bool hasBlockingMenu = ui->IsMenuOpen(MENU_CONSOLE) || ui->IsMenuOpen(MENU_RACEMENU) ||
+                          ui->IsMenuOpen(MENU_MAGIC) || ui->IsMenuOpen(MENU_CONTAINER) ||
+                          ui->IsMenuOpen(MENU_BARTER) || ui->IsMenuOpen(MENU_BOOK) ||
+                          ui->IsMenuOpen(MENU_JOURNAL) || ui->IsMenuOpen(MENU_MAP) ||
+                          ui->IsMenuOpen(MENU_LOCKPICKING) || ui->IsMenuOpen(MENU_CRAFTING) ||
+                          ui->IsMenuOpen(MENU_DIALOGUE) || ui->IsMenuOpen(MENU_FADER) ||
+                          ui->IsMenuOpen(MENU_LOADING);
+
+    if (hasBlockingMenu || (ui->GameIsPaused() && !isInventoryOpen)) {
+        return false;
+    }
+
+    return true;
+}
+
+OUTFITWHEELER_API bool OutfitWheeler_Open() {
+    if (isMenuOpen.load(std::memory_order_acquire)) return true;
+    if (!CanOpenWheelFromAPI()) return false;
+    OpenWheel(false);
+    return true;
+}
+
+OUTFITWHEELER_API bool OutfitWheeler_OpenEdit() {
+    if (isMenuOpen.load(std::memory_order_acquire)) return true;
+    if (!CanOpenWheelFromAPI()) return false;
+    OpenWheel(true);
+    return true;
+}
+
+OUTFITWHEELER_API void OutfitWheeler_Close() {
+    if (isMenuOpen.load(std::memory_order_acquire)) {
+        HideWheel();
+    }
+}
+
+OUTFITWHEELER_API bool OutfitWheeler_IsMenuOpen() {
+    return isMenuOpen.load(std::memory_order_acquire);
+}
+
+OUTFITWHEELER_API void OutfitWheeler_SetHotkeyEnabled(bool a_enabled) {
+    g_hotkeysEnabled.store(a_enabled, std::memory_order_release);
+}
+
+OUTFITWHEELER_API bool OutfitWheeler_IsHotkeyEnabled() {
+    return g_hotkeysEnabled.load(std::memory_order_acquire);
+}
+
+OUTFITWHEELER_API bool OpenOutfitWheeler() { return OutfitWheeler_Open(); }
+OUTFITWHEELER_API void CloseOutfitWheeler() { OutfitWheeler_Close(); }
+OUTFITWHEELER_API bool IsOutfitWheelerOpen() { return OutfitWheeler_IsMenuOpen(); }
+OUTFITWHEELER_API void SetOutfitWheelerHotkeyEnabled(bool a_enabled) { OutfitWheeler_SetHotkeyEnabled(a_enabled); }
+OUTFITWHEELER_API bool IsOutfitWheelerHotkeyEnabled() { return OutfitWheeler_IsHotkeyEnabled(); }
+
+OUTFITWHEELER_API bool YourMod_Open() { return OutfitWheeler_Open(); }
+OUTFITWHEELER_API void YourMod_Close() { OutfitWheeler_Close(); }
+OUTFITWHEELER_API bool YourMod_IsMenuOpen() { return OutfitWheeler_IsMenuOpen(); }
+OUTFITWHEELER_API void YourMod_SetHotkeyEnabled(bool a_enabled) { OutfitWheeler_SetHotkeyEnabled(a_enabled); }

@@ -11,8 +11,10 @@
 #include "ExecutionQueue.h"
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
+#include "OutfitManager.h"
 #include "InputHandler.h"
 #include "Settings.h"
+#include "thumbnail/ItemThumbnailService.h"
 #include <SKSE/SKSE.h>
 #include <mutex>
 #include <unordered_set>
@@ -106,6 +108,14 @@ void ExecutionQueue::RegisterEventsInternal() {
                 if (g_gameFullyLoaded.load(std::memory_order_acquire)) {
                     SKSE::GetTaskInterface()->AddTask([]() {
                         ExecutionQueue::GetSingleton()->Update();
+                        static size_t s_wbCounter = 0;
+                        if (++s_wbCounter % 60 == 0) {
+                            QueueWardrobeInventoryThumbnails();
+                        }
+                        auto& thumbService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
+                        if (thumbService.HasPendingItems()) {
+                            thumbService.StartProcessing();
+                        }
                     });
                 }
             }
@@ -309,6 +319,18 @@ RE::BSEventNotifyControl ExecutionQueue::ProcessEvent(const RE::TESCombatEvent* 
     }
 
     if (a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kCombat) {
+        if (a_event->actor && a_event->targetActor) {
+            auto* a1 = a_event->actor->As<RE::Actor>();
+            auto* a2 = a_event->targetActor->As<RE::Actor>();
+            if (a1 && a2) {
+                float distSq = a1->GetPosition().GetSquaredDistance(a2->GetPosition());
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                auto* aState = player ? player->AsActorState() : nullptr;
+                if (distSq > (3500.0f * 3500.0f) && aState && !aState->IsWeaponDrawn()) {
+                    return RE::BSEventNotifyControl::kContinue;
+                }
+            }
+        }
         EvaluateAndQueueChange(true);
     } else {
         EvaluateAndQueueChange(false);
