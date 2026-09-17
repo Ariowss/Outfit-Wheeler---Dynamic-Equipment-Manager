@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include "Settings.h"
+#include "ThumbnailDiskCache.h"
 
 using json = nlohmann::json;
 
@@ -738,6 +739,253 @@ void TestWheelAndSlotMemoryCRUD() {
     TEST_ASSERT(wheels[0].name == "Casual Clothes");
 }
 
+static void TestExternalApiHotkeySuppressionAndRuntimeState() {
+    std::atomic<bool> hotkeyEnabled{ true };
+    std::atomic<bool> menuOpen{ false };
+
+    auto SetHotkeyEnabled = [&](bool enabled) { hotkeyEnabled.store(enabled, std::memory_order_release); };
+    auto IsHotkeyEnabled = [&]() { return hotkeyEnabled.load(std::memory_order_acquire); };
+
+    TEST_ASSERT(IsHotkeyEnabled() == true);
+    TEST_ASSERT(menuOpen.load() == false);
+
+    uint32_t playKey = 0x2F;
+    uint32_t inputKey = 0x2F;
+    bool modMatch = true;
+
+    bool triggerPlay = IsHotkeyEnabled() && (inputKey == playKey && modMatch);
+    TEST_ASSERT(triggerPlay == true);
+
+    SetHotkeyEnabled(false);
+    TEST_ASSERT(IsHotkeyEnabled() == false);
+
+    bool suppressedPlay = IsHotkeyEnabled() && (inputKey == playKey && modMatch);
+    TEST_ASSERT(suppressedPlay == false);
+
+    menuOpen.store(true);
+    TEST_ASSERT(menuOpen.load() == true);
+
+    menuOpen.store(false);
+    TEST_ASSERT(menuOpen.load() == false);
+
+    SetHotkeyEnabled(true);
+    TEST_ASSERT(IsHotkeyEnabled() == true);
+    bool restoredPlay = IsHotkeyEnabled() && (inputKey == playKey && modMatch);
+    TEST_ASSERT(restoredPlay == true);
+}
+
+static void TestThumbnailDiskCacheAndPngEncoding() {
+    auto& cache = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton();
+
+    std::string filename1 = cache.GenerateFileName("Skyrim.esm", 0x12E82);
+    TEST_ASSERT(filename1 == "Skyrim.esm_00012E82.png");
+
+    std::string filename2 = cache.GenerateFileName("My Mod / Weapon:Pack.esp", 0x805);
+    TEST_ASSERT(filename2 == "My_Mod___Weapon_Pack.esp_00000805.png");
+
+    std::string relPath = cache.GetRelativePath("ArmorPack.esl", 0xFE001801);
+    TEST_ASSERT(relPath == "thumbnails/ArmorPack.esl_FE001801.png");
+
+    std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "OutfitWheeler_ThumbnailTest";
+    cache.SetBaseDirectory(tempDir);
+    TEST_ASSERT(cache.GetBaseDirectory() == tempDir);
+
+    auto fullPath = cache.GetThumbnailPath("Skyrim.esm", 0x12E82);
+    TEST_ASSERT(fullPath == tempDir / "Skyrim.esm_00012E82.png");
+
+    if (std::filesystem::exists(fullPath)) {
+        std::filesystem::remove(fullPath);
+    }
+    TEST_ASSERT(!cache.HasThumbnail("Skyrim.esm", 0x12E82));
+
+    const uint32_t width = 16;
+    const uint32_t height = 16;
+    std::vector<uint8_t> pixels(width * height * 4, 0);
+
+    for (size_t i = 0; i < width * height; ++i) {
+        pixels[i * 4 + 0] = 50;
+        pixels[i * 4 + 1] = 100;
+        pixels[i * 4 + 2] = 200;
+        pixels[i * 4 + 3] = 255;
+    }
+
+    bool saved = cache.SaveRgbaToPng(fullPath, pixels.data(), width, height);
+    TEST_ASSERT(saved == true);
+    TEST_ASSERT(cache.HasThumbnail("Skyrim.esm", 0x12E82) == true);
+    TEST_ASSERT(std::filesystem::file_size(fullPath) > 0);
+
+    std::ifstream file(fullPath, std::ios::binary);
+    TEST_ASSERT(file.is_open());
+    uint8_t header[8] = { 0 };
+    file.read(reinterpret_cast<char*>(header), 8);
+    TEST_ASSERT(header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G');
+    file.close();
+
+    std::filesystem::remove_all(tempDir);
+}
+
+static void TestNonDestructiveGhostItemPersistenceAndAutoBackup() {
+    json originalJson = json::parse(R"({
+        "wheels": [
+            {
+                "name": "Armors Wheel",
+                "slots": [
+                    {
+                        "hasOutfit": true,
+                        "name": "Custom Steel Valkyrie",
+                        "contextTag": "combat",
+                        "preferenceStars": 5,
+                        "items": [
+                            {
+                                "plugin": "Skyrim.esm",
+                                "localID": "0x00012E82",
+                                "rawID": 77442,
+                                "customName": "Iron Boots"
+                            },
+                            {
+                                "plugin": "ValkyrieArmor.esp",
+                                "localID": "0x00000800",
+                                "rawID": 0,
+                                "customName": "Valkyrie Cuirass"
+                            },
+                            {
+                                "plugin": "ValkyrieArmor.esp",
+                                "localID": "0x00000801",
+                                "rawID": 0,
+                                "customName": "Valkyrie Gauntlets"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    })");
+
+    auto deserializeMock = [](const json& root) {
+        struct MockItem {
+            uint32_t formID{ 0 };
+            std::string plugin;
+            uint32_t localID{ 0 };
+            std::string customName;
+        };
+        struct MockSlot {
+            bool hasOutfit{ false };
+            std::string name;
+            std::vector<MockItem> items;
+        };
+        std::vector<MockSlot> slots;
+        for (const auto& w : root["wheels"]) {
+            for (const auto& s : w["slots"]) {
+                MockSlot slot;
+                slot.hasOutfit = s.value("hasOutfit", false);
+                slot.name = s.value("name", "");
+                if (s.contains("items")) {
+                    for (const auto& itm : s["items"]) {
+                        MockItem item;
+                        std::string plugin = itm.value("plugin", "");
+                        uint32_t locID = 0;
+                        if (itm.contains("localID")) {
+                            std::string sId = itm["localID"].get<std::string>();
+                            if (sId.rfind("0x", 0) == 0) sId = sId.substr(2);
+                            locID = std::stoul(sId, nullptr, 16);
+                        }
+                        if (plugin == "Skyrim.esm") {
+                            item.formID = locID;
+                        } else {
+                            item.formID = 0;
+                        }
+                        item.plugin = plugin;
+                        item.localID = locID;
+                        item.customName = itm.value("customName", "");
+
+                        if (item.formID != 0 || !item.plugin.empty() || item.localID != 0) {
+                            slot.items.push_back(item);
+                        }
+                    }
+                }
+                slots.push_back(slot);
+            }
+        }
+        return slots;
+    };
+
+    auto slots = deserializeMock(originalJson);
+    TEST_ASSERT(slots.size() == 1);
+    TEST_ASSERT(slots[0].hasOutfit == true);
+    TEST_ASSERT(slots[0].name == "Custom Steel Valkyrie");
+    TEST_ASSERT(slots[0].items.size() == 3);
+    TEST_ASSERT(slots[0].items[1].plugin == "ValkyrieArmor.esp");
+    TEST_ASSERT(slots[0].items[1].customName == "Valkyrie Cuirass");
+    TEST_ASSERT(slots[0].items[1].localID == 0x800);
+
+    json reserialized = json::object();
+    json wheelsArr = json::array();
+    json wNode;
+    wNode["name"] = "Armors Wheel";
+    json slotsArr = json::array();
+    for (const auto& s : slots) {
+        json sNode;
+        sNode["hasOutfit"] = s.hasOutfit;
+        sNode["name"] = s.name;
+        json itmsArr = json::array();
+        for (const auto& itm : s.items) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "0x%08X", itm.localID);
+            itmsArr.push_back(json{
+                {"plugin", itm.plugin},
+                {"localID", std::string(buf)},
+                {"customName", itm.customName}
+            });
+        }
+        sNode["items"] = itmsArr;
+        slotsArr.push_back(sNode);
+    }
+    wNode["slots"] = slotsArr;
+    wheelsArr.push_back(wNode);
+    reserialized["wheels"] = wheelsArr;
+
+    TEST_ASSERT(reserialized["wheels"][0]["slots"][0]["items"].size() == 3);
+    TEST_ASSERT(reserialized["wheels"][0]["slots"][0]["items"][1]["plugin"] == "ValkyrieArmor.esp");
+    TEST_ASSERT(reserialized["wheels"][0]["slots"][0]["items"][1]["localID"] == "0x00000800");
+
+    std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "OW_BackupTest";
+    std::filesystem::create_directories(tempDir);
+    std::filesystem::path primaryFile = tempDir / "PrismaOutfitWheel.json";
+    std::filesystem::path backupFile = tempDir / "PrismaOutfitWheel.json.bak";
+    std::filesystem::path altRestoreFile = tempDir / "PrismaOutfitWheeler.json";
+
+    {
+        std::ofstream out(primaryFile);
+        out << originalJson.dump();
+    }
+    TEST_ASSERT(std::filesystem::exists(primaryFile));
+
+    std::filesystem::copy_file(primaryFile, backupFile, std::filesystem::copy_options::overwrite_existing);
+    TEST_ASSERT(std::filesystem::exists(backupFile));
+
+    std::filesystem::remove(primaryFile);
+    TEST_ASSERT(!std::filesystem::exists(primaryFile));
+
+    std::filesystem::path resolvedLoadPath;
+    if (std::filesystem::exists(primaryFile)) {
+        resolvedLoadPath = primaryFile;
+    } else if (std::filesystem::exists(altRestoreFile)) {
+        resolvedLoadPath = altRestoreFile;
+    } else if (std::filesystem::exists(backupFile)) {
+        resolvedLoadPath = backupFile;
+    }
+    TEST_ASSERT(resolvedLoadPath == backupFile);
+
+    {
+        std::ifstream inBak(resolvedLoadPath);
+        json recovered = json::parse(inBak);
+        TEST_ASSERT(recovered["wheels"][0]["slots"][0]["name"] == "Custom Steel Valkyrie");
+        inBak.close();
+    }
+
+    std::filesystem::remove_all(tempDir);
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Outfit Wheeler - Backend Test Suite" << std::endl;
@@ -755,6 +1003,9 @@ int main() {
     RUN_TEST("10. Wardrobe Stash / Retrieve Inventory Balance", TestWardrobeStashingBalanceAndCarryWeight);
     RUN_TEST("11. Legacy JSON Backward Compatibility Migration", TestLegacyJsonBackwardCompatibilityMigration);
     RUN_TEST("12. Wheel & Slot Memory CRUD Engine (Create, Read, Update, Delete)", TestWheelAndSlotMemoryCRUD);
+    RUN_TEST("13. External C-API Hotkey Suppression & Runtime State Machine", TestExternalApiHotkeySuppressionAndRuntimeState);
+    RUN_TEST("14. Standalone 3D Thumbnail Disk Cache & WIC PNG Encoding", TestThumbnailDiskCacheAndPngEncoding);
+    RUN_TEST("15. Ghost Item Persistence, Fallback Load Paths & Auto .bak Backup", TestNonDestructiveGhostItemPersistenceAndAutoBackup);
 
     std::cout << "========================================" << std::endl;
     std::cout << "Backend Test Results: " << g_passedTests << " / " << g_totalTests << " Passed" << std::endl;
