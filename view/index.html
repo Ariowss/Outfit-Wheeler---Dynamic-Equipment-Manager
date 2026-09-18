@@ -28,6 +28,10 @@
         <section id="panel-inventory" class="glass-panel draggable-panel edit-only" data-panel="inventory">
             <div class="panel-drag-handle">
                 <span class="drag-title">APPAREL INVENTORY</span>
+                <div class="view-mode-switch">
+                    <button class="mode-btn active" id="btn-inv-grid-mode" onclick="setInventoryViewMode('grid')">Grid</button>
+                    <button class="mode-btn" id="btn-inv-list-mode" onclick="setInventoryViewMode('list')">List</button>
+                </div>
                 <span class="drag-hint">RMB to move</span>
             </div>
 
@@ -94,6 +98,18 @@
                 </div>
 
                 <div class="sort-and-meta-row">
+                    <label class="sort-group-toggle" title="Toggle grouping items by mod name">
+                        <input type="checkbox" id="group-by-mod-toggle" checked onchange="toggleInventoryGroupByMod(this.checked)">
+                        <span>Group Mods</span>
+                    </label>
+                    <div class="group-expand-collapse-actions" id="group-actions-wrapper">
+                        <button class="btn-group-action" id="btn-expand-all" title="Expand All Mod Groups" onclick="expandAllInventoryMods()">
+                            <span>&#x229E; Expand All</span>
+                        </button>
+                        <button class="btn-group-action" id="btn-collapse-all" title="Collapse All Mod Groups" onclick="collapseAllInventoryMods()">
+                            <span>&#x229F; Collapse All</span>
+                        </button>
+                    </div>
                     <div class="inventory-weight-stat">
                         <span class="stat-label">Weight:</span>
                         <span class="stat-value" id="stat-carry-weight">0 / 300</span>
@@ -101,27 +117,36 @@
                 </div>
             </div>
 
-            <div class="panel-body-scrollable">
+            <div class="panel-body-scrollable" id="inventory-body-scrollable">
                 <div class="inventory-items-grid" id="inventory-items-grid"></div>
             </div>
 
             <div class="item-inspection-card" id="item-inspection-card">
-                <div class="inspect-header">
-                    <div class="inspect-type-badge" id="inspect-type-tag">ARMOR</div>
-                    <div class="inspect-title" id="inspect-title-text">Select an item</div>
-                </div>
-                <div class="inspect-stats-grid">
-                    <div class="stat-box">
-                        <span class="lbl" id="stat-primary-lbl">Armor</span>
-                        <span class="val" id="stat-primary-val">0</span>
+                <div class="inspect-main-content">
+                    <div class="inspect-preview-frame" id="inspect-preview-frame">
+                        <img id="inspect-preview-img" class="inspect-preview-img" src="" alt="" style="display:none;">
+                        <span id="inspect-preview-placeholder" class="inspect-preview-placeholder">👗</span>
                     </div>
-                    <div class="stat-box">
-                        <span class="lbl">Weight</span>
-                        <span class="val" id="stat-weight-val">0.0</span>
-                    </div>
-                    <div class="stat-box">
-                        <span class="lbl">Value</span>
-                        <span class="val val-gold" id="stat-value-val">0g</span>
+                    <div class="inspect-details-column">
+                        <div class="inspect-meta-top">
+                            <span class="inspect-type-badge" id="inspect-type-tag">ARMOR</span>
+                            <span class="inspect-mod-source" id="inspect-mod-source">Skyrim.esm</span>
+                        </div>
+                        <div class="inspect-title" id="inspect-title-text">Select an item</div>
+                        <div class="inspect-stats-grid">
+                            <div class="stat-box">
+                                <span class="lbl" id="stat-primary-lbl">Armor</span>
+                                <span class="val val-armor" id="stat-primary-val">0</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="lbl">Weight</span>
+                                <span class="val" id="stat-weight-val">0.0</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="lbl">Value</span>
+                                <span class="val val-gold" id="stat-value-val">0g</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="inspect-enchantment-box" id="inspect-enchantment-box" style="display:none;">
@@ -141,14 +166,14 @@
                 </button>
             </div>
 
-            <div class="resize-handle resize-t" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 't')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 't')"></div>
-            <div class="resize-handle resize-b" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'b')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'b')"></div>
-            <div class="resize-handle resize-l" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'l')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'l')"></div>
-            <div class="resize-handle resize-r" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'r')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'r')"></div>
-            <div class="resize-handle resize-tl" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'tl')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'tl')"></div>
-            <div class="resize-handle resize-tr" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'tr')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'tr')"></div>
-            <div class="resize-handle resize-bl" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'bl')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'bl')"></div>
-            <div class="resize-handle resize-br" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'br')" onmousedown="handlePanelResizeStart(event, 'panel-inventory', 'br')"></div>
+            <div class="resize-handle resize-t" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 't')"></div>
+            <div class="resize-handle resize-b" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'b')"></div>
+            <div class="resize-handle resize-l" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'l')"></div>
+            <div class="resize-handle resize-r" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'r')"></div>
+            <div class="resize-handle resize-tl" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'tl')"></div>
+            <div class="resize-handle resize-tr" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'tr')"></div>
+            <div class="resize-handle resize-bl" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'bl')"></div>
+            <div class="resize-handle resize-br" onpointerdown="handlePanelResizeStart(event, 'panel-inventory', 'br')"></div>
         </section>
 
         <section id="panel-viewport" class="center-stage-viewport edit-only"></section>
@@ -257,14 +282,14 @@
                 </div>
             </div>
 
-            <div class="resize-handle resize-t" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 't')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 't')"></div>
-            <div class="resize-handle resize-b" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'b')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'b')"></div>
-            <div class="resize-handle resize-l" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'l')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'l')"></div>
-            <div class="resize-handle resize-r" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'r')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'r')"></div>
-            <div class="resize-handle resize-tl" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'tl')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'tl')"></div>
-            <div class="resize-handle resize-tr" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'tr')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'tr')"></div>
-            <div class="resize-handle resize-bl" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'bl')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'bl')"></div>
-            <div class="resize-handle resize-br" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'br')" onmousedown="handlePanelResizeStart(event, 'right-dock-container', 'br')"></div>
+            <div class="resize-handle resize-t" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 't')"></div>
+            <div class="resize-handle resize-b" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'b')"></div>
+            <div class="resize-handle resize-l" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'l')"></div>
+            <div class="resize-handle resize-r" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'r')"></div>
+            <div class="resize-handle resize-tl" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'tl')"></div>
+            <div class="resize-handle resize-tr" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'tr')"></div>
+            <div class="resize-handle resize-bl" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'bl')"></div>
+            <div class="resize-handle resize-br" onpointerdown="handlePanelResizeStart(event, 'right-dock-container', 'br')"></div>
         </section>
     </main>
 
@@ -352,6 +377,18 @@
                         <span id="dd-gp-play-text" style="display:none;">LB</span>
                         <button type="button" id="btn-gp-play-key" class="keybind-btn" onclick="startGamepadListen('play')">[DPad Right]</button>
                     </div>
+            <div class="settings-section">
+                <h4>Backup &amp; Restoration</h4>
+                <p style="font-size: 11px; color: #a0aec0; margin: 0 0 8px 0; line-height: 1.4;">
+                    Export your wheels and slot configurations to a backup file in <code>Data/SKSE/Plugins/backups/</code>, or restore a previous backup.
+                </p>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn-secondary" onclick="exportConfiguration()" style="flex: 1; padding: 6px 12px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <span>📥</span> Export Backup
+                    </button>
+                    <button type="button" class="btn-secondary" onclick="importConfiguration()" style="flex: 1; padding: 6px 12px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <span>📤</span> Restore Backup
+                    </button>
                 </div>
             </div>
         </div>

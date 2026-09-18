@@ -70,7 +70,6 @@ const ALL_CONDITIONS_LIST = [
     { id: "mount", label: "Mounting", cat: "action" },
 
     { id: "world", label: "World (Adventure)", cat: "generic" },
-    { id: "adventure", label: "Adventure", cat: "generic" },
     { id: "town", label: "Town", cat: "generic" },
     { id: "city", label: "City", cat: "generic" },
     { id: "day", label: "Day", cat: "modifier" },
@@ -152,15 +151,33 @@ function showSlotContextMenu(x, y, slotIndex) {
         }
     }
 
-    let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
-    let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
-
-    posX = Math.max(10, Math.min(posX, window.innerWidth - 200));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 260));
-
-    menu.style.left = posX + 'px';
-    menu.style.top = posY + 'px';
-    menu.style.display = 'flex';
+    if (typeof positionContextMenu === 'function') {
+        positionContextMenu(menu, x, y);
+    } else if (typeof window.positionContextMenu === 'function') {
+        window.positionContextMenu(menu, x, y);
+    } else {
+        const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+        menu.style.visibility = 'hidden';
+        menu.style.display = 'flex';
+        const menuW = menu.offsetWidth || 180;
+        const menuH = menu.offsetHeight || 260;
+        const rawVw = window.innerWidth || (document.documentElement ? document.documentElement.clientWidth : 1920) || 1920;
+        const rawVh = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 1080) || 1080;
+        const vw = rawVw / scale;
+        const vh = rawVh / scale;
+        let posX = (typeof x === 'number' && !isNaN(x)) ? (x / scale) : (vw / 2);
+        let posY = (typeof y === 'number' && !isNaN(y)) ? (y / scale) : (vh / 2);
+        if (posX + menuW > vw - 15) posX = Math.max(15, posX - menuW);
+        if (posY + menuH > vh - 15) {
+            if (posY - menuH >= 15) posY = posY - menuH;
+            else posY = Math.max(15, vh - menuH - 15);
+        }
+        posX = Math.max(15, Math.min(posX, Math.max(15, vw - menuW - 15)));
+        posY = Math.max(15, Math.min(posY, Math.max(15, vh - menuH - 15)));
+        menu.style.left = Math.round(posX) + 'px';
+        menu.style.top = Math.round(posY) + 'px';
+        menu.style.visibility = 'visible';
+    }
     lastMenuOpenTime = now;
 }
 
@@ -202,15 +219,33 @@ function showWheelContextMenu(x, y) {
 
     hideAllMenus();
 
-    let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
-    let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
-
-    posX = Math.max(10, Math.min(posX, window.innerWidth - 200));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 200));
-
-    menu.style.left = posX + 'px';
-    menu.style.top = posY + 'px';
-    menu.style.display = 'flex';
+    if (typeof positionContextMenu === 'function') {
+        positionContextMenu(menu, x, y);
+    } else if (typeof window.positionContextMenu === 'function') {
+        window.positionContextMenu(menu, x, y);
+    } else {
+        const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+        menu.style.visibility = 'hidden';
+        menu.style.display = 'flex';
+        const menuW = menu.offsetWidth || 180;
+        const menuH = menu.offsetHeight || 200;
+        const rawVw = window.innerWidth || (document.documentElement ? document.documentElement.clientWidth : 1920) || 1920;
+        const rawVh = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 1080) || 1080;
+        const vw = rawVw / scale;
+        const vh = rawVh / scale;
+        let posX = (typeof x === 'number' && !isNaN(x)) ? (x / scale) : (vw / 2);
+        let posY = (typeof y === 'number' && !isNaN(y)) ? (y / scale) : (vh / 2);
+        if (posX + menuW > vw - 15) posX = Math.max(15, posX - menuW);
+        if (posY + menuH > vh - 15) {
+            if (posY - menuH >= 15) posY = posY - menuH;
+            else posY = Math.max(15, vh - menuH - 15);
+        }
+        posX = Math.max(15, Math.min(posX, Math.max(15, vw - menuW - 15)));
+        posY = Math.max(15, Math.min(posY, Math.max(15, vh - menuH - 15)));
+        menu.style.left = Math.round(posX) + 'px';
+        menu.style.top = Math.round(posY) + 'px';
+        menu.style.visibility = 'visible';
+    }
     lastMenuOpenTime = now;
 }
 
@@ -801,3 +836,24 @@ if (typeof window.closeAllDropdowns === 'undefined') {
     };
 }
 var closeAllDropdowns = window.closeAllDropdowns;
+
+function exportConfiguration() {
+    if (window.Prisma && typeof window.Prisma.call === 'function') {
+        window.Prisma.call('ExportConfig', '{}');
+    } else {
+        console.log('[OutfitWheeler] ExportConfig requested in test/mock mode');
+    }
+}
+
+function importConfiguration() {
+    if (window.Prisma && typeof window.Prisma.call === 'function') {
+        window.Prisma.call('ImportConfig', JSON.stringify({ path: 'Data/SKSE/Plugins/PrismaOutfitWheel.json.bak' }));
+    } else {
+        console.log('[OutfitWheeler] ImportConfig requested in test/mock mode');
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.exportConfiguration = exportConfiguration;
+    window.importConfiguration = importConfiguration;
+}
