@@ -53,13 +53,36 @@ function createFullFrontendEnvironment() {
                     }
                 }
             },
+            get className() { return Array.from(this.classList.classes).join(' '); },
+            set className(v) {
+                this.classList.classes.clear();
+                if (typeof v === 'string') {
+                    v.split(/\s+/).forEach(c => { if (c) this.classList.classes.add(c); });
+                }
+            },
             attributes: {},
             children: [],
+            get innerHTML() { return this._html || ''; },
+            set innerHTML(v) {
+                this._html = v;
+                if (!v || v === '') this.children = [];
+            },
             getAttribute(k) { return this.attributes[k] || null; },
             setAttribute(k, v) { this.attributes[k] = String(v); },
             appendChild(child) {
-                if (child) child.parentNode = this;
-                this.children.push(child);
+                if (child) {
+                    if (child.tagName === 'FRAGMENT') {
+                        const fragChildren = [...child.children];
+                        child.children = [];
+                        fragChildren.forEach(c => {
+                            c.parentNode = this;
+                            this.children.push(c);
+                        });
+                        return child;
+                    }
+                    child.parentNode = this;
+                    this.children.push(child);
+                }
                 return child;
             },
             removeChild(child) {
@@ -111,7 +134,6 @@ function createFullFrontendEnvironment() {
             setPointerCapture() {},
             releasePointerCapture() {},
             innerText: '',
-            innerHTML: '',
             value: '',
             checked: false,
             offsetWidth: 400,
@@ -189,6 +211,7 @@ function createFullFrontendEnvironment() {
     const windowMock = {
         innerWidth: 1920,
         innerHeight: 1080,
+        screen: { width: 1920, height: 1080 },
         localStorage: localStorageMock,
         document: documentMock,
         navigator: { getGamepads: () => [] },
@@ -633,7 +656,7 @@ runTest('12. Text Typing Mode & Input Focus Protection', () => {
     assert.strictEqual(env.interopCalls['SetTypingMode'].typing, false);
 });
 
-runTest('13. Multi-Resolution UI Scaling and Ghost Math at 1.75x', () => {
+runTest('13. Multi-Resolution UI Scaling, Dynamic Flip/Clamp and Direct Coordinates', () => {
     env.onUiScaleChange(1.75);
     assert.strictEqual(env.storage['outfit_wheeler_ui_scale'], '1.75');
     assert.strictEqual(env.interopCalls['SaveSettings'].uiScale, 1.75);
@@ -643,11 +666,97 @@ runTest('13. Multi-Resolution UI Scaling and Ghost Math at 1.75x', () => {
 
     const rawX = 1400;
     const rawY = 700;
-    const pointX = (scale !== 1.0) ? (rawX / scale) : rawX;
-    const pointY = (scale !== 1.0) ? (rawY / scale) : rawY;
+    const pointX = rawX / scale;
+    const pointY = rawY / scale;
+    assert.strictEqual(Math.round(pointX * scale), 1400);
+    assert.strictEqual(Math.round(pointY * scale), 700);
 
-    assert.strictEqual(pointX, 800);
-    assert.strictEqual(pointY, 400);
+    const mockMenu = env.document.createElement('div');
+    mockMenu.offsetWidth = 180;
+    mockMenu.offsetHeight = 300;
+    env.window.innerWidth = 3840;
+    env.window.innerHeight = 2160;
+
+    env.positionContextMenu(mockMenu, 3800, 2100);
+    const expectedLeft = Math.round((3800 / scale) - 180);
+    const expectedTop = Math.round((2100 / scale) - 300);
+    assert.strictEqual(parseInt(mockMenu.style.left, 10), expectedLeft);
+    assert.strictEqual(parseInt(mockMenu.style.top, 10), expectedTop);
+
+    env.storage['outfit_wheeler_ui_scale'] = null;
+    delete env.storage['outfit_wheeler_ui_scale'];
+    env.currentWheelData.uiScale = undefined;
+
+    env.window.screen = { width: 3840, height: 2160 };
+    assert.strictEqual(env.getUiScale(), 1.75);
+
+    env.window.screen = { width: 2560, height: 1440 };
+    assert.strictEqual(env.getUiScale(), 1.25);
+
+    env.window.screen = { width: 1920, height: 1080 };
+    assert.strictEqual(env.getUiScale(), 1.0);
+
+    const initialSlotCount = env.currentWheelData.slots.length;
+    env.addSlot();
+    assert.strictEqual(env.currentWheelData.slots.length, initialSlotCount + 1);
+});
+
+runTest('14. Inventory Mod Grouping, Default Collapse and Dynamic In-Place Expansion', () => {
+    env.currentWheelData = {
+        inventory: [
+            { name: 'Item A1', modName: 'ModA.esp', category: 'ARMORS', rawID: 1 },
+            { name: 'Item A2', modName: 'ModA.esp', category: 'ARMORS', rawID: 2 },
+            { name: 'Item B1', modName: 'ModB.esp', category: 'ARMORS', rawID: 3 },
+            { name: 'Item B2', modName: 'ModB.esp', category: 'ARMORS', rawID: 4 },
+            { name: 'Item C1', modName: 'ModC.esp', category: 'ARMORS', rawID: 5 }
+        ],
+        playerInventory: [],
+        cloudInventory: [],
+        followerInventory: [],
+        followers: []
+    };
+    env.currentWheelData.playerInventory = env.currentWheelData.inventory;
+    env.activeInventorySource = '0x00000007';
+    env.inventoryGroupByMod = true;
+    env.expandedInventoryMods.clear();
+    env.collapsedInventoryMods.clear();
+
+    env.renderInventoryList();
+
+    const grid = env.document.getElementById('inventory-items-grid');
+    assert.strictEqual(grid.children.length, 3);
+
+    const secA = grid.children[0];
+    const secB = grid.children[1];
+    const secC = grid.children[2];
+
+    assert.strictEqual(secA.classList.contains('collapsed'), false);
+    assert.strictEqual(secA.children[1].children.length, 2);
+
+    assert.strictEqual(secB.classList.contains('collapsed'), false);
+    assert.strictEqual(secB.children[1].children.length, 2);
+
+    assert.strictEqual(secC.classList.contains('collapsed'), false);
+    assert.strictEqual(secC.children[1].children.length, 1);
+
+    env.collapseAllInventoryMods();
+    assert.strictEqual(grid.children[0].classList.contains('collapsed'), true);
+    assert.strictEqual(grid.children[1].classList.contains('collapsed'), true);
+    assert.strictEqual(grid.children[2].classList.contains('collapsed'), true);
+
+    env.expandAllInventoryMods();
+    assert.strictEqual(grid.children[0].classList.contains('collapsed'), false);
+    assert.strictEqual(grid.children[1].classList.contains('collapsed'), false);
+    assert.strictEqual(grid.children[2].classList.contains('collapsed'), false);
+
+    env.toggleInventoryModCollapse('ModB.esp');
+    assert.strictEqual(grid.children[1].classList.contains('collapsed'), true);
+
+    env.handleInventorySearch('ModB');
+    const gridSearch = env.document.getElementById('inventory-items-grid');
+    assert.strictEqual(gridSearch.children.length, 1);
+    assert.strictEqual(gridSearch.children[0].getAttribute('data-mod-name'), 'ModB.esp');
+    env.clearInventorySearch();
 });
 
 console.log(`\n========================================`);

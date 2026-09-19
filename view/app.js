@@ -226,14 +226,22 @@ window.addEventListener('resize', () => {
     if (typeof updateWheelUI === 'function') updateWheelUI();
 });
 
+function getAutoResolutionScaleValue() {
+    const h = (typeof window !== 'undefined' && window.screen && window.screen.height > 0) ? window.screen.height : ((typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 1080);
+    if (h >= 2000) return 1.75;
+    if (h >= 1300) return 1.25;
+    return 1.0;
+}
+
 function getUiScale() {
+    const rawStored = typeof safeGetStorage === 'function' ? safeGetStorage('outfit_wheeler_ui_scale', '') : (typeof localStorage !== 'undefined' ? localStorage.getItem('outfit_wheeler_ui_scale') : null);
+    const stored = parseFloat(rawStored);
+    if (!isNaN(stored) && stored >= 0.5 && stored <= 3.0) return stored;
     if (currentWheelData && currentWheelData.uiScale !== undefined) {
         const s = parseFloat(currentWheelData.uiScale);
-        if (!isNaN(s) && s >= 0.5 && s <= 3.0) return s;
+        if (!isNaN(s) && s >= 0.5 && s <= 3.0 && Math.abs(s - 1.0) > 0.001) return s;
     }
-    const stored = parseFloat(localStorage.getItem('outfit_wheeler_ui_scale'));
-    if (!isNaN(stored) && stored >= 0.5 && stored <= 3.0) return stored;
-    return 1.0;
+    return getAutoResolutionScaleValue();
 }
 
 function applyAutoResolutionScale(force) {
@@ -446,6 +454,45 @@ function hideAllMenus(e) {
     if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
 }
 
+function positionContextMenu(menu, x, y) {
+    if (!menu) return;
+    menu.style.visibility = 'hidden';
+    menu.style.display = 'flex';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+
+    const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+    const menuW = menu.offsetWidth || 180;
+    const menuH = menu.offsetHeight || 220;
+
+    const rawVw = window.innerWidth || (document.documentElement ? document.documentElement.clientWidth : 1920) || 1920;
+    const rawVh = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 1080) || 1080;
+    const vw = rawVw / scale;
+    const vh = rawVh / scale;
+
+    let posX = (typeof x === 'number' && !isNaN(x)) ? (x / scale) : (vw / 2);
+    let posY = (typeof y === 'number' && !isNaN(y)) ? (y / scale) : (vh / 2);
+
+    if (posX + menuW > vw - 15) {
+        posX = Math.max(15, posX - menuW);
+    }
+    if (posY + menuH > vh - 15) {
+        if (posY - menuH >= 15) {
+            posY = posY - menuH;
+        } else {
+            posY = Math.max(15, vh - menuH - 15);
+        }
+    }
+
+    posX = Math.max(15, Math.min(posX, Math.max(15, vw - menuW - 15)));
+    posY = Math.max(15, Math.min(posY, Math.max(15, vh - menuH - 15)));
+
+    menu.style.left = Math.round(posX) + 'px';
+    menu.style.top = Math.round(posY) + 'px';
+    menu.style.visibility = 'visible';
+}
+window.positionContextMenu = positionContextMenu;
+
 function isAnyModalOpen() {
     const modalIds = ['rename-modal', 'context-modal'];
     for (let id of modalIds) {
@@ -541,13 +588,14 @@ window.openWheel = function(argument) {
 
     const storedUiScale = parseFloat(safeGetStorage('outfit_wheeler_ui_scale', ''));
     if (!isNaN(storedUiScale) && storedUiScale >= 0.5 && storedUiScale <= 3.0) {
-        if (currentWheelData.uiScale === undefined || currentWheelData.uiScale === 1.0) {
-            currentWheelData.uiScale = storedUiScale;
+        currentWheelData.uiScale = storedUiScale;
+    } else {
+        const autoScale = getAutoResolutionScaleValue();
+        if (currentWheelData.uiScale === undefined || Math.abs(currentWheelData.uiScale - 1.0) < 0.001) {
+            currentWheelData.uiScale = autoScale;
         } else {
             safeSetStorage('outfit_wheeler_ui_scale', String(currentWheelData.uiScale));
         }
-    } else if (currentWheelData.uiScale !== undefined) {
-        safeSetStorage('outfit_wheeler_ui_scale', String(currentWheelData.uiScale));
     }
 
     const storedInvSort = safeGetStorage('outfit_wheeler_inv_sort', '');
@@ -663,6 +711,9 @@ window.openWheel = function(argument) {
             wrapper.style.pointerEvents = 'auto';
             void wrapper.offsetHeight;
         }
+        requestAnimationFrame(() => {
+            updateVisibleThumbnailsPriority();
+        });
     }
 };
 
@@ -1081,13 +1132,29 @@ function initGlobalInputHandlers() {
                 e.stopPropagation();
 
                 const itemMenu = document.getElementById('item-context-menu');
-                const itemNameEl = itemElem.querySelector('.item-name-text');
-                const itemName = itemNameEl ? itemNameEl.innerText.trim() : '';
-
+                const rawIdStr = itemElem.getAttribute('data-raw-id');
+                const formIdStr = itemElem.getAttribute('data-form-id');
+                const uniqueIdStr = itemElem.getAttribute('data-unique-id');
                 const inv = getInventoryBySourceId(activeInventorySource);
-                const matchedItem = inv.find(x => x.name === itemName) || inspectedItemObject;
+                let matchedItem = null;
+                if (rawIdStr !== null) {
+                    const rId = parseInt(rawIdStr, 10);
+                    matchedItem = inv.find(x => x.rawID === rId);
+                }
+                if (!matchedItem && uniqueIdStr !== null) {
+                    const uId = parseInt(uniqueIdStr, 10);
+                    matchedItem = inv.find(x => x.uniqueID === uId);
+                }
+                if (!matchedItem && formIdStr) {
+                    matchedItem = inv.find(x => x.id === formIdStr);
+                }
+                if (!matchedItem) {
+                    const itemNameEl = itemElem.querySelector('.item-name-text');
+                    const itemName = itemNameEl ? itemNameEl.innerText.trim() : '';
+                    matchedItem = inv.find(x => x.name === itemName) || inspectedItemObject;
+                }
 
-                if (itemMenu && itemMenu.style.display === 'flex' && inspectedItemObject && (inspectedItemObject.name === itemName || (matchedItem && inspectedItemObject.rawID === matchedItem.rawID))) {
+                if (itemMenu && itemMenu.style.display === 'flex' && inspectedItemObject && matchedItem && (inspectedItemObject.rawID === matchedItem.rawID || inspectedItemObject === matchedItem)) {
                     hideAllMenus();
                     return;
                 }
@@ -1287,8 +1354,9 @@ function initWheelCenterInteraction() {
     window.addEventListener('mousemove', (e) => {
         if (!isDraggingWheelCenter) return;
 
-        const dx = e.clientX - wheelDragStartX;
-        const dy = e.clientY - wheelDragStartY;
+        const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+        const dx = (e.clientX - wheelDragStartX) / scale;
+        const dy = (e.clientY - wheelDragStartY) / scale;
         if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
             wheelDragMoved = true;
         }
@@ -1429,11 +1497,32 @@ function addWheel() {
 }
 
 function addSlot() {
-    if (typeof window.AddSlot === 'function' && currentWheelData) {
-        window.AddSlot(JSON.stringify({
-            editMode: isEditModeActive(),
-            contextTag: activeWheelContextFilter && activeWheelContextFilter !== 'ALL' ? activeWheelContextFilter : ""
-        }));
+    if (currentWheelData) {
+        if (!Array.isArray(currentWheelData.slots)) {
+            currentWheelData.slots = [];
+        }
+        const newIndex = currentWheelData.slots.length;
+        const newSlot = {
+            index: newIndex,
+            name: "Slot " + (newIndex + 1),
+            hasOutfit: true,
+            isInWardrobe: false,
+            items: [],
+            conditions: []
+        };
+        currentWheelData.slots.push(newSlot);
+
+        if (typeof updateWheelUI === 'function') updateWheelUI();
+        if (typeof renderSlotsRail === 'function') renderSlotsRail();
+        if (typeof renderDrawerDetails === 'function') renderDrawerDetails();
+
+        if (typeof window.AddSlot === 'function') {
+            window.AddSlot(JSON.stringify({
+                editMode: isEditModeActive(),
+                contextTag: activeWheelContextFilter && activeWheelContextFilter !== 'ALL' ? activeWheelContextFilter : ""
+            }));
+        }
+        showSaveToast("Slot " + (newIndex + 1) + " Added");
     }
 }
 
@@ -1482,16 +1571,15 @@ function savePanelsLayout() {
     if (!isEditModeActive() || isClassicEditMode()) return;
     const panelIds = ['panel-inventory', 'right-dock-container'];
     const layout = {};
-    const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
     panelIds.forEach(id => {
         const el = document.getElementById(id);
         if (el && el.offsetWidth > 100 && el.offsetHeight > 100) {
             const rect = el.getBoundingClientRect();
             if (rect.width > 100 && rect.height > 100) {
-                const w = Math.round(rect.width / scale);
-                const h = Math.round(rect.height / scale);
-                const l = Math.round(rect.left / scale);
-                const t = Math.round(rect.top / scale);
+                const w = Math.round(rect.width);
+                const h = Math.round(rect.height);
+                const l = Math.round(rect.left);
+                const t = Math.round(rect.top);
 
                 if (id === 'right-dock-container') {
                     if (w < 440 || l < 340) return;
@@ -1523,9 +1611,8 @@ function loadPanelsLayout() {
         localStorage.removeItem('outfit_wheeler_panel_layout_v3');
         localStorage.removeItem('outfit_wheeler_panel_layout_v4');
         const raw = localStorage.getItem('outfit_wheeler_panel_layout_v5');
-        const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-        const screenW = Math.round(window.innerWidth / scale);
-        const screenH = Math.round(window.innerHeight / scale);
+        const screenW = window.innerWidth || 1920;
+        const screenH = window.innerHeight || 1080;
 
         const panelIds = ['panel-inventory', 'right-dock-container'];
         panelIds.forEach(id => {
@@ -1775,9 +1862,9 @@ function initDraggablePanels() {
                 const panel = document.getElementById(activeDragPanelId);
                 if (!panel) return;
 
-                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-                const screenW = Math.round(window.innerWidth / scale);
-                const screenH = Math.round(window.innerHeight / scale);
+                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+                const screenW = (window.innerWidth || 1920) / scale;
+                const screenH = (window.innerHeight || 1080) / scale;
                 const panelW = panel.offsetWidth;
                 const panelH = panel.offsetHeight;
 
@@ -1806,10 +1893,10 @@ function initDraggablePanels() {
                 document.querySelectorAll('.draggable-panel').forEach(other => {
                     if (other.id === activeDragPanelId || other.id === 'panel-settings' || other.style.display === 'none') return;
                     const oRect = other.getBoundingClientRect();
-                    const oLeft = oRect.left / scale;
-                    const oRight = oRect.right / scale;
-                    const oTop = oRect.top / scale;
-                    const oBottom = oRect.bottom / scale;
+                    const oLeft = oRect.left;
+                    const oRight = oRect.right;
+                    const oTop = oRect.top;
+                    const oBottom = oRect.bottom;
 
                     if (Math.abs(snappedLeft - oLeft) < SNAP_THRESHOLD) {
                         snappedLeft = oLeft;
@@ -1880,10 +1967,10 @@ function startPanelDrag(e, panelId) {
     const panel = document.getElementById(panelId);
     if (panel) {
         panel.classList.add('is-dragging');
-        const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+        const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
         const rect = panel.getBoundingClientRect();
-        panelStartLeft = rect.left / scale;
-        panelStartTop = rect.top / scale;
+        panelStartLeft = (typeof panel.offsetLeft === 'number' && !isNaN(panel.offsetLeft) && panel.offsetLeft > 0) ? panel.offsetLeft : (rect.left / scale);
+        panelStartTop = (typeof panel.offsetTop === 'number' && !isNaN(panel.offsetTop) && panel.offsetTop > 0) ? panel.offsetTop : (rect.top / scale);
         panel.style.position = 'fixed';
         panel.style.left = Math.round(panelStartLeft) + 'px';
         panel.style.top = Math.round(panelStartTop) + 'px';
@@ -1919,11 +2006,11 @@ function handlePanelResizeMove(e) {
             const panel = document.getElementById(activeResizePanelId);
             if (!panel) return;
 
-            const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+            const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
             const dx = (resizeCurrentClientX - resizeStartX) / scale;
             const dy = (resizeCurrentClientY - resizeStartY) / scale;
-            const screenW = Math.round(window.innerWidth / scale);
-            const screenH = Math.round(window.innerHeight / scale);
+            const screenW = (window.innerWidth || 1920) / scale;
+            const screenH = (window.innerHeight || 1080) / scale;
 
             let newW = panelStartWidth;
             let newH = panelStartHeight;
@@ -1993,6 +2080,7 @@ function endPanelResize(e) {
 
 function handlePanelResizeStart(e, panelId, dir) {
     if (e.button !== 0) return;
+    if (activeResizePanelId) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -2008,18 +2096,16 @@ function handlePanelResizeStart(e, panelId, dir) {
     document.querySelectorAll('.is-resizing').forEach(el => el.classList.remove('is-resizing'));
     panel.classList.add('is-resizing');
 
-    const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-    const rect = panel.getBoundingClientRect();
-    panelStartLeft = rect.left / scale;
-    panelStartTop = rect.top / scale;
-    panelStartWidth = rect.width / scale;
-    panelStartHeight = rect.height / scale;
+    panelStartWidth = panel.offsetWidth;
+    panelStartHeight = panel.offsetHeight;
+    panelStartLeft = panel.offsetLeft;
+    panelStartTop = panel.offsetTop;
 
     panel.style.position = 'fixed';
-    panel.style.left = Math.round(panelStartLeft) + 'px';
-    panel.style.top = Math.round(panelStartTop) + 'px';
-    panel.style.width = Math.round(panelStartWidth) + 'px';
-    panel.style.height = Math.round(panelStartHeight) + 'px';
+    panel.style.left = panelStartLeft + 'px';
+    panel.style.top = panelStartTop + 'px';
+    panel.style.width = panelStartWidth + 'px';
+    panel.style.height = panelStartHeight + 'px';
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
     panel.style.maxWidth = 'none';
@@ -2084,7 +2170,7 @@ function initSlotsRailResizer() {
             railRafId = requestAnimationFrame(() => {
                 railRafId = null;
                 if (!isResizingRail) return;
-                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
+                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
                 const dx = (currentClientX - railStartX) / scale;
                 const newWidth = Math.max(85, Math.min(220, railStartWidth + dx));
                 rail.style.width = newWidth + 'px';
@@ -2129,9 +2215,9 @@ function initCustomItemDragDrop() {
             }
 
             if (isItemDragging && dragGhostElement) {
-                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
-                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+                const pointX = e.clientX / scale;
+                const pointY = e.clientY / scale;
                 dragGhostElement.style.left = (pointX + 12) + 'px';
                 dragGhostElement.style.top = (pointY + 12) + 'px';
 
@@ -2173,9 +2259,9 @@ function initCustomItemDragDrop() {
             }
 
             if (isSlotDragging && slotDragGhostElement) {
-                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
-                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+                const pointX = e.clientX / scale;
+                const pointY = e.clientY / scale;
                 slotDragGhostElement.style.left = (pointX + 12) + 'px';
                 slotDragGhostElement.style.top = (pointY + 12) + 'px';
 
@@ -2195,9 +2281,9 @@ function initCustomItemDragDrop() {
     window.addEventListener('mouseup', (e) => {
         if (activeDraggedItem) {
             if (isItemDragging) {
-                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
-                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+                const pointX = e.clientX / scale;
+                const pointY = e.clientY / scale;
                 const elemBelow = document.elementFromPoint(pointX, pointY);
                 if (elemBelow) {
                     const targetSlotCard = safeClosest(elemBelow, '.vertical-slot-card');
@@ -2309,9 +2395,9 @@ function initCustomItemDragDrop() {
 
         if (activeDraggedSlotIndex !== null) {
             if (isSlotDragging) {
-                const scale = (typeof getUiScale === 'function' ? getUiScale() : 1) || 1;
-                const pointX = (scale !== 1.0) ? (e.clientX / scale) : e.clientX;
-                const pointY = (scale !== 1.0) ? (e.clientY / scale) : e.clientY;
+                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+                const pointX = e.clientX / scale;
+                const pointY = e.clientY / scale;
                 const elemBelow = document.elementFromPoint(pointX, pointY);
                 if (elemBelow) {
                     const targetCard = safeClosest(elemBelow, '.vertical-slot-card');
@@ -2494,6 +2580,10 @@ function cycleInvSource(delta) {
 }
 
 function setInventorySource(sourceId) {
+    if (activeInventorySource !== sourceId) {
+        expandedInventoryMods.clear();
+        collapsedInventoryMods.clear();
+    }
     activeInventorySource = sourceId;
     renderInventorySourceStrip();
     renderInventoryList();
@@ -2534,6 +2624,27 @@ function renderInventorySourceStrip() {
         fragment.appendChild(btn);
     });
     strip.appendChild(fragment);
+}
+
+function matchesInventorySearch(item, query) {
+    if (!query) return true;
+    const q = (query || '').toLowerCase().trim();
+    if (!q) return true;
+
+    const name = (item.name || '').toLowerCase();
+    const customName = (item.customName || '').toLowerCase();
+    const type = (item.type || '').toLowerCase();
+    const category = (item.category || '').toLowerCase();
+    const armorClass = (item.armorClass || '').toLowerCase();
+    const modName = (item.modName || '').toLowerCase();
+    const cleanMod = modName.replace(/\.(esp|esm|esl)$/i, '').replace(/[_\-\.]+/g, ' ').trim();
+
+    const fullItemText = name + ' ' + customName + ' ' + type + ' ' + category + ' ' + armorClass + ' ' + modName + ' ' + cleanMod;
+
+    const tokens = q.replace(/[_\-\.]+/g, ' ').split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length === 0) return true;
+
+    return tokens.every(token => fullItemText.includes(token));
 }
 
 function handleInventorySearch(val) {
@@ -2578,25 +2689,126 @@ function getClassOrderWeight(item) {
     return 4;
 }
 
-function renderInventoryList() {
-    const grid = document.getElementById('inventory-items-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
+var inventoryViewMode = 'grid';
+var inventoryGroupByMod = true;
+var collapsedInventoryMods = new Set();
+var expandedInventoryMods = new Set();
 
+function setInventoryViewMode(mode) {
+    inventoryViewMode = mode;
+    const btnGrid = document.getElementById('btn-inv-grid-mode');
+    const btnList = document.getElementById('btn-inv-list-mode');
+    if (btnGrid) btnGrid.classList.toggle('active', mode === 'grid');
+    if (btnList) btnList.classList.toggle('active', mode === 'list');
+    renderInventoryList();
+}
+
+function toggleInventoryGroupByMod(checked) {
+    inventoryGroupByMod = checked;
+    renderInventoryList();
+}
+
+function expandAllInventoryMods() {
+    collapsedInventoryMods.clear();
     const inv = getInventoryBySourceId(activeInventorySource);
-    const srcUpper = activeInventorySource.toUpperCase();
-
-    let items = inv.filter(item => {
-        if (!item.name || item.name.trim().length === 0) return false;
-        if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
-        if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
-        if (inventorySearchQuery) {
-            return (item.name || '').toLowerCase().includes(inventorySearchQuery) || (item.type || '').toLowerCase().includes(inventorySearchQuery);
-        }
-        return true;
+    inv.forEach(it => {
+        const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
+        expandedInventoryMods.add(m);
     });
+    renderInventoryList();
+}
 
-    items.sort((a, b) => {
+function collapseAllInventoryMods() {
+    expandedInventoryMods.clear();
+    const inv = getInventoryBySourceId(activeInventorySource);
+    inv.forEach(it => {
+        const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
+        collapsedInventoryMods.add(m);
+    });
+    renderInventoryList();
+}
+
+function toggleInventoryModCollapse(modName) {
+    const isNowCollapsed = expandedInventoryMods.has(modName);
+    if (isNowCollapsed) {
+        expandedInventoryMods.delete(modName);
+        collapsedInventoryMods.add(modName);
+    } else {
+        expandedInventoryMods.add(modName);
+        collapsedInventoryMods.delete(modName);
+    }
+
+    let sec = null;
+    const grid = document.getElementById('inventory-items-grid');
+    if (grid && grid.children) {
+        for (let i = 0; i < grid.children.length; ++i) {
+            const child = grid.children[i];
+            if (child.getAttribute && child.getAttribute('data-mod-name') === modName) {
+                sec = child;
+                break;
+            }
+        }
+    }
+
+    if (!sec && typeof document.querySelectorAll === 'function') {
+        const sections = document.querySelectorAll('.mod-group-section');
+        for (let i = 0; i < sections.length; ++i) {
+            if (sections[i].getAttribute && sections[i].getAttribute('data-mod-name') === modName) {
+                sec = sections[i];
+                break;
+            }
+        }
+    }
+
+    if (sec) {
+        if (isNowCollapsed) {
+            sec.classList.add('collapsed');
+        } else {
+            sec.classList.remove('collapsed');
+            let gridContainer = null;
+            if (sec.children) {
+                for (let j = 0; j < sec.children.length; ++j) {
+                    const c = sec.children[j];
+                    if (c.classList && c.classList.contains('mod-items-grid')) {
+                        gridContainer = c;
+                        break;
+                    }
+                }
+            }
+            if (!gridContainer && typeof sec.querySelector === 'function') {
+                gridContainer = sec.querySelector('.mod-items-grid');
+            }
+            if (gridContainer && (!gridContainer.children || gridContainer.children.length === 0)) {
+                const inv = getInventoryBySourceId(activeInventorySource);
+                const srcUpper = activeInventorySource.toUpperCase();
+                const targetModLower = (modName || 'Skyrim.esm').toLowerCase();
+                const modItems = inv.filter(item => {
+                    if (!item || !item.name || item.name.trim().length === 0) return false;
+                    if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
+                    if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
+                    if (!matchesInventorySearch(item, inventorySearchQuery)) return false;
+                    const m = (item.modName && item.modName.trim().length > 0 ? item.modName : 'Skyrim.esm').toLowerCase();
+                    return m === targetModLower;
+                });
+                const sortedGroupItems = sortInventoryItems(modItems);
+                sortedGroupItems.forEach(it => {
+                    gridContainer.appendChild(createInventoryItemElement(it, srcUpper));
+                });
+                if (gridContainer.children.length === 0) {
+                    renderInventoryList();
+                    return;
+                }
+            }
+            updateVisibleThumbnailsPriority();
+        }
+        return;
+    }
+
+    renderInventoryList();
+}
+
+function sortInventoryItems(itemList) {
+    return [...itemList].sort((a, b) => {
         let diff = 0;
         if (activeInventorySort === 'name_asc') {
             diff = (a.name || '').localeCompare(b.name || '');
@@ -2629,6 +2841,285 @@ function renderInventoryList() {
         if (diff !== 0) return diff;
         return (a.name || '').localeCompare(b.name || '');
     });
+}
+
+const pendingThumbnailRequests = new Set();
+let thumbnailBatchTimeout = null;
+let visibleThumbnailsScheduled = false;
+
+function queueThumbnailRequest(rawID, highPriority = false) {
+    if (!rawID || typeof window.RequestThumbnail !== 'function') return;
+    const idNum = Number(rawID);
+    if (!idNum || idNum === 0) return;
+
+    if (highPriority) {
+        window.RequestThumbnail(JSON.stringify({ rawIDs: [idNum], highPriority: true }));
+        return;
+    }
+
+    if (pendingThumbnailRequests.has(idNum)) return;
+    pendingThumbnailRequests.add(idNum);
+
+    if (!thumbnailBatchTimeout) {
+        thumbnailBatchTimeout = setTimeout(() => {
+            thumbnailBatchTimeout = null;
+            if (pendingThumbnailRequests.size === 0) return;
+            const ids = Array.from(pendingThumbnailRequests);
+            pendingThumbnailRequests.clear();
+            window.RequestThumbnail(JSON.stringify({ rawIDs: ids, highPriority: false }));
+        }, 40);
+    }
+}
+
+let thumbnailIntersectionObserver = null;
+function observeThumbnailCard(card) {
+    if (typeof window === 'undefined' || typeof window.IntersectionObserver !== 'function') return;
+    if (!thumbnailIntersectionObserver) {
+        const scrollable = document.getElementById('inventory-body-scrollable');
+        thumbnailIntersectionObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const el = entry.target;
+                    const lazyImg = el.querySelector('.item-thumb-img[data-src]');
+                    if (lazyImg) {
+                        lazyImg.src = lazyImg.getAttribute('data-src');
+                        lazyImg.removeAttribute('data-src');
+                        lazyImg.style.display = 'block';
+                        const plc = el.querySelector('.item-thumb-placeholder');
+                        if (plc) plc.style.display = 'none';
+                    }
+                    thumbnailIntersectionObserver.unobserve(el);
+                }
+            });
+        }, { root: scrollable, rootMargin: '300px 0px' });
+    }
+    thumbnailIntersectionObserver.observe(card);
+}
+
+function updateVisibleThumbnailsPriority() {
+    if (visibleThumbnailsScheduled) return;
+    visibleThumbnailsScheduled = true;
+    requestAnimationFrame(() => {
+        visibleThumbnailsScheduled = false;
+        const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
+
+        const cards = scrollable ? scrollable.querySelectorAll('.item-card, .item-row-card') : document.querySelectorAll('.item-card, .item-row-card');
+        if (!cards || cards.length === 0) return;
+
+        const sRect = scrollable ? scrollable.getBoundingClientRect() : null;
+        const hasRect = sRect && sRect.height > 0 && sRect.width > 0;
+        const visibleHighPriIDs = [];
+        const proximityPreFetchIDs = [];
+
+        cards.forEach(card => {
+            const rawId = card.getAttribute('data-raw-id');
+            if (!rawId) return;
+
+            const cRect = hasRect ? card.getBoundingClientRect() : null;
+            const inViewport = hasRect ? (cRect.bottom >= sRect.top && cRect.top <= sRect.bottom) : true;
+            const inProximity = hasRect ? (cRect.bottom >= (sRect.top - sRect.height) && cRect.top <= (sRect.bottom + sRect.height)) : true;
+
+            if (inViewport || inProximity) {
+                const lazyImg = card.querySelector('.item-thumb-img[data-src]');
+                if (lazyImg) {
+                    lazyImg.src = lazyImg.getAttribute('data-src');
+                    lazyImg.removeAttribute('data-src');
+                    lazyImg.style.display = 'block';
+                    const plc = card.querySelector('.item-thumb-placeholder');
+                    if (plc) plc.style.display = 'none';
+                }
+            }
+
+            if (typeof window.RequestThumbnail !== 'function') return;
+
+            const img = card.querySelector('.item-thumb-img');
+            const hasThumb = (img && img.src && img.src.length > 0 && img.style.display !== 'none') || (img && img.hasAttribute && img.hasAttribute('data-src'));
+            if (hasThumb) return;
+
+            const idNum = Number(rawId);
+            if (!idNum) return;
+
+            if (inViewport) {
+                visibleHighPriIDs.push(idNum);
+            } else if (inProximity) {
+                proximityPreFetchIDs.push(idNum);
+            }
+        });
+
+        if (typeof window.RequestThumbnail === 'function') {
+            if (visibleHighPriIDs.length > 0) {
+                window.RequestThumbnail(JSON.stringify({ rawIDs: visibleHighPriIDs, highPriority: true }));
+            } else if (proximityPreFetchIDs.length > 0) {
+                const prefetchBatch = proximityPreFetchIDs.slice(0, 24);
+                window.RequestThumbnail(JSON.stringify({ rawIDs: prefetchBatch, highPriority: true }));
+            }
+        }
+    });
+}
+
+function queueAllInventoryThumbnailsBackground() {
+    if (typeof window.RequestThumbnail !== 'function') return;
+    const inv = getInventoryBySourceId(activeInventorySource);
+    if (!Array.isArray(inv) || inv.length === 0) return;
+
+    const normalIDs = [];
+    for (let i = 0; i < inv.length; ++i) {
+        const item = inv[i];
+        if (!item.thumbnail || item.thumbnail.length === 0) {
+            const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
+            if (rawIdVal && !pendingThumbnailRequests.has(rawIdVal)) {
+                normalIDs.push(Number(rawIdVal));
+                pendingThumbnailRequests.add(rawIdVal);
+                if (normalIDs.length >= 256) break;
+            }
+        }
+    }
+
+    if (normalIDs.length > 0) {
+        if (!thumbnailBatchTimeout) {
+            thumbnailBatchTimeout = setTimeout(() => {
+                thumbnailBatchTimeout = null;
+                window.RequestThumbnail(JSON.stringify({ rawIDs: normalIDs, highPriority: false }));
+                if (normalIDs.length >= 256) {
+                    queueAllInventoryThumbnailsBackground();
+                }
+            }, 60);
+        }
+    }
+}
+
+function createInventoryItemElement(item, srcUpper) {
+    const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
+    const isGrid = (inventoryViewMode === 'grid');
+    const card = document.createElement('div');
+    card.className = (isGrid ? 'item-card ' : 'item-row-card ') + (item.equipped ? 'is-equipped-item' : '');
+
+    let badgeTagsHtml = '';
+    if (item.equipped) badgeTagsHtml += '<span class="badge-tag tag-equipped" style="background:rgba(16,185,129,0.2); color:#10b981; border:1px solid #10b981; font-weight:bold;">EQUIPPED</span>';
+    if (item.source === 'CLOUD' || srcUpper === 'CLOUD') badgeTagsHtml += '<span class="badge-tag" style="background:rgba(82,165,245,0.2); color:#52a5f5; border:1px solid #52a5f5;">WARDROBE</span>';
+    if (item.tags && item.tags.includes('enchanted')) badgeTagsHtml += '<span class="badge-tag tag-enchanted">ENCH</span>';
+    if (item.tags && item.tags.includes('stolen')) badgeTagsHtml += '<span class="badge-tag tag-stolen">STOLEN</span>';
+
+    const hasThumb = (item.thumbnail && item.thumbnail.length > 0);
+    if (isGrid) {
+        const thumbHtml = hasThumb
+            ? `<img class="item-thumb-img" data-src="${item.thumbnail}" alt="" style="display:none;"><span class="item-thumb-placeholder">👗</span>`
+            : `<span class="item-thumb-placeholder">👗</span>`;
+        card.innerHTML = `
+            <span class="card-type-tag">${item.type || 'Armor'}</span>
+            <span class="card-equipped-indicator"></span>
+            <div class="item-thumb-wrapper">${thumbHtml}</div>
+            <div class="card-name-label" title="${item.name}">${item.name}</div>
+            <div class="card-stat-pill">ARM ${item.armor || 0} &bull; ${Number(item.weight || 0).toFixed(1)}w</div>
+        `;
+    } else {
+        const thumbHtml = hasThumb
+            ? `<div class="item-row-thumb-frame"><img class="item-thumb-img" data-src="${item.thumbnail}" alt="" style="display:none;"><span class="item-thumb-placeholder">👗</span></div>`
+            : `<div class="item-row-thumb-frame"><span class="item-thumb-placeholder">👗</span></div>`;
+        let statPillText = 'ARM ' + (item.armor || 0);
+        card.innerHTML = `
+            <div class="item-left-info">
+                ${thumbHtml}
+                <div class="item-meta-titles">
+                    <span class="item-name-text">${item.name}</span>
+                    <span class="item-sub-desc">${item.type || 'Apparel'} &bull; Wt ${Number(item.weight || 0).toFixed(1)} &bull; ${item.value || 0}g</span>
+                </div>
+            </div>
+            <div class="item-right-stats">
+                <div class="item-badges-strip">${badgeTagsHtml}</div>
+                <span class="item-stat-pill">${statPillText}</span>
+            </div>
+        `;
+    }
+
+    if (hasThumb && typeof observeThumbnailCard === 'function') {
+        observeThumbnailCard(card);
+    }
+
+    card.addEventListener('mousedown', (e) => {
+        if (e.button === 0) {
+            activeDraggedItem = item;
+            isItemDragging = false;
+            dragItemStartX = e.clientX;
+            dragItemStartY = e.clientY;
+        } else {
+            activeDraggedItem = null;
+            isItemDragging = false;
+            if (dragGhostElement) {
+                dragGhostElement.remove();
+                dragGhostElement = null;
+            }
+        }
+    });
+
+    card.onpointerenter = () => inspectItem(item);
+    card.onclick = () => {
+        if (typeof window.ToggleItemEquip === 'function') {
+            window.ToggleItemEquip(JSON.stringify({
+                rawID: item.rawID,
+                id: item.id,
+                uniqueID: item.uniqueID || 0,
+                enchantmentID: item.enchantmentID || 0,
+                customName: item.customName || '',
+                source: item.source || activeInventorySource
+            }));
+        }
+    };
+
+    if (rawIdVal) card.setAttribute('data-raw-id', String(rawIdVal));
+    if (item.id) card.setAttribute('data-form-id', String(item.id));
+    if (item.uniqueID !== undefined) card.setAttribute('data-unique-id', String(item.uniqueID));
+
+    card.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof showItemContextMenu === 'function') {
+            showItemContextMenu(e.clientX, e.clientY, item);
+        }
+    };
+
+    return card;
+}
+
+let inventoryRenderLimit = 48;
+
+function setupInventoryScrollChunking() {
+    const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
+    if (scrollable && !scrollable._hasChunkScroll) {
+        scrollable._hasChunkScroll = true;
+        scrollable.addEventListener('scroll', () => {
+            updateVisibleThumbnailsPriority();
+            if (!inventoryGroupByMod && scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 300) {
+                const inv = getInventoryBySourceId(activeInventorySource);
+                if (inventoryRenderLimit < inv.length) {
+                    inventoryRenderLimit += 48;
+                    renderInventoryList(true);
+                }
+            }
+        });
+    }
+}
+
+function renderInventoryList(isChunkAppend) {
+    if (!isChunkAppend) {
+        inventoryRenderLimit = 48;
+    }
+    setupInventoryScrollChunking();
+
+    const grid = document.getElementById('inventory-items-grid');
+    if (!grid) return;
+    grid.className = 'inventory-items-grid ' + (inventoryViewMode === 'grid' ? 'grid-mode' : 'list-mode');
+
+    const inv = getInventoryBySourceId(activeInventorySource);
+    const srcUpper = activeInventorySource.toUpperCase();
+
+    let items = inv.filter(item => {
+        if (!item.name || item.name.trim().length === 0) return false;
+        if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
+        if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
+        if (!matchesInventorySearch(item, inventorySearchQuery)) return false;
+        return true;
+    });
 
     const cAll = document.getElementById('count-all');
     const cArm = document.getElementById('count-armors');
@@ -2655,65 +3146,117 @@ function renderInventoryList() {
     }
 
     if (items.length === 0) {
+        grid.innerHTML = '';
         let emptyMsg = 'No apparel items found.';
         if (srcUpper === 'CLOUD') emptyMsg = 'Wardrobe Chest is empty.';
         grid.innerHTML = '<div style="font-size:10.5px; color:#64748b; text-align:center; padding:24px;">' + emptyMsg + '</div>';
         return;
     }
 
-    const fragment = document.createDocumentFragment();
+    if (items.length > 0 && !inspectedItemObject) {
+        inspectItem(items[0]);
+    }
 
-    items.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'item-row-card ' + (item.equipped ? 'is-equipped-item' : '');
+    const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
+    const savedScrollTop = scrollable ? scrollable.scrollTop : 0;
 
-        let badgeTagsHtml = '';
-        if (item.equipped) badgeTagsHtml += '<span class="badge-tag tag-equipped" style="background:rgba(16,185,129,0.2); color:#10b981; border:1px solid #10b981; font-weight:bold;">EQUIPPED</span>';
-        if (item.source === 'CLOUD' || srcUpper === 'CLOUD') badgeTagsHtml += '<span class="badge-tag" style="background:rgba(82,165,245,0.2); color:#52a5f5; border:1px solid #52a5f5;">WARDROBE</span>';
-        if (item.tags && item.tags.includes('enchanted')) badgeTagsHtml += '<span class="badge-tag tag-enchanted">ENCH</span>';
-        if (item.tags && item.tags.includes('stolen')) badgeTagsHtml += '<span class="badge-tag tag-stolen">STOLEN</span>';
-
-        let statPillText = 'ARM ' + (item.armor || 0);
-
-        card.innerHTML = `
-            <div class="item-left-info">
-                <div class="item-meta-titles">
-                    <span class="item-name-text">${item.name}</span>
-                    <span class="item-sub-desc">${item.type || 'Apparel'} &bull; Wt ${Number(item.weight || 0).toFixed(1)} &bull; ${item.value || 0}g</span>
-                </div>
-            </div>
-            <div class="item-right-stats">
-                <div class="item-badges-strip">${badgeTagsHtml}</div>
-                <span class="item-stat-pill">${statPillText}</span>
-            </div>
-        `;
-
-        card.addEventListener('mousedown', (e) => {
-            if (e.button === 0) {
-                activeDraggedItem = item;
-                isItemDragging = false;
-                dragItemStartX = e.clientX;
-                dragItemStartY = e.clientY;
-            } else {
-                activeDraggedItem = null;
-                isItemDragging = false;
-                if (dragGhostElement) {
-                    dragGhostElement.remove();
-                    dragGhostElement = null;
-                }
-            }
+    if (inventoryGroupByMod) {
+        grid.innerHTML = '';
+        const groups = {};
+        items.forEach(it => {
+            const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
+            if (!groups[m]) groups[m] = [];
+            groups[m].push(it);
         });
 
-        card.onpointerenter = () => inspectItem(item);
-        card.onclick = () => {
-            if (typeof window.ToggleItemEquip === 'function') {
-                window.ToggleItemEquip(JSON.stringify({ rawID: item.rawID, id: item.id, source: item.source || activeInventorySource }));
-            }
-        };
+        const modNames = Object.keys(groups);
+        modNames.sort((a, b) => a.localeCompare(b));
 
-        fragment.appendChild(card);
-    });
-    grid.appendChild(fragment);
+        const hasAnyState = (expandedInventoryMods.size > 0 || collapsedInventoryMods.size > 0);
+        const fragment = document.createDocumentFragment();
+
+        for (let i = 0; i < modNames.length; ++i) {
+            const modName = modNames[i];
+            const groupList = groups[modName];
+
+            let isExpanded = true;
+            if (inventorySearchQuery && inventorySearchQuery.trim().length > 0) {
+                isExpanded = true;
+            } else if (hasAnyState) {
+                isExpanded = !collapsedInventoryMods.has(modName);
+            } else {
+                isExpanded = true;
+                expandedInventoryMods.add(modName);
+            }
+            const isCollapsed = !isExpanded;
+
+            const section = document.createElement('div');
+            section.className = 'mod-group-section' + (isCollapsed ? ' collapsed' : '');
+            section.setAttribute('data-mod-name', modName);
+
+            const header = document.createElement('div');
+            header.className = 'mod-header-banner';
+            header.onclick = () => toggleInventoryModCollapse(modName);
+
+            const titleBox = document.createElement('div');
+            titleBox.className = 'mod-title-box';
+
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'mod-icon';
+            iconSpan.innerText = '📦';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'mod-name';
+            nameSpan.innerText = modName;
+
+            const badgeSpan = document.createElement('span');
+            badgeSpan.className = 'mod-badge';
+            badgeSpan.innerText = groupList.length;
+
+            titleBox.appendChild(iconSpan);
+            titleBox.appendChild(nameSpan);
+            titleBox.appendChild(badgeSpan);
+
+            const chevronSpan = document.createElement('span');
+            chevronSpan.className = 'mod-chevron';
+            chevronSpan.innerHTML = '&#9660;';
+
+            header.appendChild(titleBox);
+            header.appendChild(chevronSpan);
+            section.appendChild(header);
+
+            const gridContainer = document.createElement('div');
+            gridContainer.className = 'mod-items-grid';
+
+            if (!isCollapsed) {
+                const sortedGroupItems = sortInventoryItems(groupList);
+                sortedGroupItems.forEach(it => {
+                    gridContainer.appendChild(createInventoryItemElement(it, srcUpper));
+                });
+            }
+
+            section.appendChild(gridContainer);
+            fragment.appendChild(section);
+        }
+
+        grid.appendChild(fragment);
+    } else {
+        grid.innerHTML = '';
+        const sortedItems = sortInventoryItems(items);
+        const gridContainer = document.createElement('div');
+        gridContainer.className = 'mod-items-grid';
+        const toRender = sortedItems.slice(0, inventoryRenderLimit);
+        toRender.forEach(it => {
+            gridContainer.appendChild(createInventoryItemElement(it, srcUpper));
+        });
+        grid.appendChild(gridContainer);
+    }
+
+    if (scrollable && savedScrollTop > 0) {
+        scrollable.scrollTop = savedScrollTop;
+    }
+    updateVisibleThumbnailsPriority();
+    queueAllInventoryThumbnailsBackground();
 }
 
 function showItemContextMenu(x, y, item) {
@@ -2774,15 +3317,7 @@ function showItemContextMenu(x, y, item) {
         }
     });
 
-    let posX = (typeof x === 'number' && x > 0) ? x : (window.innerWidth / 2);
-    let posY = (typeof y === 'number' && y > 0) ? y : (window.innerHeight / 2);
-
-    posX = Math.max(10, Math.min(posX, window.innerWidth - 220));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 300));
-
-    menu.style.left = posX + 'px';
-    menu.style.top = posY + 'px';
-    menu.style.display = 'flex';
+    positionContextMenu(menu, x, y);
 }
 
 function openTransferAllMenu(e) {
@@ -2833,15 +3368,10 @@ function openTransferAllMenu(e) {
     if (e && e.target) {
         const rect = e.target.getBoundingClientRect();
         posX = rect.left;
-        posY = rect.top - 120;
+        posY = rect.top;
     }
 
-    posX = Math.max(10, Math.min(posX, window.innerWidth - 220));
-    posY = Math.max(10, Math.min(posY, window.innerHeight - 200));
-
-    menu.style.left = posX + 'px';
-    menu.style.top = posY + 'px';
-    menu.style.display = 'flex';
+    positionContextMenu(menu, posX, posY);
 }
 
 function performLocalItemTransfer(rawIdVal, fromSrc, toTargetId) {
@@ -2950,11 +3480,33 @@ function inspectItem(item) {
     const valVal = document.getElementById('stat-value-val');
     const enchBox = document.getElementById('inspect-enchantment-box');
     const enchDesc = document.getElementById('inspect-ench-desc');
+    const modSrc = document.getElementById('inspect-mod-source');
+    const prevImg = document.getElementById('inspect-preview-img');
+    const prevPlc = document.getElementById('inspect-preview-placeholder');
 
     if (!tag || !title || !priLbl || !priVal) return;
 
     tag.innerText = item.category || 'ARMOR';
     title.innerText = item.name;
+
+    if (modSrc) {
+        modSrc.innerText = item.modName || 'Skyrim.esm';
+    }
+
+    if (prevImg && prevPlc) {
+        if (item.thumbnail && item.thumbnail.length > 0) {
+            prevImg.src = item.thumbnail;
+            prevImg.style.display = 'block';
+            prevPlc.style.display = 'none';
+        } else {
+            prevImg.style.display = 'none';
+            prevPlc.style.display = 'block';
+            const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
+            if (rawIdVal) {
+                queueThumbnailRequest(rawIdVal, true);
+            }
+        }
+    }
 
     priLbl.innerText = 'Armor';
     priVal.innerText = item.armor || 0;
@@ -2972,6 +3524,66 @@ function inspectItem(item) {
         }
     }
 }
+
+window.onThumbnailReady = function(argument) {
+    let data = argument;
+    if (typeof argument === 'string') {
+        try { data = JSON.parse(argument); } catch (e) { return; }
+    }
+    if (!data || !data.rawID || !data.thumbnail) return;
+
+    const rawIdStr = String(data.rawID);
+    const formIdStr = ('0x' + Number(data.rawID).toString(16).toUpperCase());
+
+    const updateItemInList = (list) => {
+        if (!Array.isArray(list)) return false;
+        for (let i = 0; i < list.length; ++i) {
+            const x = list[i];
+            if (String(x.rawID) === rawIdStr || String(x.formID) === rawIdStr || (x.id && x.id.toUpperCase() === formIdStr)) {
+                x.thumbnail = data.thumbnail;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (currentWheelData) {
+        const activeList = getInventoryBySourceId(activeInventorySource);
+        if (!updateItemInList(activeList)) {
+            if (!updateItemInList(currentWheelData.playerInventory)) {
+                if (!updateItemInList(currentWheelData.cloudInventory)) {
+                    updateItemInList(currentWheelData.followerInventory);
+                }
+            }
+        }
+    }
+
+    const card = document.querySelector(`[data-raw-id="${rawIdStr}"]`);
+    if (card) {
+        const thumbImg = card.querySelector('.item-thumb-img');
+        const thumbPlc = card.querySelector('.item-thumb-placeholder');
+        if (thumbImg) {
+            thumbImg.src = data.thumbnail;
+            thumbImg.style.display = 'block';
+        } else if (thumbPlc) {
+            const wrapper = thumbPlc.parentElement;
+            if (wrapper) {
+                wrapper.innerHTML = `<img class="item-thumb-img" src="${data.thumbnail}" alt="">`;
+            }
+        }
+    }
+
+    if (inspectedItemObject && (String(inspectedItemObject.rawID) === rawIdStr || String(inspectedItemObject.formID) === rawIdStr || (inspectedItemObject.id && inspectedItemObject.id.toUpperCase() === formIdStr))) {
+        inspectedItemObject.thumbnail = data.thumbnail;
+        const inspectImg = document.getElementById('inspect-preview-img');
+        const inspectPlc = document.getElementById('inspect-preview-placeholder');
+        if (inspectImg && inspectPlc) {
+            inspectImg.src = data.thumbnail;
+            inspectImg.style.display = 'block';
+            inspectPlc.style.display = 'none';
+        }
+    }
+};
 
 function renderSlotsRail() {
     const rail = document.getElementById('slots-rail-list');
