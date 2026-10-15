@@ -15,3 +15,5 @@ lib/
 compile_commands.json
 inventory_cas_demo.html
 scratch_demo_data.json
+*_preview.html
+tests/simulate_*.js
