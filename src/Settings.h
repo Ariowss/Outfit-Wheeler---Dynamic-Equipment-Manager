@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <atomic>
+#include <string>
 
 extern float g_wheelScale;
 extern float g_wheelOffsetX;
@@ -24,6 +25,13 @@ extern std::atomic<bool> g_autoCityEnabled;
 extern std::atomic<bool> g_autoHomeEnabled;
 extern std::atomic<bool> g_autoCombatEnabled;
 extern std::atomic<bool> g_autoSwimEnabled;
+
+extern std::string g_themeAccentColor;
+extern std::string g_themeBgColor;
+extern std::string g_themeTextColor;
+extern float g_themeDepth;
+extern std::string g_themePreset;
+extern std::atomic<bool> g_showItemPreviews;
 
 void LoadINI();
 void SaveINI();

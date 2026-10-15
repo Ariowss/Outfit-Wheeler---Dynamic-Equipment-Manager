@@ -27,6 +27,13 @@ std::atomic<bool> g_autoHomeEnabled{ false };
 std::atomic<bool> g_autoCombatEnabled{ false };
 std::atomic<bool> g_autoSwimEnabled{ false };
 
+std::string g_themeAccentColor = "#38bdf8";
+std::string g_themeBgColor = "#070a0f";
+std::string g_themeTextColor = "#f8fafc";
+float g_themeDepth = 0.60f;
+std::string g_themePreset = "sapphire";
+std::atomic<bool> g_showItemPreviews{ true };
+
 static std::string GetIniPath() {
     std::filesystem::create_directories("Data/SKSE/Plugins");
     return std::filesystem::absolute("Data/SKSE/Plugins/OutfitWheeler.ini").string();
@@ -59,19 +66,24 @@ static uint32_t ReadIniKeyUint(const char* section, const char* key, uint32_t de
 void LoadINI() {
     std::string path = GetIniPath();
     if (!std::filesystem::exists(path)) {
-        if (std::filesystem::exists("Data/SKSE/Plugins/OutfitWheeler.ini")) {
-            path = std::filesystem::absolute("Data/SKSE/Plugins/OutfitWheeler.ini").string();
-        } else if (std::filesystem::exists("Data/SKSE/Plugins/PrismaOutfitWheel.ini")) {
-            path = std::filesystem::absolute("Data/SKSE/Plugins/PrismaOutfitWheel.ini").string();
+        std::error_code ec;
+        if (std::filesystem::exists("Data/SKSE/Plugins/PrismaOutfitWheel.ini")) {
+            std::filesystem::copy_file("Data/SKSE/Plugins/PrismaOutfitWheel.ini", path, std::filesystem::copy_options::overwrite_existing, ec);
+            std::filesystem::remove("Data/SKSE/Plugins/PrismaOutfitWheel.ini", ec);
         } else if (std::filesystem::exists("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini")) {
-            path = std::filesystem::absolute("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini").string();
+            std::filesystem::copy_file("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini", path, std::filesystem::copy_options::overwrite_existing, ec);
+            std::filesystem::remove("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini", ec);
         } else if (std::filesystem::exists("Data/MCM/Settings/OutfitWheeler.ini")) {
-            path = std::filesystem::absolute("Data/MCM/Settings/OutfitWheeler.ini").string();
+            std::filesystem::copy_file("Data/MCM/Settings/OutfitWheeler.ini", path, std::filesystem::copy_options::overwrite_existing, ec);
         } else {
             SaveINI();
             return;
         }
     }
+
+    std::error_code ecClean;
+    std::filesystem::remove("Data/SKSE/Plugins/PrismaOutfitWheel.ini", ecClean);
+    std::filesystem::remove("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini", ecClean);
 
     if (IniKeyExists("Hotkeys", "kEditModeKey", path.c_str())) {
         g_editKey = ReadIniKeyUint("Hotkeys", "kEditModeKey", 0x31, path.c_str());
@@ -131,8 +143,25 @@ void LoadINI() {
         try { g_uiScale = std::stof(buffer); } catch (...) { g_uiScale = 1.0f; }
     }
     g_editUiMode = ReadIniKeyUint("Appearance", "uEditUiMode", 1, path.c_str());
+    g_showItemPreviews.store(GetPrivateProfileIntA("Appearance", "bShowItemPreviews", 1, path.c_str()) != 0, std::memory_order_relaxed);
     if (GetPrivateProfileStringA("Gamepad", "fThumbstickDeadzone", "0.25", buffer, sizeof(buffer), path.c_str())) {
         try { g_thumbstickDeadzone = std::stof(buffer); } catch (...) { g_thumbstickDeadzone = 0.25f; }
+    }
+    char themeBuf[64];
+    if (GetPrivateProfileStringA("Theme", "sThemeAccentColor", "#38bdf8", themeBuf, sizeof(themeBuf), path.c_str())) {
+        g_themeAccentColor = themeBuf;
+    }
+    if (GetPrivateProfileStringA("Theme", "sThemeBgColor", "#070a0f", themeBuf, sizeof(themeBuf), path.c_str())) {
+        g_themeBgColor = themeBuf;
+    }
+    if (GetPrivateProfileStringA("Theme", "sThemeTextColor", "#f8fafc", themeBuf, sizeof(themeBuf), path.c_str())) {
+        g_themeTextColor = themeBuf;
+    }
+    if (GetPrivateProfileStringA("Theme", "sThemePreset", "sapphire", themeBuf, sizeof(themeBuf), path.c_str())) {
+        g_themePreset = themeBuf;
+    }
+    if (GetPrivateProfileStringA("Theme", "fThemeDepth", "0.60", themeBuf, sizeof(themeBuf), path.c_str())) {
+        try { g_themeDepth = std::stof(themeBuf); } catch (...) { g_themeDepth = 0.60f; }
     }
 }
 
@@ -144,6 +173,13 @@ static void WriteSettingsToIniFile(const std::string& path) {
         }
         std::ofstream out(path, std::ios::trunc);
         if (out.is_open()) {
+            out << "[Theme]\n";
+            out << "sThemeAccentColor=" << g_themeAccentColor << "\n";
+            out << "sThemeBgColor=" << g_themeBgColor << "\n";
+            out << "sThemeTextColor=" << g_themeTextColor << "\n";
+            out << "sThemePreset=" << g_themePreset << "\n";
+            out << "fThemeDepth=" << g_themeDepth << "\n\n";
+
             out << "[Hotkeys]\n";
             out << "kEditModeKey=" << g_editKey << "\n";
             out << "kEditModeModifier=" << g_editModifierKey << "\n";
@@ -160,7 +196,8 @@ static void WriteSettingsToIniFile(const std::string& path) {
             out << "fWheelOffsetX=" << g_wheelOffsetX << "\n";
             out << "fWheelOffsetY=" << g_wheelOffsetY << "\n";
             out << "fUiScale=" << g_uiScale << "\n";
-            out << "uEditUiMode=" << g_editUiMode << "\n\n";
+            out << "uEditUiMode=" << g_editUiMode << "\n";
+            out << "bShowItemPreviews=" << (g_showItemPreviews.load(std::memory_order_relaxed) ? 1 : 0) << "\n\n";
 
             out << "[AutoSystem]\n";
             out << "bAutoCloseOnEquip=" << (g_autoCloseOnEquip.load(std::memory_order_relaxed) ? 1 : 0) << "\n";
@@ -190,8 +227,12 @@ static void WriteSettingsToIniFile(const std::string& path) {
 void SaveINI() {
     std::string path = GetIniPath();
     WriteSettingsToIniFile(path);
-    WriteSettingsToIniFile("Data/SKSE/Plugins/OutfitWheeler.ini");
-    WriteSettingsToIniFile("Data/SKSE/Plugins/PrismaOutfitWheel.ini");
-    WriteSettingsToIniFile("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini");
-    WriteSettingsToIniFile("Data/MCM/Settings/OutfitWheeler.ini");
+    if (std::filesystem::exists("Data/MCM/Settings")) {
+        WriteSettingsToIniFile("Data/MCM/Settings/OutfitWheeler.ini");
+    }
+
+    // Clean up obsolete duplicate INI files so only OutfitWheeler.ini remains
+    std::error_code ec;
+    std::filesystem::remove("Data/SKSE/Plugins/PrismaOutfitWheel.ini", ec);
+    std::filesystem::remove("Data/SKSE/Plugins/OutfitWheeler-DynamicEquipmentManager.ini", ec);
 }
