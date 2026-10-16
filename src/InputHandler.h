@@ -10,6 +10,8 @@ extern std::atomic<bool> g_isEditModeOpen;
 extern std::atomic<bool> g_gameFullyLoaded;
 extern std::atomic<bool> g_inputRegistered;
 extern std::atomic<bool> g_hotkeysEnabled;
+extern float g_lockedZoomOffset;
+extern std::atomic<bool> g_hasLockedZoom;
 
 void OpenWheel(bool isEditMode);
 void ShowWheel(bool isEditMode);

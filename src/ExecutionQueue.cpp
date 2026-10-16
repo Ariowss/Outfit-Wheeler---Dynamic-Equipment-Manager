@@ -14,6 +14,7 @@
 #include "OutfitManager.h"
 #include "InputHandler.h"
 #include "Settings.h"
+#include "JSInterop.h"
 #include "thumbnail/ItemThumbnailService.h"
 #include <SKSE/SKSE.h>
 #include <mutex>
@@ -62,10 +63,11 @@ static void CacheKeywordsAndForms() {
 
 static bool IsHumanoidNPC(RE::Actor* a_actor) noexcept {
     if (!a_actor) return false;
-    auto* race = a_actor->GetRace();
-    if (!race) return false;
+    if (a_actor->IsPlayerRef()) return true;
+    auto* base = a_actor->GetActorBase();
+    if (!base) return false;
     CacheKeywordsAndForms();
-    if (g_actorTypeNPC && !race->HasKeyword(g_actorTypeNPC)) {
+    if (g_actorTypeNPC && !base->HasKeyword(g_actorTypeNPC) && !a_actor->HasKeyword(g_actorTypeNPC)) {
         return false;
     }
     return true;
@@ -108,13 +110,22 @@ void ExecutionQueue::RegisterEventsInternal() {
                 if (g_gameFullyLoaded.load(std::memory_order_acquire)) {
                     SKSE::GetTaskInterface()->AddTask([]() {
                         ExecutionQueue::GetSingleton()->Update();
-                        static size_t s_wbCounter = 0;
-                        if (++s_wbCounter % 60 == 0) {
-                            QueueWardrobeInventoryThumbnails();
-                        }
-                        auto& thumbService = OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton();
-                        if (thumbService.HasPendingItems()) {
-                            thumbService.StartProcessing();
+                        if (isMenuOpen.load(std::memory_order_acquire) && g_currentStudioActorID != 0x00000007 && g_currentStudioActorID != 0x00000014 && g_currentStudioActorID != 0) {
+                            auto* form = RE::TESForm::LookupByID(g_currentStudioActorID);
+                            auto* follower = form ? form->As<RE::Actor>() : nullptr;
+                            if (follower && !follower->IsPlayerRef() && follower->GetFormID() != 0x00000007 && follower->GetFormID() != 0x00000014) {
+                                auto* aState = follower->AsActorState();
+                                if (!aState || aState->GetLifeState() != RE::ACTOR_LIFE_STATE::kRestrained) {
+                                    follower->SetLifeState(RE::ACTOR_LIFE_STATE::kRestrained);
+                                }
+                                follower->GetActorRuntimeData().boolFlags.set(RE::Actor::BOOL_FLAGS::kMovementBlocked);
+                                follower->SetPosition(g_stagePosition, true);
+                                follower->data.angle.z = g_stageAngleZ;
+                                follower->SetAngle(follower->data.angle);
+                                follower->StopMoving(0.0f);
+                                follower->SetGraphVariableFloat("Speed", 0.0f);
+                                follower->SetGraphVariableBool("bIsMoving", false);
+                            }
                         }
                     });
                 }

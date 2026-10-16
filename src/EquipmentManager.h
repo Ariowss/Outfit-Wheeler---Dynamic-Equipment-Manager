@@ -24,6 +24,7 @@ void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManag
 void PerformOutfitSwap(RE::Actor* targetActor, RE::ActorEquipManager* equipManager, const std::vector<RE::FormID>& targetItemIDs);
 
 void AutoStashInactiveSlotItems(RE::Actor* a_actor);
+void SanitizeWardrobeContainer();
 
 void SaveOutfitToSlotImpl(size_t wheelIdx, size_t slotIdx);
 void EquipSlotImpl(size_t wheelIdx, size_t slotIdx);
