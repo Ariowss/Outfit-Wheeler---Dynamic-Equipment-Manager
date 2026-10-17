@@ -8,8 +8,6 @@
 #undef min
 #endif
 
-#pragma comment(lib, "xinput.lib")
-
 #include "OutfitManager.h"
 #include "EquipmentManager.h"
 #include "AdaptiveWardrobeManager.h"
@@ -32,10 +30,11 @@
 OutfitManager g_manager;
 std::recursive_mutex g_dataMutex;
 
-static const std::string g_savePath = "Data/SKSE/Plugins/PrismaOutfitWheel.json";
-static const std::string g_fallbackSavePath1 = "Data/SKSE/Plugins/OutfitWheeler.json";
-static const std::string g_fallbackSavePath2 = "Data/SKSE/Plugins/Wheeler.json";
-static const std::string g_fallbackSavePath3 = "Data/SKSE/Plugins/PrismaOutfitWheeler.json";
+static const std::string g_savePath = "Data/SKSE/Plugins/OutfitWheelerData.json";
+static const std::string g_legacySavePath1 = "Data/SKSE/Plugins/PrismaOutfitWheel.json";
+static const std::string g_legacySavePath2 = "Data/SKSE/Plugins/OutfitWheeler.json";
+static const std::string g_legacySavePath3 = "Data/SKSE/Plugins/PrismaOutfitWheeler.json";
+static const std::string g_legacySavePath4 = "Data/SKSE/Plugins/Wheeler.json";
 
 static std::string ToLowerString(std::string str) {
     std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
@@ -44,13 +43,13 @@ static std::string ToLowerString(std::string str) {
     return str;
 }
 
-static std::string FormatFormID(RE::FormID a_id) {
+std::string FormatFormID(RE::FormID a_id) {
     char buf[16];
     snprintf(buf, sizeof(buf), "0x%08X", a_id);
     return std::string(buf);
 }
 
-static std::string SanitizeUtf8(const std::string& str) {
+std::string SanitizeUtf8(const std::string& str) {
     if (str.empty()) return "";
     std::string out;
     out.reserve(str.size());
@@ -351,6 +350,7 @@ static json SerializeProfile(const ActorWheelProfile& prof) {
     for (const auto& wheel : prof.wheels) {
         json wJson;
         wJson["name"] = SanitizeUtf8(wheel.name);
+        wJson["color"] = wheel.color;
         json slotsJson = json::array();
         for (const auto& slot : wheel.slots) {
             json sJson;
@@ -362,6 +362,7 @@ static json SerializeProfile(const ActorWheelProfile& prof) {
                 sJson["controlState"] = static_cast<uint8_t>(slot.outfit->controlState);
                 sJson["isAddon"] = slot.outfit->isAddon;
                 sJson["icon"] = slot.outfit->icon;
+                sJson["color"] = slot.outfit->color;
                 sJson["usageCount"] = slot.outfit->usageCount;
                 sJson["lastWornTimestamp"] = slot.outfit->lastWornTimestamp;
 
@@ -387,6 +388,7 @@ static json SerializeProfile(const ActorWheelProfile& prof) {
                 sJson["controlState"] = 0;
                 sJson["isAddon"] = false;
                 sJson["icon"] = "";
+                sJson["color"] = "";
                 sJson["usageCount"] = 0;
                 sJson["lastWornTimestamp"] = 0;
             }
@@ -410,6 +412,7 @@ static ActorWheelProfile DeserializeProfile(const json& profJson) {
         for (const auto& wJson : profJson["wheels"]) {
             Wheel w;
             w.name = wJson.value("name", "Wheel");
+            w.color = wJson.value("color", "");
             if (wJson.contains("slots") && wJson["slots"].is_array()) {
                 size_t sIdx = 0;
                 for (const auto& sJson : wJson["slots"]) {
@@ -426,6 +429,7 @@ static ActorWheelProfile DeserializeProfile(const json& profJson) {
                         o.controlState = static_cast<ControlState>(sJson.value("controlState", static_cast<uint8_t>(ControlState::Normal)));
                         o.isAddon = sJson.value("isAddon", false);
                         o.icon = sJson.value("icon", "");
+                        o.color = sJson.value("color", "");
                         o.usageCount = sJson.value("usageCount", 0u);
                         o.lastWornTimestamp = sJson.value("lastWornTimestamp", 0u);
 
@@ -449,6 +453,7 @@ static ActorWheelProfile DeserializeProfile(const json& profJson) {
                         o.controlState = ControlState::Normal;
                         o.isAddon = false;
                         o.icon = "";
+                        o.color = sJson.value("color", "");
                         s.outfit = o;
                     }
                     w.slots.push_back(s);
@@ -547,18 +552,142 @@ void SaveDataInternal() {
     } catch (...) {}
 }
 
+void SaveDataAsync() {
+    try {
+        std::string jsonStr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+            json root;
+            root["activeTargetActorID"] = static_cast<uint32_t>(g_manager.activeTargetActorID);
+            root["wardrobeContainerFormID"] = 0;
+
+            json actorsJson = json::object();
+            for (const auto& [actorID, profile] : g_manager.actorProfiles) {
+                json actorNode;
+                actorNode["profile"] = SerializeProfile(profile);
+                actorNode["formMeta"] = SerializeFormID(actorID);
+                actorsJson[FormatFormID(actorID)] = actorNode;
+            }
+            root["actors"] = actorsJson;
+
+            json settingsJson;
+            settingsJson["editKey"] = g_editKey;
+            settingsJson["editModifierKey"] = g_editModifierKey;
+            settingsJson["playKey"] = g_playKey;
+            settingsJson["playModifierKey"] = g_playModifierKey;
+            settingsJson["gamepadPlayKey"] = g_gamepadPlayKey;
+            settingsJson["gamepadPlayModifier"] = g_gamepadPlayModifier;
+            settingsJson["thumbstickDeadzone"] = g_thumbstickDeadzone;
+            settingsJson["wheelScale"] = g_wheelScale;
+            settingsJson["wheelOffsetX"] = g_wheelOffsetX;
+            settingsJson["wheelOffsetY"] = g_wheelOffsetY;
+            settingsJson["uiScale"] = g_uiScale;
+            settingsJson["editUiMode"] = g_editUiMode;
+            settingsJson["autoCloseOnEquip"] = g_autoCloseOnEquip.load(std::memory_order_relaxed);
+            settingsJson["autoStashEnabled"] = g_autoStashEnabled.load(std::memory_order_relaxed);
+            settingsJson["autoSystemEnabled"] = g_autoSystemEnabled.load(std::memory_order_relaxed);
+            settingsJson["autoCityEnabled"] = g_autoCityEnabled.load(std::memory_order_relaxed);
+            settingsJson["autoHomeEnabled"] = g_autoHomeEnabled.load(std::memory_order_relaxed);
+            settingsJson["autoCombatEnabled"] = g_autoCombatEnabled.load(std::memory_order_relaxed);
+            settingsJson["autoSwimEnabled"] = g_autoSwimEnabled.load(std::memory_order_relaxed);
+            root["settings"] = settingsJson;
+
+            jsonStr = root.dump(-1, ' ', false, json::error_handler_t::replace);
+        }
+
+        std::thread([jsonContent = std::move(jsonStr)]() {
+            try {
+                std::filesystem::create_directories("Data/SKSE/Plugins");
+
+                if (std::filesystem::exists(g_savePath)) {
+                    std::string bakPath = g_savePath + ".bak";
+                    std::error_code ecBak;
+                    std::filesystem::copy_file(g_savePath, bakPath, std::filesystem::copy_options::overwrite_existing, ecBak);
+                }
+
+                std::string tmpPath = g_savePath + ".tmp";
+                {
+                    std::ofstream file(tmpPath);
+                    if (!file.is_open()) return;
+                    file << jsonContent;
+                }
+
+                std::error_code ec;
+                std::filesystem::remove(g_savePath, ec);
+                std::filesystem::rename(tmpPath, g_savePath, ec);
+                if (ec) {
+                    std::filesystem::copy_file(tmpPath, g_savePath, std::filesystem::copy_options::overwrite_existing, ec);
+                    std::filesystem::remove(tmpPath, ec);
+                }
+            } catch (...) {}
+        }).detach();
+
+        SyncWheelOutfitsToAdaptiveWardrobe();
+    } catch (...) {}
+}
+
 void LoadData() {
     std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+
+    std::filesystem::create_directories("Data/SKSE/Plugins");
+
+    // Auto-migrate legacy files to OutfitWheelerData.json
+    if (!std::filesystem::exists(g_savePath)) {
+        std::error_code ec;
+        if (std::filesystem::exists(g_legacySavePath1)) {
+            std::filesystem::copy_file(g_legacySavePath1, g_savePath, std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                std::filesystem::remove(g_legacySavePath1, ec);
+                logger::info("[OutfitManager] Auto-migrated {} -> {}", g_legacySavePath1, g_savePath);
+            }
+        } else if (std::filesystem::exists(g_legacySavePath2)) {
+            std::filesystem::copy_file(g_legacySavePath2, g_savePath, std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                std::filesystem::remove(g_legacySavePath2, ec);
+                logger::info("[OutfitManager] Auto-migrated {} -> {}", g_legacySavePath2, g_savePath);
+            }
+        } else if (std::filesystem::exists(g_legacySavePath3)) {
+            std::filesystem::copy_file(g_legacySavePath3, g_savePath, std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                std::filesystem::remove(g_legacySavePath3, ec);
+                logger::info("[OutfitManager] Auto-migrated {} -> {}", g_legacySavePath3, g_savePath);
+            }
+        } else if (std::filesystem::exists(g_legacySavePath4)) {
+            std::filesystem::copy_file(g_legacySavePath4, g_savePath, std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                std::filesystem::remove(g_legacySavePath4, ec);
+                logger::info("[OutfitManager] Auto-migrated {} -> {}", g_legacySavePath4, g_savePath);
+            }
+        }
+    }
+
+    // Auto-migrate legacy backup file
+    if (!std::filesystem::exists(g_savePath + ".bak") && std::filesystem::exists(g_legacySavePath1 + ".bak")) {
+        std::error_code ec;
+        std::filesystem::copy_file(g_legacySavePath1 + ".bak", g_savePath + ".bak", std::filesystem::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            std::filesystem::remove(g_legacySavePath1 + ".bak", ec);
+            logger::info("[OutfitManager] Auto-migrated {} -> {}", g_legacySavePath1 + ".bak", g_savePath + ".bak");
+        }
+    }
+
+    if (std::filesystem::exists(g_savePath)) {
+        std::error_code ecClean;
+        std::filesystem::remove(g_legacySavePath1, ecClean);
+        std::filesystem::remove(g_legacySavePath1 + ".bak", ecClean);
+        std::filesystem::remove(g_legacySavePath2, ecClean);
+        std::filesystem::remove(g_legacySavePath3, ecClean);
+        std::filesystem::remove(g_legacySavePath4, ecClean);
+    }
+
     std::string targetPath = g_savePath;
     if (!std::filesystem::exists(targetPath)) {
-        if (std::filesystem::exists(g_fallbackSavePath1)) {
-            targetPath = g_fallbackSavePath1;
-        } else if (std::filesystem::exists(g_fallbackSavePath2)) {
-            targetPath = g_fallbackSavePath2;
-        } else if (std::filesystem::exists(g_fallbackSavePath3)) {
-            targetPath = g_fallbackSavePath3;
-        } else if (std::filesystem::exists(g_savePath + ".bak")) {
+        if (std::filesystem::exists(g_savePath + ".bak")) {
             targetPath = g_savePath + ".bak";
+        } else if (std::filesystem::exists(g_legacySavePath1)) {
+            targetPath = g_legacySavePath1;
+        } else if (std::filesystem::exists(g_legacySavePath1 + ".bak")) {
+            targetPath = g_legacySavePath1 + ".bak";
         } else {
             return;
         }
@@ -576,22 +705,28 @@ void LoadData() {
         if (root.contains("actors") && root["actors"].is_object()) {
             g_manager.actorProfiles.clear();
             for (auto& [keyStr, actorDataJson] : root["actors"].items()) {
-                RE::FormID aID = 0x00000007;
+                RE::FormID fallbackKeyID = 0;
+                try {
+                    if (keyStr.rfind("0x", 0) == 0 || keyStr.rfind("0X", 0) == 0) {
+                        fallbackKeyID = static_cast<RE::FormID>(std::stoul(keyStr.substr(2), nullptr, 16));
+                    } else {
+                        fallbackKeyID = static_cast<RE::FormID>(std::stoul(keyStr, nullptr, 16));
+                    }
+                } catch (...) {
+                    fallbackKeyID = 0;
+                }
 
+                RE::FormID aID = 0;
                 if (actorDataJson.is_object() && actorDataJson.contains("formMeta")) {
                     RE::FormID resolvedActor = DeserializeFormID(actorDataJson["formMeta"]);
                     if (resolvedActor != 0) {
                         aID = resolvedActor;
                     }
                 }
-
-                if (aID == 0x00000007 && (keyStr.rfind("0x", 0) == 0 || keyStr.rfind("0X", 0) == 0)) {
-                    try {
-                        aID = static_cast<RE::FormID>(std::stoul(keyStr.substr(2), nullptr, 16));
-                    } catch (...) {
-                        aID = 0x00000007;
-                    }
+                if (aID == 0) {
+                    aID = fallbackKeyID;
                 }
+                if (aID == 0) continue;
 
                 if (actorDataJson.is_object() && actorDataJson.contains("profile")) {
                     g_manager.actorProfiles[aID] = DeserializeProfile(actorDataJson["profile"]);
@@ -629,13 +764,11 @@ void LoadData() {
 
         g_manager.GetProfile(0x00000007);
         SyncWheelOutfitsToAdaptiveWardrobe();
-        if (g_gameFullyLoaded.load(std::memory_order_acquire)) {
-            QueueAllLoadedItemThumbnails();
-        }
     } catch (...) {}
 }
 
 void QueueAllLoadedItemThumbnails() {
+    if (!g_showItemPreviews.load(std::memory_order_acquire) || !g_gameFullyLoaded.load(std::memory_order_acquire)) return;
     std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
     auto* dataHandler = RE::TESDataHandler::GetSingleton();
     if (!dataHandler) return;
@@ -651,7 +784,7 @@ void QueueAllLoadedItemThumbnails() {
                             auto* form = RE::TESForm::LookupByID(item.formID);
                             if (form && IsPureApparel(form)) {
                                 if (auto* bound = form->As<RE::TESBoundObject>()) {
-                                    thumbnailService.QueueItem(bound, true);
+                                    thumbnailService.QueueItem(bound, false);
                                     count++;
                                 }
                             }
@@ -667,6 +800,7 @@ void QueueAllLoadedItemThumbnails() {
 }
 
 void QueuePlayerInventoryThumbnails() {
+    if (!g_showItemPreviews.load(std::memory_order_acquire) || !g_gameFullyLoaded.load(std::memory_order_acquire)) return;
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
 
@@ -698,6 +832,7 @@ void QueuePlayerInventoryThumbnails() {
 }
 
 void QueueWardrobeInventoryThumbnails() {
+    if (!g_showItemPreviews.load(std::memory_order_acquire) || !g_gameFullyLoaded.load(std::memory_order_acquire)) return;
     auto* wardrobe = GetWardrobeContainer();
     if (!wardrobe) return;
 
@@ -719,6 +854,7 @@ void QueueWardrobeInventoryThumbnails() {
 }
 
 void QueueFollowerInventoryThumbnails() {
+    if (!g_showItemPreviews.load(std::memory_order_acquire) || !g_gameFullyLoaded.load(std::memory_order_acquire)) return;
     auto* processLists = RE::ProcessLists::GetSingleton();
     if (!processLists) return;
 
@@ -822,6 +958,21 @@ bool ImportConfigFromString(const std::string& jsonStr) {
             g_manager.actorProfiles[0x00000007] = DeserializeProfile(root);
         }
 
+        if (root.contains("settings") && root["settings"].is_object()) {
+            auto& s = root["settings"];
+            if (s.contains("editKey") && s["editKey"].is_number()) g_editKey = s["editKey"].get<uint32_t>();
+            if (s.contains("playKey") && s["playKey"].is_number()) g_playKey = s["playKey"].get<uint32_t>();
+            if (s.contains("editModifierKey") && s["editModifierKey"].is_number()) g_editModifierKey = s["editModifierKey"].get<uint32_t>();
+            if (s.contains("playModifierKey") && s["playModifierKey"].is_number()) g_playModifierKey = s["playModifierKey"].get<uint32_t>();
+            if (s.contains("gamepadPlayKey") && s["gamepadPlayKey"].is_number()) g_gamepadPlayKey = s["gamepadPlayKey"].get<uint32_t>();
+            if (s.contains("gamepadPlayModifier") && s["gamepadPlayModifier"].is_number()) g_gamepadPlayModifier = s["gamepadPlayModifier"].get<uint32_t>();
+            if (s.contains("wheelScale") && s["wheelScale"].is_number()) g_wheelScale = s["wheelScale"].get<float>();
+            if (s.contains("themeHex") && s["themeHex"].is_string()) g_themeAccentColor = s["themeHex"].get<std::string>();
+            if (s.contains("themeBgColor") && s["themeBgColor"].is_string()) g_themeBgColor = s["themeBgColor"].get<std::string>();
+            if (s.contains("themeTextColor") && s["themeTextColor"].is_string()) g_themeTextColor = s["themeTextColor"].get<std::string>();
+            SaveINI();
+        }
+
         SaveDataInternal();
         return true;
     } catch (...) {
@@ -830,14 +981,18 @@ bool ImportConfigFromString(const std::string& jsonStr) {
 }
 
 static bool CheckGamepadConnected() {
-    typedef DWORD(WINAPI* XInputGetState_t)(DWORD, XINPUT_STATE*);
-    static auto pXInputGetState = reinterpret_cast<XInputGetState_t>(GetProcAddress(GetModuleHandleA("xinput1_4.dll"), "XInputGetState"));
-    if (!pXInputGetState) {
-        pXInputGetState = reinterpret_cast<XInputGetState_t>(GetProcAddress(LoadLibraryA("xinput1_4.dll"), "XInputGetState"));
-    }
-    if (!pXInputGetState) {
-        pXInputGetState = reinterpret_cast<XInputGetState_t>(GetProcAddress(LoadLibraryA("xinput9_1_0.dll"), "XInputGetState"));
-    }
+    using XInputGetState_t = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+    static const XInputGetState_t pXInputGetState = []() -> XInputGetState_t {
+        for (const wchar_t* name : { L"xinput1_3.dll", L"xinput1_4.dll", L"xinput9_1_0.dll" }) {
+            if (HMODULE mod = ::GetModuleHandleW(name)) {
+                if (FARPROC proc = ::GetProcAddress(mod, "XInputGetState")) {
+                    return reinterpret_cast<XInputGetState_t>(proc);
+                }
+            }
+        }
+        return nullptr;
+    }();
+
     if (pXInputGetState) {
         for (DWORD i = 0; i < 4; ++i) {
             XINPUT_STATE xState{};
@@ -847,6 +1002,157 @@ static bool CheckGamepadConnected() {
         }
     }
     return false;
+}
+
+json GetDiscoveredPosePacksJson() {
+    static json s_cachedPosePacks = json::array();
+    static bool s_hasScannedPoses = false;
+    if (s_hasScannedPoses && !s_cachedPosePacks.empty()) {
+        return s_cachedPosePacks;
+    }
+
+    json posePacks = json::array();
+
+    json vanillaPack;
+    vanillaPack["packName"] = "Vanilla Idles";
+    vanillaPack["poses"] = json::array({
+        { {"id", "IdleWarmHands"}, {"name", "Warm Hands"} },
+        { {"id", "IdleCrossArms"}, {"name", "Cross Arms"} },
+        { {"id", "IdleSalute"}, {"name", "Salute"} },
+        { {"id", "IdleCivilWarCheer"}, {"name", "Cheer"} },
+        { {"id", "IdlePray"}, {"name", "Pray"} },
+        { {"id", "IdleSurrender"}, {"name", "Surrender"} },
+        { {"id", "IdleApplaud"}, {"name", "Applaud"} }
+    });
+    posePacks.push_back(vanillaPack);
+
+    std::vector<std::string> searchDirs = {
+        "Data/SKSE/Plugins/poserhotkeys/poserdata",
+        "Data/SKSE/Plugins/PoserHotkeys/poserdata",
+        "SKSE/Plugins/poserhotkeys/poserdata",
+        "Data/SKSE/Plugins/OutfitWheeler/poses"
+    };
+
+    std::unordered_set<std::string> processedFiles;
+
+    for (const auto& dirPath : searchDirs) {
+        std::error_code ec;
+        if (!std::filesystem::exists(dirPath, ec) || !std::filesystem::is_directory(dirPath, ec)) {
+            continue;
+        }
+
+        for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
+            if (ec || !entry.is_regular_file(ec)) continue;
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (ext != ".json") continue;
+
+            std::string filename = entry.path().filename().string();
+            std::string lowerFilename = filename;
+            std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (processedFiles.count(lowerFilename)) continue;
+            processedFiles.insert(lowerFilename);
+
+            std::ifstream file(entry.path());
+            if (!file.is_open()) continue;
+
+            json j;
+            try {
+                file >> j;
+            } catch (...) {
+                continue;
+            }
+            if (!j.is_object()) continue;
+
+            std::string packName = entry.path().stem().string();
+            if (j.contains("string") && j["string"].is_object() && j["string"].contains("name") && j["string"]["name"].is_string()) {
+                std::string sName = j["string"]["name"].get<std::string>();
+                if (!sName.empty()) packName = sName;
+            } else if (j.contains("name") && j["name"].is_string()) {
+                std::string sName = j["name"].get<std::string>();
+                if (!sName.empty()) packName = sName;
+            }
+
+            for (char& c : packName) {
+                if (c == '_') c = ' ';
+            }
+
+            json packObj;
+            packObj["packName"] = packName;
+            json posesList = json::array();
+            std::unordered_set<std::string> seenEvents;
+
+            auto addPose = [&](const std::string& ev, const std::string& dispName) {
+                if (ev.empty() || seenEvents.count(ev)) return;
+                seenEvents.insert(ev);
+                posesList.push_back({
+                    { "id", ev },
+                    { "name", dispName.empty() ? ev : dispName }
+                });
+            };
+
+            if (j.contains("stringList") && j["stringList"].is_object()) {
+                const auto& sList = j["stringList"];
+                std::vector<std::string> subpackKeys;
+                if (sList.contains("packnames") && sList["packnames"].is_array()) {
+                    for (const auto& pk : sList["packnames"]) {
+                        if (pk.is_string()) subpackKeys.push_back(pk.get<std::string>());
+                    }
+                }
+                if (subpackKeys.empty()) {
+                    for (auto it = sList.begin(); it != sList.end(); ++it) {
+                        if (it.value().is_array() && it.key() != "packnames") {
+                            subpackKeys.push_back(it.key());
+                        }
+                    }
+                }
+                for (const auto& key : subpackKeys) {
+                    if (sList.contains(key) && sList[key].is_array()) {
+                        for (const auto& item : sList[key]) {
+                            if (item.is_string()) {
+                                std::string ev = item.get<std::string>();
+                                addPose(ev, ev);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (j.contains("poses") && j["poses"].is_array()) {
+                for (const auto& item : j["poses"]) {
+                    if (item.is_string()) {
+                        addPose(item.get<std::string>(), item.get<std::string>());
+                    } else if (item.is_object()) {
+                        std::string ev = item.value("event", item.value("id", ""));
+                        std::string nm = item.value("name", ev);
+                        if (!ev.empty()) addPose(ev, nm);
+                    }
+                }
+            }
+
+            if (!posesList.empty()) {
+                packObj["poses"] = posesList;
+                posePacks.push_back(packObj);
+            }
+        }
+    }
+
+    json compatPack;
+    compatPack["packName"] = "Compatibility";
+    compatPack["poses"] = json::array({
+        { {"id", "IdleHandsOnHips"}, {"name", "Hands on Hips"} },
+        { {"id", "IdleModelRunway"}, {"name", "Runway Pose"} },
+        { {"id", "IdleCombatReady"}, {"name", "Combat Ready"} }
+    });
+    posePacks.push_back(compatPack);
+
+    s_cachedPosePacks = posePacks;
+    s_hasScannedPoses = true;
+    return s_cachedPosePacks;
 }
 
 static json GetDynamicFollowersList() {
@@ -882,16 +1188,14 @@ static json GetDynamicFollowersList() {
             auto actor = handle.get();
             if (!actor || actor.get() == player || actor->IsDead()) continue;
 
-            auto* race = actor->GetRace();
-            if (!race || (npcKw && !race->HasKeyword(npcKw))) continue;
+            auto* base = actor->GetActorBase();
+            if (!base) continue;
+            if (npcKw && !base->HasKeyword(npcKw) && !actor->HasKeyword(npcKw)) continue;
 
             if (actor->IsPlayerTeammate() || actor->IsPlayerRef()) {
                 RE::FormID fID = actor->GetFormID();
                 if (addedActors.find(fID) != addedActors.end()) continue;
                 addedActors.insert(fID);
-
-                auto* base = actor->GetActorBase();
-                if (!base) continue;
 
                 auto* aAvOwner = actor->AsActorValueOwner();
                 float curW = aAvOwner ? aAvOwner->GetActorValue(RE::ActorValue::kInventoryWeight) : 0.0f;
@@ -917,7 +1221,7 @@ static json GetDynamicFollowersList() {
     return arr;
 }
 
-static std::string GetApparelTypeString(RE::TESObjectARMO* armor) {
+std::string GetApparelTypeString(RE::TESObjectARMO* armor) {
     if (!armor) return "Armor";
     uint32_t slotMask = static_cast<uint32_t>(armor->GetSlotMask());
     using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
@@ -999,7 +1303,7 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
         int val = item->GetGoldValue();
 
         auto* entryData = data.second.get();
-        bool entryIsWorn = (entryData ? entryData->IsWorn() : false) || bipedWornFormIDs.contains(item->GetFormID());
+        bool entryIsWorn = (entryData ? entryData->IsWorn() : false);
         if (entryData && entryData->extraLists && !entryData->extraLists->empty()) {
             bool anyWorn = false;
             for (auto* xList : *entryData->extraLists) {
@@ -1035,10 +1339,14 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     tags.push_back("enchanted");
                 }
 
+                bool isFormInBiped = (bipedWornFormIDs.find(item->GetFormID()) != bipedWornFormIDs.end());
                 bool isWorn = xList->HasType(RE::ExtraDataType::kWorn) || xList->HasType(RE::ExtraDataType::kWornLeft);
-                if (!isWorn && !anyWorn && entryIsWorn && !assignedWorn) {
+                if (!isWorn && !anyWorn && (entryIsWorn || isFormInBiped) && !assignedWorn) {
                     isWorn = true;
                     assignedWorn = true;
+                }
+                if (isWorn && !isFormInBiped) {
+                    isWorn = false;
                 }
 
                 arr.push_back(json{
@@ -1117,7 +1425,8 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                 tags.push_back("enchanted");
             }
 
-            bool isWorn = entryIsWorn;
+            bool isFormInBiped = (bipedWornFormIDs.find(item->GetFormID()) != bipedWornFormIDs.end());
+            bool isWorn = isFormInBiped;
             if (isWorn && data.first > 1) {
                 arr.push_back(json{
                     {"id", FormatFormID(item->GetFormID())},
@@ -1205,8 +1514,6 @@ static json GetActorApparelInventoryJson(RE::Actor* actor, const std::string& so
                     uint32_t bLoc = bound->GetLocalFormID();
                     if (OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().HasThumbnail(bMod, bLoc)) {
                         thumbPath = OutfitWheeler::Thumbnail::ThumbnailDiskCache::GetSingleton().GetRelativePath(bMod, bLoc);
-                    } else {
-                        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound, false);
                     }
                 }
                 std::string typeStr = GetApparelTypeString(armor);
@@ -1490,6 +1797,13 @@ std::string GetWheelJsonInternal(bool isEditMode) {
         data["autoHomeEnabled"] = g_autoHomeEnabled.load(std::memory_order_relaxed);
         data["autoCombatEnabled"] = g_autoCombatEnabled.load(std::memory_order_relaxed);
         data["autoSwimEnabled"] = g_autoSwimEnabled.load(std::memory_order_relaxed);
+        data["themeAccentColor"] = g_themeAccentColor;
+        data["themeBgColor"] = g_themeBgColor;
+        data["themeTextColor"] = g_themeTextColor;
+        data["themeDepth"] = g_themeDepth;
+        data["themePreset"] = g_themePreset;
+        data["showItemPreviews"] = g_showItemPreviews.load(std::memory_order_relaxed);
+        data["wheelColor"] = activeWheel.color;
 
         if (isEditMode) {
             auto player = RE::PlayerCharacter::GetSingleton();
@@ -1497,38 +1811,49 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 
             json actorInvs = json::object();
             actorInvs["0x00000007"] = GetActorApparelInventoryJson(player, "0x00000007");
-
-            auto processLists = RE::ProcessLists::GetSingleton();
-            auto* npcKw = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("ActorTypeNPC");
-
-            if (processLists) {
-                for (auto& handle : processLists->highActorHandles) {
-                    auto actor = handle.get();
-                    if (!actor || actor.get() == player || !actor->IsPlayerTeammate() || actor->IsDead() || !actor->GetActorBase()) continue;
-                    auto* race = actor->GetRace();
-                    if (!race || (npcKw && !race->HasKeyword(npcKw))) continue;
-
-                    std::string fIDStr = FormatFormID(actor->GetFormID());
-                    actorInvs[fIDStr] = GetActorApparelInventoryJson(actor.get(), fIDStr);
-                }
-            }
-
-            data["actorInventories"] = actorInvs;
             data["playerInventory"] = actorInvs["0x00000007"];
 
             std::string activeActorIDStr = FormatFormID(activeActor ? activeActor->GetFormID() : 0x00000007);
             if (activeActor && activeActor != player) {
-                if (actorInvs.contains(activeActorIDStr)) {
-                    data["followerInventory"] = actorInvs[activeActorIDStr];
-                } else {
-                    data["followerInventory"] = GetActorApparelInventoryJson(activeActor, activeActorIDStr);
-                }
+                json folInv = GetActorApparelInventoryJson(activeActor, activeActorIDStr);
+                actorInvs[activeActorIDStr] = folInv;
+                data["followerInventory"] = folInv;
             } else {
                 data["followerInventory"] = json::array();
             }
 
+            for (const auto& fol : data["followers"]) {
+                std::string fIDStr = fol.value("id", "");
+                if (fIDStr.empty() || fIDStr == "0x00000007" || fIDStr == "0X00000007") continue;
+                if (actorInvs.contains(fIDStr)) continue;
+
+                RE::FormID fID = 0;
+                try {
+                    if (fIDStr.rfind("0x", 0) == 0 || fIDStr.rfind("0X", 0) == 0) {
+                        fID = static_cast<RE::FormID>(std::stoul(fIDStr.substr(2), nullptr, 16));
+                    } else {
+                        fID = static_cast<RE::FormID>(std::stoul(fIDStr, nullptr, 10));
+                    }
+                } catch (...) { fID = 0; }
+
+                if (fID != 0) {
+                    auto* fForm = RE::TESForm::LookupByID(fID);
+                    auto* fActor = fForm ? fForm->As<RE::Actor>() : nullptr;
+                    if (fActor && !fActor->IsDead()) {
+                        json fInv = GetActorApparelInventoryJson(fActor, fIDStr);
+                        actorInvs[fIDStr] = fInv;
+                        if (data["followerInventory"].empty()) {
+                            data["followerInventory"] = fInv;
+                        }
+                    }
+                }
+            }
+
+            data["actorInventories"] = actorInvs;
+
             data["cloudInventory"] = GetCloudWardrobeInventoryJson();
             data["inventory"] = data["playerInventory"];
+            data["posePacks"] = GetDiscoveredPosePacksJson();
         } else {
             data["followers"] = json::array();
             data["actorInventories"] = json::object();
@@ -1536,6 +1861,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
             data["followerInventory"] = json::array();
             data["cloudInventory"] = json::array();
             data["inventory"] = json::array();
+            data["posePacks"] = json::array();
         }
 
         json slotsJson = json::array();
@@ -1550,6 +1876,7 @@ std::string GetWheelJsonInternal(bool isEditMode) {
             sJson["name"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->name) : ("Outfit " + std::to_string(slotIdx + 1));
             sJson["count"] = slot.outfit.has_value() ? (!slot.outfit->items.empty() ? slot.outfit->items.size() : slot.outfit->itemIDs.size()) : 0;
             sJson["icon"] = slot.outfit.has_value() ? slot.outfit->icon : "";
+            sJson["color"] = slot.outfit.has_value() ? slot.outfit->color : "";
             sJson["contextTag"] = slot.outfit.has_value() ? SanitizeUtf8(slot.outfit->contextTag) : "";
             sJson["preferenceStars"] = slot.outfit.has_value() ? slot.outfit->preferenceStars : 3;
             sJson["controlState"] = slot.outfit.has_value() ? static_cast<uint8_t>(slot.outfit->controlState) : 0;
@@ -1568,7 +1895,6 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 
                             std::string thumbPath = "";
                             if (auto* bound = f->As<RE::TESBoundObject>()) {
-                                OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound, true);
                                 auto* bFile = bound->GetFile(0);
                                 std::string bMod = bFile ? std::string(bFile->GetFilename()) : "Skyrim.esm";
                                 uint32_t bLoc = bound->GetLocalFormID();
@@ -1614,7 +1940,6 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 
                             std::string thumbPath = "";
                             if (auto* bound = f->As<RE::TESBoundObject>()) {
-                                OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().QueueItem(bound, true);
                                 auto* bFile = bound->GetFile(0);
                                 std::string bMod = bFile ? std::string(bFile->GetFilename()) : "Skyrim.esm";
                                 uint32_t bLoc = bound->GetLocalFormID();
@@ -1744,4 +2069,42 @@ std::string GetWheelJsonInternal(bool isEditMode) {
 std::string GetWheelJson(bool isEditMode) {
     std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
     return GetWheelJsonInternal(isEditMode);
+}
+
+void OutfitManager::SortOutfitsAlphabetically() {
+    std::lock_guard<std::recursive_mutex> lock(g_dataMutex);
+    auto& profile = GetActiveProfile();
+    if (profile.wheels.empty()) return;
+
+    std::vector<Outfit> allOutfits;
+    for (auto& wheel : profile.wheels) {
+        for (auto& slot : wheel.slots) {
+            if (slot.outfit.has_value()) {
+                allOutfits.push_back(*slot.outfit);
+            }
+        }
+    }
+
+    if (allOutfits.empty()) return;
+
+    std::sort(allOutfits.begin(), allOutfits.end(), [](const Outfit& a, const Outfit& b) {
+        std::string nameA = a.name;
+        std::string nameB = b.name;
+        std::transform(nameA.begin(), nameA.end(), nameA.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(nameB.begin(), nameB.end(), nameB.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return nameA < nameB;
+    });
+
+    size_t outfitIdx = 0;
+    for (auto& wheel : profile.wheels) {
+        for (auto& slot : wheel.slots) {
+            if (outfitIdx < allOutfits.size()) {
+                slot.outfit = allOutfits[outfitIdx++];
+            } else {
+                slot.outfit = std::nullopt;
+            }
+        }
+    }
+
+    SaveDataInternal();
 }

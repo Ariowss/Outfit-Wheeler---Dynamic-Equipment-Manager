@@ -21,6 +21,7 @@ struct Outfit {
     bool isAddon{ false };
     uint32_t usageCount{ 0 };
     uint32_t lastWornTimestamp{ 0 };
+    std::string color{};
 };
 
 struct Slot {
@@ -29,6 +30,7 @@ struct Slot {
 
 struct Wheel {
     std::string name;
+    std::string color{};
     std::vector<Slot> slots;
 };
 
@@ -48,6 +50,7 @@ public:
     ActorWheelProfile& GetProfile(RE::FormID a_id);
     std::vector<Wheel>& GetActiveWheels();
     size_t& GetActiveWheelIndex();
+    void SortOutfitsAlphabetically();
 };
 
 extern OutfitManager g_manager;
@@ -55,6 +58,7 @@ extern std::recursive_mutex g_dataMutex;
 
 void LoadData();
 void SaveDataInternal();
+void SaveDataAsync();
 std::string ExportConfigToString();
 bool ImportConfigFromString(const std::string& jsonStr);
 std::string GetWheelJson(bool isEditMode);
@@ -64,3 +68,8 @@ void QueueAllLoadedItemThumbnails();
 void QueuePlayerInventoryThumbnails();
 void QueueWardrobeInventoryThumbnails();
 void QueueFollowerInventoryThumbnails();
+nlohmann::json GetDiscoveredPosePacksJson();
+
+std::string FormatFormID(RE::FormID a_id);
+std::string SanitizeUtf8(const std::string& str);
+std::string GetApparelTypeString(RE::TESObjectARMO* armor);
