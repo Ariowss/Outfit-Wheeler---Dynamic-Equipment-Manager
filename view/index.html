@@ -46,7 +46,7 @@
                     <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2">
                         <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
                     </svg>
-                    <input type="text" class="inventory-search-input" id="inventory-search" placeholder="Search armors, jewelry..." oninput="handleInventorySearch(this.value)" onfocus="setTyping(true)" onblur="setTyping(false)">
+                    <input type="text" class="inventory-search-input" id="inventory-search" placeholder="Search armors, jewelry, mod name..." oninput="handleInventorySearch(this.value)" onfocus="setTyping(true)" onblur="setTyping(false)">
                     <button class="search-clear-btn" onclick="clearInventorySearch()">&#x2715;</button>
                 </div>
 
@@ -204,6 +204,82 @@
                 <span class="drag-hint">RMB to move</span>
             </div>
 
+            <div id="studio-pose-bar" class="studio-pose-bar studio-only edit-only">
+                <div class="pose-bar-inner">
+                    <button type="button" class="pose-dropdown-trigger" id="btn-pose-dropdown-trigger" onclick="togglePoseDropdown(event)">
+                        <span class="pose-icon">💃</span>
+                        <span class="pose-selected-label" id="pose-selected-label">Default Stand</span>
+                        <span class="pose-chevron">&#x25BC;</span>
+                    </button>
+                    <select id="studio-pose-select" class="studio-pose-select" style="display:none;" onchange="onStudioPoseChange(this.value)">
+                        <option value="IdleForceDefaultState">Default Stand</option>
+                        <optgroup label="Vanilla Idles">
+                            <option value="IdleWarmHands">Warm Hands</option>
+                            <option value="IdleCrossArms">Cross Arms</option>
+                            <option value="IdleSalute">Salute</option>
+                            <option value="IdleCivilWarCheer">Cheer</option>
+                            <option value="IdlePray">Pray</option>
+                            <option value="IdleSurrender">Surrender</option>
+                            <option value="IdleApplaud">Applaud</option>
+                        </optgroup>
+                        <optgroup label="Compatibility">
+                            <option value="IdleHandsOnHips">Hands on Hips</option>
+                            <option value="IdleModelRunway">Runway Pose</option>
+                            <option value="IdleCombatReady">Combat Ready</option>
+                        </optgroup>
+                    </select>
+                    <button type="button" id="btn-reset-pose" class="btn-reset-pose" onclick="resetStudioPose(event)" title="Reset to default stand">&#x23F9; Reset</button>
+                </div>
+                <div id="studio-pose-dropdown-menu" class="studio-pose-dropdown-menu open-down" style="display:none;">
+                    <div class="pose-menu-item active" data-pose="IdleForceDefaultState" data-name="Default Stand" onmousedown="selectStudioPoseOption('IdleForceDefaultState', 'Default Stand', event)" onclick="selectStudioPoseOption('IdleForceDefaultState', 'Default Stand', event)">
+                        <span>Default Stand</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-group-label">Vanilla Idles</div>
+                    <div class="pose-menu-item" data-pose="IdleWarmHands" data-name="Warm Hands" onmousedown="selectStudioPoseOption('IdleWarmHands', 'Warm Hands', event)" onclick="selectStudioPoseOption('IdleWarmHands', 'Warm Hands', event)">
+                        <span>Warm Hands</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleCrossArms" data-name="Cross Arms" onmousedown="selectStudioPoseOption('IdleCrossArms', 'Cross Arms', event)" onclick="selectStudioPoseOption('IdleCrossArms', 'Cross Arms', event)">
+                        <span>Cross Arms</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleSalute" data-name="Salute" onmousedown="selectStudioPoseOption('IdleSalute', 'Salute', event)" onclick="selectStudioPoseOption('IdleSalute', 'Salute', event)">
+                        <span>Salute</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleCivilWarCheer" data-name="Cheer" onmousedown="selectStudioPoseOption('IdleCivilWarCheer', 'Cheer', event)" onclick="selectStudioPoseOption('IdleCivilWarCheer', 'Cheer', event)">
+                        <span>Cheer</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdlePray" data-name="Pray" onmousedown="selectStudioPoseOption('IdlePray', 'Pray', event)" onclick="selectStudioPoseOption('IdlePray', 'Pray', event)">
+                        <span>Pray</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleSurrender" data-name="Surrender" onmousedown="selectStudioPoseOption('IdleSurrender', 'Surrender', event)" onclick="selectStudioPoseOption('IdleSurrender', 'Surrender', event)">
+                        <span>Surrender</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleApplaud" data-name="Applaud" onmousedown="selectStudioPoseOption('IdleApplaud', 'Applaud', event)" onclick="selectStudioPoseOption('IdleApplaud', 'Applaud', event)">
+                        <span>Applaud</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-group-label">Compatibility</div>
+                    <div class="pose-menu-item" data-pose="IdleHandsOnHips" data-name="Hands on Hips" onmousedown="selectStudioPoseOption('IdleHandsOnHips', 'Hands on Hips', event)" onclick="selectStudioPoseOption('IdleHandsOnHips', 'Hands on Hips', event)">
+                        <span>Hands on Hips</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleModelRunway" data-name="Runway Pose" onmousedown="selectStudioPoseOption('IdleModelRunway', 'Runway Pose', event)" onclick="selectStudioPoseOption('IdleModelRunway', 'Runway Pose', event)">
+                        <span>Runway Pose</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                    <div class="pose-menu-item" data-pose="IdleCombatReady" data-name="Combat Ready" onmousedown="selectStudioPoseOption('IdleCombatReady', 'Combat Ready', event)" onclick="selectStudioPoseOption('IdleCombatReady', 'Combat Ready', event)">
+                        <span>Combat Ready</span>
+                        <span class="pose-check">&#x2713;</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="studio-dock-body">
                 <div id="panel-slots-rail" class="slots-rail-subpanel">
                     <div class="rail-header">
@@ -225,7 +301,10 @@
                         <button class="nav-arrow-btn" onclick="changeWheel(1)">&#x25B6;</button>
                         <div class="wheel-quick-actions">
                             <button class="toolbar-btn" onclick="addWheel()">+ Wheel</button>
+                            <button class="toolbar-btn" onclick="sortOutfitsAlphabetically()" title="Sort all outfits alphabetically across wheels">Sort A-Z</button>
                             <button class="toolbar-btn" onclick="ctxRenameWheel(event)">Rename</button>
+                            <button class="toolbar-btn" onclick="openWheelColorModal(event)" title="Customize Wheel Color">🎨 Color</button>
+                            <button class="toolbar-btn toolbar-btn-danger" onclick="ctxDeleteWheel(event)" title="Delete Current Wheel">Delete</button>
                         </div>
                     </div>
 
@@ -234,6 +313,7 @@
                             <span class="drawer-slot-badge" id="drawer-slot-badge">SLOT 1</span>
                             <span class="drawer-outfit-name" id="drawer-outfit-name" onclick="ctxRenameSlot(event)" style="cursor:pointer;" title="Rename Slot">Outfit 1</span>
                             <button class="btn-slot-rename" onclick="ctxRenameSlot(event)" title="Rename Slot">Rename</button>
+                            <button class="slot-color-btn" onclick="openSlotColorModal(event)" title="Customize Slot Color">🎨 Color</button>
                         </div>
                         <span class="status-chip chip-equipped" id="drawer-slot-status">EQUIPPED</span>
                     </div>
@@ -318,6 +398,10 @@
 
             <div class="settings-section">
                 <h4>Display &amp; Accessibility</h4>
+                <div class="checkbox-row" style="margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <input type="checkbox" id="chk-enable-previews" checked>
+                    <label for="chk-enable-previews" style="font-weight: 700; color: #ffffff;">Enable 3D Item Previews &amp; Dynamic Thumbnails</label>
+                </div>
                 <div class="setting-row">
                     <label>UI &amp; Text Scale</label>
                     <div style="display:flex; align-items:center; gap:8px; width: 50%;">
@@ -330,6 +414,53 @@
                     <div style="display:flex; align-items:center; gap:6px;">
                         <button type="button" id="btn-mode-classic" class="btn-secondary" onclick="setEditUiStyle(0)" style="padding:4px 10px; font-size:11px;">Classic (v2.8)</button>
                         <button type="button" id="btn-mode-studio" class="btn-secondary" onclick="setEditUiStyle(1)" style="padding:4px 10px; font-size:11px;">Studio (v3.0)</button>
+                    </div>
+                </div>
+                <div class="setting-row" style="margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06);">
+                    <label>Thumbnail Cache</label>
+                    <button type="button" class="btn-secondary" onclick="clearThumbnailCache()" style="padding:4px 10px; font-size:11px; display:flex; align-items:center; gap:6px;">
+                        <span>🧹</span> Purge Thumbnail Cache
+                    </button>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h4>Theme &amp; Visual Customization</h4>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <label style="font-size:11px; color:var(--text-secondary);">🌟 Accent &amp; Glow (Neons &amp; Borders)</label>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <div class="theme-color-preview-chip" id="theme-color-preview-chip" style="width:22px; height:22px; border-radius:4px; border:1px solid var(--border-color); background:var(--accent-primary, #38bdf8); cursor:pointer; box-shadow:0 0 8px var(--accent-glow);" onclick="openThemeColorModal('accent')" title="Click to customize accent color"></div>
+                            <span id="theme-color-hex" style="font-family:monospace; font-size:11px; font-weight:700; color:var(--accent-primary, #38bdf8);">#38BDF8</span>
+                            <button type="button" class="btn-secondary" onclick="openThemeColorModal('accent')" style="padding:3px 9px; font-size:10px;">🎨 Color Spectrum</button>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <label style="font-size:11px; color:var(--text-secondary);">🎨 Menu Background &amp; Surfaces</label>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <div class="theme-color-preview-chip" id="theme-bg-preview-chip" style="width:22px; height:22px; border-radius:4px; border:1px solid var(--border-color); background:var(--bg-surface, #070a0f); cursor:pointer; box-shadow:0 0 8px rgba(0,0,0,0.6);" onclick="openThemeColorModal('bg')" title="Click to customize menu background"></div>
+                            <span id="theme-bg-hex" style="font-family:monospace; font-size:11px; font-weight:700; color:var(--text-primary, #f8fafc);">#070A0F</span>
+                            <button type="button" class="btn-secondary" onclick="openThemeColorModal('bg')" style="padding:3px 9px; font-size:10px;">🎨 Color Spectrum</button>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <label style="font-size:11px; color:var(--text-secondary);">✍️ Text &amp; Typography Color</label>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <div class="theme-color-preview-chip" id="theme-text-preview-chip" style="width:22px; height:22px; border-radius:4px; border:1px solid var(--border-color); background:var(--text-primary, #f8fafc); cursor:pointer; box-shadow:0 0 8px rgba(255,255,255,0.2);" onclick="openThemeColorModal('text')" title="Click to customize text color"></div>
+                            <span id="theme-text-hex" style="font-family:monospace; font-size:11px; font-weight:700; color:var(--text-primary, #f8fafc);">#F8FAFC</span>
+                            <button type="button" class="btn-secondary" onclick="openThemeColorModal('text')" style="padding:3px 9px; font-size:10px;">🎨 Color Spectrum</button>
+                        </div>
+                    </div>
+                    <div style="margin-top:2px;">
+                        <div style="font-size:10.5px; color:var(--text-secondary); margin-bottom:5px; font-weight:600;">Coordinated Theme Archetypes</div>
+                        <div class="theme-preset-pills" id="theme-preset-pills"></div>
+                    </div>
+                    <div class="setting-row" style="margin-top:2px;">
+                        <label>Surface Tint Depth</label>
+                        <div style="display:flex; align-items:center; gap:8px; width:50%;">
+                            <input type="range" id="slider-theme-depth" min="0" max="100" value="60" oninput="onThemeDepthInput(this.value)" style="flex:1;">
+                            <span id="txt-theme-depth" style="min-width:36px; text-align:right; font-size:11px; font-weight:600; color:var(--text-gold);">60%</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -377,17 +508,23 @@
                         <span id="dd-gp-play-text" style="display:none;">LB</span>
                         <button type="button" id="btn-gp-play-key" class="keybind-btn" onclick="startGamepadListen('play')">[DPad Right]</button>
                     </div>
+                </div>
+            </div>
+
             <div class="settings-section">
                 <h4>Backup &amp; Restoration</h4>
                 <p style="font-size: 11px; color: #a0aec0; margin: 0 0 8px 0; line-height: 1.4;">
-                    Export your wheels and slot configurations to a backup file in <code>Data/SKSE/Plugins/backups/</code>, or restore a previous backup.
+                    Export your wheels and slot configurations to a backup file in <code>Data/SKSE/Plugins/backups/</code>, or restore a previous backup snapshot.
                 </p>
-                <div style="display: flex; gap: 10px;">
-                    <button type="button" class="btn-secondary" onclick="exportConfiguration()" style="flex: 1; padding: 6px 12px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button type="button" class="btn-secondary" onclick="exportConfiguration()" style="flex: 1; min-width: 110px; padding: 6px 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
                         <span>📥</span> Export Backup
                     </button>
-                    <button type="button" class="btn-secondary" onclick="importConfiguration()" style="flex: 1; padding: 6px 12px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                        <span>📤</span> Restore Backup
+                    <button type="button" class="btn-secondary" onclick="importConfiguration()" style="flex: 1; min-width: 110px; padding: 6px 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <span>🔄</span> Restore Latest
+                    </button>
+                    <button type="button" class="btn-secondary" onclick="openBackupsModal()" style="flex: 1; min-width: 110px; padding: 6px 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <span>📂</span> Browse Backups...
                     </button>
                 </div>
             </div>
@@ -410,6 +547,7 @@
 
     <div id="slot-context-menu" class="context-menu-popup">
         <div class="ctx-header" id="slot-ctx-title">Slot Options</div>
+        <div class="ctx-item" onclick="openSlotColorModal(event)">🎨 Customize Slot Color</div>
         <div class="ctx-item" onclick="ctxSaveOutfit(event)">Save Current Gear</div>
         <div class="ctx-item" onclick="ctxRenameSlot(event)">Rename Slot</div>
         <div class="ctx-item" id="ctx-slot-wardrobe-toggle" onclick="ctxToggleSlotWardrobe(event)">Store in Wardrobe</div>
@@ -424,7 +562,7 @@
     <div id="item-context-menu" class="context-menu-popup">
         <div class="ctx-header" id="item-ctx-title">Item Options</div>
         <div class="ctx-item" onclick="ctxItemEquipToggle(event)">Equip / Unequip</div>
-        <div class="ctx-item" onclick="ctxItemAddToCurrentSlot(event)">+ Add to Current Slot</div>
+        <div class="ctx-item" id="ctx-item-slot-action" onclick="ctxItemAddToCurrentSlot(event)">+ Add to Current Slot</div>
         <div class="ctx-divider"></div>
         <div class="ctx-header">Transfer Item To:</div>
         <div id="item-transfer-targets-list" class="item-transfer-targets-container"></div>
@@ -440,8 +578,10 @@
 
     <div id="wheel-context-menu" class="context-menu-popup">
         <div class="ctx-header">Wheel Options</div>
+        <div class="ctx-item" onclick="openWheelColorModal(event)">🎨 Customize Wheel Color</div>
         <div class="ctx-item" onclick="addWheel()">+ Create New Wheel</div>
         <div class="ctx-item" onclick="addSlot()">+ Add Slot</div>
+        <div class="ctx-item" onclick="sortOutfitsAlphabetically()">Sort Outfits (A-Z)</div>
         <div class="ctx-item" onclick="ctxRenameWheel(event)">Rename Wheel</div>
         <div class="ctx-item" onclick="ctxMoveWheel(-1, event)">Move Wheel Left</div>
         <div class="ctx-item" onclick="ctxMoveWheel(1, event)">Move Wheel Right</div>
@@ -451,6 +591,54 @@
         <div class="ctx-item" onclick="ctxRetrieveAllOutfits(event)">Take All from Wardrobe</div>
         <div class="ctx-divider"></div>
         <div class="ctx-item ctx-danger" onclick="ctxDeleteWheel(event)">Delete Current Wheel</div>
+    </div>
+
+    <div id="color-picker-modal" class="fullscreen-modal-backdrop" style="display: none;">
+        <div class="modal-card modal-sm" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3 id="color-modal-title">Customize Color</h3>
+                <button class="modal-close" onclick="hideColorPickerModal()">&#x2715;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; padding: 14px;">
+                <div class="color-target-tabs" id="color-target-tabs" style="display:none;">
+                    <button type="button" class="color-target-tab active" id="tab-color-accent" onclick="switchThemeColorMode('accent')">🌟 Accent</button>
+                    <button type="button" class="color-target-tab" id="tab-color-bg" onclick="switchThemeColorMode('bg')">🎨 Background</button>
+                    <button type="button" class="color-target-tab" id="tab-color-text" onclick="switchThemeColorMode('text')">✍️ Text</button>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4;" id="color-modal-desc">
+                    Pick any custom color from the 2D spectrum canvas, or select an archetype preset below.
+                </div>
+
+                <!-- 2D Color Spectrum Canvas with Interactive Circular Ring Handle -->
+                <div class="color-spectrum-wrapper" id="color-spectrum-wrapper">
+                    <canvas id="color-spectrum-canvas" width="360" height="180" class="color-spectrum-canvas"></canvas>
+                    <div id="color-spectrum-handle" class="color-spectrum-handle"></div>
+                </div>
+
+                <!-- Preview Swatch, HEX Input & Name Badge -->
+                <div class="color-picker-controls-row">
+                    <div class="color-preview-chip-lg" id="modal-color-preview"></div>
+                    <div class="color-hex-field-wrap">
+                        <span class="color-hex-hash">#</span>
+                        <input type="text" id="modal-color-hex-input" class="modal-hex-input" maxlength="6" value="38BDF8" spellcheck="false" autocomplete="off" oninput="onModalHexTextInput(this.value)">
+                    </div>
+                    <div class="color-archetype-badge" id="modal-color-name-label">Diamond Blue</div>
+                </div>
+
+                <!-- Preset Archetypes Swatches Grid -->
+                <div class="color-swatches-box">
+                    <div class="color-swatches-hdr">Quick Archetypes</div>
+                    <div class="color-swatch-grid" id="modal-color-swatches"></div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                <button class="btn-danger-outline" onclick="resetTargetColor()">Reset to Default</button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-secondary" onclick="hideColorPickerModal()">Cancel</button>
+                    <button class="btn-primary" onclick="confirmTargetColor()">Apply Color</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="rename-modal" class="fullscreen-modal-backdrop">
@@ -500,6 +688,27 @@
             <div class="modal-footer">
                 <button class="btn-secondary" onclick="hideContextModal()">Cancel</button>
                 <button class="btn-primary" onclick="saveSlotContextAndRating()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="backups-modal" class="fullscreen-modal-backdrop" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Restore From Backup</h3>
+                <button class="modal-close" onclick="hideBackupsModal()">&#x2715;</button>
+            </div>
+            <div class="modal-body" style="padding: 14px; max-height: 380px; overflow-y: auto;">
+                <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 12px 0; line-height: 1.4;">
+                    Select a configuration snapshot from <code>Data/SKSE/Plugins/backups/</code> to restore:
+                </p>
+                <div id="backups-list-container" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 12px;">Loading backups...</div>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 10px 14px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <button type="button" class="btn-secondary" onclick="fetchBackupsList()" style="padding: 4px 10px; font-size: 11px;">🔄 Refresh List</button>
+                <button type="button" class="btn-secondary" onclick="hideBackupsModal()">Close</button>
             </div>
         </div>
     </div>
