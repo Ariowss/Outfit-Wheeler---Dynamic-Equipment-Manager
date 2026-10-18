@@ -217,6 +217,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initCarouselScrollHandlers();
     initWheelCenterInteraction();
     initCustomItemDragDrop();
+    setupInventoryScrollChunking();
+    if (typeof updateUiForPreviewsSetting === 'function') updateUiForPreviewsSetting();
     if (typeof updateWheelUI === 'function') updateWheelUI();
 });
 
@@ -234,13 +236,13 @@ function getAutoResolutionScaleValue() {
 }
 
 function getUiScale() {
+    if (currentWheelData && currentWheelData.uiScale !== undefined) {
+        const s = parseFloat(currentWheelData.uiScale);
+        if (!isNaN(s) && s >= 0.5 && s <= 3.0) return s;
+    }
     const rawStored = typeof safeGetStorage === 'function' ? safeGetStorage('outfit_wheeler_ui_scale', '') : (typeof localStorage !== 'undefined' ? localStorage.getItem('outfit_wheeler_ui_scale') : null);
     const stored = parseFloat(rawStored);
     if (!isNaN(stored) && stored >= 0.5 && stored <= 3.0) return stored;
-    if (currentWheelData && currentWheelData.uiScale !== undefined) {
-        const s = parseFloat(currentWheelData.uiScale);
-        if (!isNaN(s) && s >= 0.5 && s <= 3.0 && Math.abs(s - 1.0) > 0.001) return s;
-    }
     return getAutoResolutionScaleValue();
 }
 
@@ -405,10 +407,25 @@ function updateModeSwitchButton() {
 
 function setTyping(state) {
     isTyping = state;
+    const payload = JSON.stringify({ typing: state });
     if (typeof window.SetTypingMode === 'function') {
-        window.SetTypingMode(JSON.stringify({ typing: state }));
+        window.SetTypingMode(payload);
+    }
+    if (typeof window.SetTypingState === 'function') {
+        window.SetTypingState(payload);
     }
 }
+
+function sortOutfitsAlphabetically() {
+    hideAllMenus();
+    if (typeof window.SortOutfitsAlphabetically === 'function') {
+        window.SortOutfitsAlphabetically('{}');
+    }
+    if (typeof showSaveToast === 'function') {
+        showSaveToast('Outfits sorted alphabetically!');
+    }
+}
+window.sortOutfitsAlphabetically = sortOutfitsAlphabetically;
 
 function getScanCode(e) {
     if (e.code && scanCodeMap[e.code]) return scanCodeMap[e.code];
@@ -446,32 +463,55 @@ function getKeyName(dxCode) {
 
 function hideAllMenus(e) {
     if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
-    const menus = ['slot-context-menu', 'wheel-context-menu', 'item-context-menu', 'transfer-all-context-menu'];
+    const menus = ['slot-context-menu', 'wheel-context-menu', 'item-context-menu', 'transfer-all-context-menu', 'studio-pose-dropdown-menu'];
     menus.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
     });
+    const trigger = document.getElementById('btn-pose-dropdown-trigger');
+    if (trigger) trigger.classList.remove('active');
     if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
 }
+
+function getElementUnderPoint(x, y) {
+    if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') return null;
+    let el = document.elementFromPoint(x, y);
+    if (!el || el === document.body || el === document.documentElement) {
+        const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
+        if (scale !== 1.0 && scale > 0) {
+            const elScaled = document.elementFromPoint(x / scale, y / scale);
+            if (elScaled && elScaled !== document.body && elScaled !== document.documentElement) {
+                return elScaled;
+            }
+            const elMulti = document.elementFromPoint(x * scale, y * scale);
+            if (elMulti && elMulti !== document.body && elMulti !== document.documentElement) {
+                return elMulti;
+            }
+        }
+    }
+    return el;
+}
+window.getElementUnderPoint = getElementUnderPoint;
 
 function positionContextMenu(menu, x, y) {
     if (!menu) return;
     menu.style.visibility = 'hidden';
     menu.style.display = 'flex';
+    menu.style.maxHeight = '';
     menu.style.left = '0px';
     menu.style.top = '0px';
 
     const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
     const menuW = menu.offsetWidth || 180;
-    const menuH = menu.offsetHeight || 220;
+    const menuH = menu.offsetHeight || 260;
 
     const rawVw = window.innerWidth || (document.documentElement ? document.documentElement.clientWidth : 1920) || 1920;
     const rawVh = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 1080) || 1080;
     const vw = rawVw / scale;
     const vh = rawVh / scale;
 
-    let posX = (typeof x === 'number' && !isNaN(x)) ? (x / scale) : (vw / 2);
-    let posY = (typeof y === 'number' && !isNaN(y)) ? (y / scale) : (vh / 2);
+    let posX = (typeof x === 'number' && !isNaN(x) && x > 0) ? (x / scale) : (vw / 2);
+    let posY = (typeof y === 'number' && !isNaN(y) && y > 0) ? (y / scale) : (vh / 2);
 
     if (posX + menuW > vw - 15) {
         posX = Math.max(15, posX - menuW);
@@ -486,6 +526,10 @@ function positionContextMenu(menu, x, y) {
 
     posX = Math.max(15, Math.min(posX, Math.max(15, vw - menuW - 15)));
     posY = Math.max(15, Math.min(posY, Math.max(15, vh - menuH - 15)));
+
+    const maxH = Math.max(140, Math.round(vh - posY - 10));
+    menu.style.maxHeight = maxH + 'px';
+    menu.style.overflowY = 'auto';
 
     menu.style.left = Math.round(posX) + 'px';
     menu.style.top = Math.round(posY) + 'px';
@@ -529,7 +573,22 @@ function updateGamepadHintsVisibility() {
             }
         }
     }
-    hintsBar.style.display = hasGp ? 'flex' : 'none';
+    if (hasGp) {
+        hintsBar.innerHTML = `
+            <div class="gp-hint-item"><span class="gp-key">A</span><span>Equip</span></div>
+            <div class="gp-hint-item"><span class="gp-key">B</span><span>Close</span></div>
+            <div class="gp-hint-item"><span class="gp-key">Scroll / LB RB</span><span>Cycle Wheel</span></div>
+            <div class="gp-hint-item"><span class="gp-key">LT / RT</span><span>Filter Context</span></div>
+        `;
+    } else {
+        hintsBar.innerHTML = `
+            <div class="gp-hint-item"><span class="gp-key">Scroll Wheel</span><span>Cycle Wheel</span></div>
+            <div class="gp-hint-item"><span class="gp-key">LMB</span><span>Equip</span></div>
+            <div class="gp-hint-item"><span class="gp-key">Shift + LMB</span><span>Audition</span></div>
+            <div class="gp-hint-item"><span class="gp-key">Esc</span><span>Close</span></div>
+        `;
+    }
+    hintsBar.style.display = 'flex';
 }
 
 function getInventoryBySourceId(sourceId) {
@@ -547,6 +606,21 @@ function getInventoryBySourceId(sourceId) {
                 return currentWheelData.actorInventories[key] || [];
             }
         }
+    }
+    if (srcUpper === 'MODEX' || srcUpper === 'CATALOG') {
+        if (currentWheelData.catalogInventory) {
+            return currentWheelData.catalogInventory;
+        }
+        let allCached = [];
+        let seenKeys = new Set();
+        for (let m in modCatalogCache) {
+            const mLower = m.toLowerCase();
+            if (!seenKeys.has(mLower) && Array.isArray(modCatalogCache[m])) {
+                seenKeys.add(mLower);
+                allCached = allCached.concat(modCatalogCache[m]);
+            }
+        }
+        return allCached;
     }
     if (currentWheelData.followerInventory && currentWheelData.followerInventory.length > 0) {
         return currentWheelData.followerInventory;
@@ -589,13 +663,12 @@ window.openWheel = function(argument) {
     const storedUiScale = parseFloat(safeGetStorage('outfit_wheeler_ui_scale', ''));
     if (!isNaN(storedUiScale) && storedUiScale >= 0.5 && storedUiScale <= 3.0) {
         currentWheelData.uiScale = storedUiScale;
+    } else if (currentWheelData.uiScale !== undefined && currentWheelData.uiScale >= 0.5 && currentWheelData.uiScale <= 3.0) {
+        safeSetStorage('outfit_wheeler_ui_scale', String(currentWheelData.uiScale));
     } else {
         const autoScale = getAutoResolutionScaleValue();
-        if (currentWheelData.uiScale === undefined || Math.abs(currentWheelData.uiScale - 1.0) < 0.001) {
-            currentWheelData.uiScale = autoScale;
-        } else {
-            safeSetStorage('outfit_wheeler_ui_scale', String(currentWheelData.uiScale));
-        }
+        currentWheelData.uiScale = autoScale;
+        safeSetStorage('outfit_wheeler_ui_scale', String(autoScale));
     }
 
     const storedInvSort = safeGetStorage('outfit_wheeler_inv_sort', '');
@@ -642,6 +715,36 @@ window.openWheel = function(argument) {
     if (currentWheelData.gamepadPlayModifier !== undefined && currentWheelData.gamepadPlayModifier !== null) {
         currentWheelData.gamepadPlayModifier = parseInt(currentWheelData.gamepadPlayModifier, 10) || 0x0100;
         safeSetStorage('outfit_wheeler_gp_play_mod', String(currentWheelData.gamepadPlayModifier));
+    }
+
+    if (currentWheelData.showItemPreviews !== undefined && currentWheelData.showItemPreviews !== null) {
+        safeSetStorage('outfit_wheeler_show_previews', currentWheelData.showItemPreviews ? 'true' : 'false');
+    }
+    if (currentWheelData.themeAccentColor !== undefined && currentWheelData.themeAccentColor !== null) {
+        safeSetStorage('outfit_wheeler_theme_hex', currentWheelData.themeAccentColor);
+    }
+    if (currentWheelData.themeBgColor !== undefined && currentWheelData.themeBgColor !== null) {
+        safeSetStorage('outfit_wheeler_theme_bg', currentWheelData.themeBgColor);
+    }
+    if (currentWheelData.themeTextColor !== undefined && currentWheelData.themeTextColor !== null) {
+        safeSetStorage('outfit_wheeler_theme_text', currentWheelData.themeTextColor);
+    }
+    if (currentWheelData.themeDepth !== undefined && currentWheelData.themeDepth !== null) {
+        safeSetStorage('outfit_wheeler_theme_depth', String(currentWheelData.themeDepth));
+    }
+    if (currentWheelData.themePreset !== undefined && currentWheelData.themePreset !== null) {
+        safeSetStorage('outfit_wheeler_theme_preset', currentWheelData.themePreset);
+    }
+
+    const themeHex = safeGetStorage('outfit_wheeler_theme_hex', currentWheelData.themeAccentColor || '#38bdf8');
+    const themeBg = safeGetStorage('outfit_wheeler_theme_bg', currentWheelData.themeBgColor || '#070a0f');
+    const themeText = safeGetStorage('outfit_wheeler_theme_text', currentWheelData.themeTextColor || '#f8fafc');
+    const themeDepth = parseFloat(safeGetStorage('outfit_wheeler_theme_depth', String(currentWheelData.themeDepth !== undefined ? currentWheelData.themeDepth : 0.60)));
+    const themePreset = safeGetStorage('outfit_wheeler_theme_preset', currentWheelData.themePreset || 'sapphire');
+    if (typeof applyTheme === 'function') {
+        applyTheme(themeHex, themeDepth, themePreset, themeBg, themeText);
+    } else if (typeof window !== 'undefined' && typeof window.applyTheme === 'function') {
+        window.applyTheme(themeHex, themeDepth, themePreset, themeBg, themeText);
     }
 
     tempOffsetX = currentWheelData.wheelOffsetX || 0.0;
@@ -700,6 +803,9 @@ window.openWheel = function(argument) {
     renderSlotsRail();
     renderDrawerDetails();
     if (typeof updateWheelUI === 'function') updateWheelUI();
+    if (currentWheelData.posePacks && Array.isArray(currentWheelData.posePacks)) {
+        populatePosePacks(currentWheelData.posePacks);
+    }
     } catch (err) {
         console.error(err);
     } finally {
@@ -714,6 +820,40 @@ window.openWheel = function(argument) {
         requestAnimationFrame(() => {
             updateVisibleThumbnailsPriority();
         });
+    }
+};
+
+window.updateActiveWheel = function(argument) {
+    try {
+        let data = argument;
+        if (typeof argument === 'string' && argument.trim().length > 0) {
+            data = JSON.parse(argument);
+        }
+        if (!data || typeof data !== 'object') return;
+        if (!currentWheelData) currentWheelData = {};
+
+        currentWheelData.wheelIndex = (data.wheelIndex !== undefined) ? data.wheelIndex : currentWheelData.wheelIndex;
+        currentWheelData.wheelName = data.wheelName || currentWheelData.wheelName;
+        currentWheelData.wheelColor = data.wheelColor || '';
+        currentWheelData.totalWheels = data.totalWheels || currentWheelData.totalWheels;
+        if (Array.isArray(data.slots)) {
+            currentWheelData.slots = data.slots;
+        }
+
+        const titleEl = document.getElementById('wheel-title-display');
+        if (titleEl) {
+            const wNum = (currentWheelData.wheelIndex !== undefined ? currentWheelData.wheelIndex : 0) + 1;
+            const wTot = currentWheelData.totalWheels || 1;
+            const wName = currentWheelData.wheelName || ('Wheel ' + wNum);
+            titleEl.textContent = `${wName} (${wNum}/${wTot})`;
+        }
+
+        selectedSlotIndex = 0;
+        if (typeof updateWheelUI === 'function') updateWheelUI();
+        if (typeof renderSlotsRail === 'function') renderSlotsRail();
+        if (typeof renderDrawerDetails === 'function') renderDrawerDetails();
+    } catch (err) {
+        console.error('updateActiveWheel error:', err);
     }
 };
 
@@ -861,11 +1001,15 @@ function handleWrapperClick(e) {
                 target.classList.contains('modal-card') ||
                 target.classList.contains('modifier-pill-group') ||
                 target.classList.contains('custom-dropdown') ||
-                target.classList.contains('dropdown-list')) {
+                target.classList.contains('dropdown-list') ||
+                target.classList.contains('studio-pose-bar') ||
+                target.classList.contains('studio-pose-dropdown-menu') ||
+                target.classList.contains('pose-bar-inner') ||
+                target.classList.contains('pose-menu-item')) {
                 return;
             }
         }
-        if (target.id === 'panel-settings') return;
+        if (target.id === 'panel-settings' || target.id === 'studio-pose-bar' || target.id === 'studio-pose-dropdown-menu') return;
         target = target.parentElement;
     }
     hideAllMenus();
@@ -968,18 +1112,47 @@ function initGlobalInputHandlers() {
     });
 
     document.addEventListener('wheel', (e) => {
-        if (safeClosest(e.target, '#panel-settings') || safeClosest(e.target, '.modal-card') || safeClosest(e.target, '#panel-inventory') || safeClosest(e.target, '#panel-drawer') || safeClosest(e.target, '.panel-body-scrollable') || safeClosest(e.target, '.custom-sort-list')) return;
+        let rawDelta = 0;
+        if (typeof e.deltaY === 'number' && e.deltaY !== 0) {
+            rawDelta = e.deltaY;
+        } else if (typeof e.wheelDelta === 'number' && e.wheelDelta !== 0) {
+            rawDelta = -e.wheelDelta;
+        } else if (typeof e.detail === 'number' && e.detail !== 0) {
+            rawDelta = e.detail * 40;
+        }
+        if (!rawDelta) return;
+
+        if (safeClosest(e.target, '.draggable-panel') ||
+            safeClosest(e.target, '.glass-panel') ||
+            safeClosest(e.target, '#panel-settings') ||
+            safeClosest(e.target, '#panel-inventory') ||
+            safeClosest(e.target, '#panel-drawer') ||
+            safeClosest(e.target, '#right-dock-container') ||
+            safeClosest(e.target, '#studio-pose-bar') ||
+            safeClosest(e.target, '.studio-pose-dropdown-menu') ||
+            safeClosest(e.target, '.panel-body-scrollable') ||
+            safeClosest(e.target, '#inventory-body-scrollable') ||
+            safeClosest(e.target, '#drawer-body-scrollable') ||
+            safeClosest(e.target, '.custom-sort-list') ||
+            safeClosest(e.target, '.modal-card') ||
+            safeClosest(e.target, '.modal-overlay') ||
+            safeClosest(e.target, '.context-menu-popup') ||
+            safeClosest(e.target, '.slots-rail-list') ||
+            safeClosest(e.target, '.color-picker-dropdown')) {
+            return;
+        }
+
         if (isDraggingWheelCenter && wheelDragButton === 0) return;
-        if (isEditModeActive() && !(typeof isClassicEditMode === 'function' && isClassicEditMode()) && !safeClosest(e.target, '#wheel-container')) return;
+        if (isEditModeActive() && !safeClosest(e.target, '#wheel-container') && !safeClosest(e.target, '.wheel-center')) return;
         const now = Date.now();
         if (now - lastWheelScrollTimestamp < 150) return;
         lastWheelScrollTimestamp = now;
 
         if (currentWheelData) {
-            const delta = e.deltaY < 0 ? -1 : 1;
+            const delta = rawDelta < 0 ? -1 : 1;
             changeWheel(delta);
         }
-    }, { passive: false });
+    }, { passive: true });
 
     document.addEventListener('keydown', (e) => {
         if (listeningKeyType) {
@@ -1055,49 +1228,11 @@ function initGlobalInputHandlers() {
         if (isTyping || (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable))) {
             return;
         }
-
-        const pressedScanCode = getScanCode(e);
-        const editKey = currentWheelData.editKey || 0x31;
-        const editMod = currentWheelData.editModifierKey !== undefined ? (parseInt(currentWheelData.editModifierKey, 10) || 0) : 0;
-        const playKey = currentWheelData.playKey || 0x2F;
-        const playMod = currentWheelData.playModifierKey !== undefined ? (parseInt(currentWheelData.playModifierKey, 10) || 0) : 0;
-
-        const shiftHold = e.shiftKey;
-        const ctrlHold = e.ctrlKey;
-        const altHold = e.altKey;
-
-        function checkModMatch(mod) {
-            if (mod === 0) return !shiftHold && !ctrlHold && !altHold;
-            if ((mod === 42 || mod === 54 || mod === 0x2A || mod === 0x36) && shiftHold) return true;
-            if ((mod === 29 || mod === 157 || mod === 0x1D || mod === 0x9D) && ctrlHold) return true;
-            if ((mod === 56 || mod === 184 || mod === 0x38 || mod === 0xB8) && altHold) return true;
-            return false;
-        }
-
-        const editModMatch = checkModMatch(editMod);
-        const playModMatch = checkModMatch(playMod);
-        const editRequiresMod = (editMod !== 0);
-        const playRequiresMod = (playMod !== 0);
-
-        let matchEdit = (pressedScanCode === editKey && editModMatch);
-        let matchPlay = (pressedScanCode === playKey && playModMatch);
-
-        if (editRequiresMod && !editModMatch) matchEdit = false;
-        if (playRequiresMod && !playModMatch) matchPlay = false;
-
-        if (editRequiresMod && matchEdit) matchPlay = false;
-        else if (playRequiresMod && matchPlay) matchEdit = false;
-
-        if (matchEdit || matchPlay) {
-            e.preventDefault();
-            e.stopPropagation();
-            closeWheel();
-        }
     });
 
     document.addEventListener('mousedown', (e) => {
-        const isInsideMenu = !!safeClosest(e.target, '.context-menu-popup');
-        const isInsideDropdown = !!safeClosest(e.target, '.custom-dropdown, .custom-sort-dropdown, .dropdown-list, .custom-sort-list, #panel-settings, .modifier-pill-group');
+        const isInsideMenu = !!safeClosest(e.target, '.context-menu-popup, .studio-pose-dropdown-menu, .studio-pose-bar, .pose-menu-item');
+        const isInsideDropdown = !!safeClosest(e.target, '.custom-dropdown, .custom-sort-dropdown, .dropdown-list, .custom-sort-list, #panel-settings, .modifier-pill-group, .studio-pose-bar, .studio-pose-dropdown-menu');
 
         if (e.button === 0) {
             if (!isInsideMenu) {
@@ -1126,7 +1261,7 @@ function initGlobalInputHandlers() {
 
             if (isInsideMenu || safeClosest(e.target, '.modal-card') || safeClosest(e.target, '#panel-settings')) return;
 
-            const itemElem = safeClosest(e.target, '.item-row-card');
+            const itemElem = safeClosest(e.target, '.item-row-card, .item-card');
             if (itemElem) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1136,25 +1271,41 @@ function initGlobalInputHandlers() {
                 const formIdStr = itemElem.getAttribute('data-form-id');
                 const uniqueIdStr = itemElem.getAttribute('data-unique-id');
                 const inv = getInventoryBySourceId(activeInventorySource);
-                let matchedItem = null;
-                if (rawIdStr !== null) {
-                    const rId = parseInt(rawIdStr, 10);
-                    matchedItem = inv.find(x => x.rawID === rId);
-                }
-                if (!matchedItem && uniqueIdStr !== null) {
+                let matchedItem = itemElem._item || null;
+                if (!matchedItem && uniqueIdStr !== null && uniqueIdStr !== '0' && uniqueIdStr !== '') {
                     const uId = parseInt(uniqueIdStr, 10);
                     matchedItem = inv.find(x => x.uniqueID === uId);
+                }
+                if (!matchedItem && inspectedItemObject) {
+                    const inspectedRawId = inspectedItemObject.rawID || inspectedItemObject.id;
+                    if ((rawIdStr && String(inspectedRawId) === rawIdStr) || (formIdStr && inspectedItemObject.id === formIdStr)) {
+                        matchedItem = inspectedItemObject;
+                    }
+                }
+                if (!matchedItem && rawIdStr !== null && rawIdStr !== '0') {
+                    const rId = parseInt(rawIdStr, 10);
+                    const candidates = inv.filter(x => x.rawID === rId);
+                    if (candidates.length === 1) {
+                        matchedItem = candidates[0];
+                    } else if (candidates.length > 1) {
+                        const itemNameEl = itemElem.querySelector('.item-name-text, .card-name-label');
+                        const itemName = itemNameEl ? itemNameEl.innerText.trim() : '';
+                        matchedItem = candidates.find(x => (x.customName && x.customName === itemName) || x.name === itemName) || candidates[0];
+                    }
                 }
                 if (!matchedItem && formIdStr) {
                     matchedItem = inv.find(x => x.id === formIdStr);
                 }
                 if (!matchedItem) {
-                    const itemNameEl = itemElem.querySelector('.item-name-text');
+                    const itemNameEl = itemElem.querySelector('.item-name-text, .card-name-label');
                     const itemName = itemNameEl ? itemNameEl.innerText.trim() : '';
-                    matchedItem = inv.find(x => x.name === itemName) || inspectedItemObject;
+                    matchedItem = inv.find(x => x.name === itemName);
+                }
+                if (!matchedItem) {
+                    matchedItem = inspectedItemObject;
                 }
 
-                if (itemMenu && itemMenu.style.display === 'flex' && inspectedItemObject && matchedItem && (inspectedItemObject.rawID === matchedItem.rawID || inspectedItemObject === matchedItem)) {
+                if (itemMenu && itemMenu.style.display === 'flex' && inspectedItemObject && matchedItem && (inspectedItemObject === matchedItem || (inspectedItemObject.uniqueID && matchedItem.uniqueID && inspectedItemObject.uniqueID === matchedItem.uniqueID) || (inspectedItemObject.rawID && matchedItem.rawID && inspectedItemObject.rawID === matchedItem.rawID))) {
                     hideAllMenus();
                     return;
                 }
@@ -1501,24 +1652,32 @@ function addSlot() {
         if (!Array.isArray(currentWheelData.slots)) {
             currentWheelData.slots = [];
         }
+        currentWheelData.editMode = true;
         const newIndex = currentWheelData.slots.length;
+        const newTag = (activeWheelContextFilter && activeWheelContextFilter !== 'ALL') ? activeWheelContextFilter : "";
         const newSlot = {
             index: newIndex,
             name: "Slot " + (newIndex + 1),
-            hasOutfit: true,
+            hasOutfit: false,
             isInWardrobe: false,
             items: [],
-            conditions: []
+            conditions: [],
+            contextTag: newTag
         };
         currentWheelData.slots.push(newSlot);
+        if (selectedSlotIndex === null || selectedSlotIndex === undefined || selectedSlotIndex < 0) {
+            selectedSlotIndex = newIndex;
+        }
 
+        hideAllMenus();
+        if (typeof applyModeLayout === 'function') applyModeLayout();
         if (typeof updateWheelUI === 'function') updateWheelUI();
         if (typeof renderSlotsRail === 'function') renderSlotsRail();
         if (typeof renderDrawerDetails === 'function') renderDrawerDetails();
 
         if (typeof window.AddSlot === 'function') {
             window.AddSlot(JSON.stringify({
-                editMode: isEditModeActive(),
+                editMode: true,
                 contextTag: activeWheelContextFilter && activeWheelContextFilter !== 'ALL' ? activeWheelContextFilter : ""
             }));
         }
@@ -1533,6 +1692,9 @@ function closeWheel() {
         wrapper.style.display = 'none';
         wrapper.style.pointerEvents = 'none';
     }
+    const poseSelect = document.getElementById('studio-pose-select');
+    if (poseSelect) poseSelect.value = 'IdleForceDefaultState';
+    activeStudioPose = 'IdleForceDefaultState';
     hideAllMenus();
     if (typeof hideAllModals === 'function') hideAllModals();
     if (typeof window.OnCloseWheel === 'function') {
@@ -1732,32 +1894,41 @@ function initCarouselScrollHandlers() {
     const fContainer = document.getElementById('follower-carousel-container');
     if (fContainer) {
         fContainer.addEventListener('wheel', (e) => {
+            let rawDelta = (typeof e.deltaY === 'number' && e.deltaY !== 0) ? e.deltaY : (e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0));
+            if (!rawDelta) return;
             e.preventDefault();
             e.stopPropagation();
             const now = Date.now();
             if (now - lastFollowerScrollTimestamp < 140) return;
             lastFollowerScrollTimestamp = now;
-            cycleFollowerCarousel(e.deltaY < 0 ? -1 : 1);
+            cycleFollowerCarousel(rawDelta < 0 ? -1 : 1);
         }, { passive: false });
     }
 
     const srcWrapper = document.getElementById('inv-source-carousel-wrapper');
     if (srcWrapper) {
         srcWrapper.addEventListener('wheel', (e) => {
+            let rawDelta = (typeof e.deltaY === 'number' && e.deltaY !== 0) ? e.deltaY : (e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0));
+            if (!rawDelta) return;
             e.preventDefault();
             e.stopPropagation();
             const now = Date.now();
             if (now - lastSourceScrollTimestamp < 140) return;
             lastSourceScrollTimestamp = now;
-            cycleInvSource(e.deltaY < 0 ? -1 : 1);
+            cycleInvSource(rawDelta < 0 ? -1 : 1);
         }, { passive: false });
     }
 
     const sortList = document.getElementById('custom-sort-list');
     if (sortList) {
         sortList.addEventListener('wheel', (e) => {
+            let rawDelta = (typeof e.deltaY === 'number' && e.deltaY !== 0) ? e.deltaY : (e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0));
+            if (!rawDelta) return;
+            e.preventDefault();
             e.stopPropagation();
-        }, { passive: true });
+            const sign = rawDelta > 0 ? 1 : -1;
+            sortList.scrollTop += sign * Math.max(40, Math.min(100, Math.abs(rawDelta)));
+        }, { passive: false });
     }
 }
 
@@ -1766,7 +1937,7 @@ function initCameraOrbitAndControls() {
         if (!isEditModeActive()) return;
         if (typeof isClassicEditMode === 'function' && isClassicEditMode()) return;
         if (e.button !== 0) return;
-        if (safeClosest(e.target, '.glass-panel') || safeClosest(e.target, '.fullscreen-modal-backdrop') || safeClosest(e.target, '#top-follower-bar') || safeClosest(e.target, '.context-menu-popup')) return;
+        if (safeClosest(e.target, '.glass-panel') || safeClosest(e.target, '.fullscreen-modal-backdrop') || safeClosest(e.target, '#top-follower-bar') || safeClosest(e.target, '#studio-pose-bar') || safeClosest(e.target, '.context-menu-popup')) return;
 
         isOrbitingCamera = true;
         lastCamMouseX = e.clientX;
@@ -1831,6 +2002,213 @@ function initCameraOrbitAndControls() {
         }
     });
 }
+
+var activeStudioPose = 'IdleForceDefaultState';
+
+function onStudioPoseChange(poseEvent) {
+    activeStudioPose = poseEvent || 'IdleForceDefaultState';
+    const sel = document.getElementById('studio-pose-select');
+    if (sel) {
+        sel.value = activeStudioPose;
+        if (sel.options && typeof sel.options.length === 'number') {
+            let optExists = false;
+            for (let i = 0; i < sel.options.length; i++) {
+                if (sel.options[i] && sel.options[i].value === activeStudioPose) {
+                    optExists = true;
+                    break;
+                }
+            }
+            if (!optExists && typeof document.createElement === 'function') {
+                const opt = document.createElement('option');
+                opt.value = activeStudioPose;
+                opt.text = activeStudioPose;
+                sel.appendChild(opt);
+            }
+        }
+    }
+    const menuItems = (typeof document.querySelectorAll === 'function') ? document.querySelectorAll('.pose-menu-item') : null;
+    let matchedName = null;
+    if (menuItems && menuItems.forEach) {
+        menuItems.forEach(mi => {
+            const isMatch = (mi.getAttribute('data-pose') === activeStudioPose);
+            mi.classList.toggle('active', isMatch);
+            const chk = mi.querySelector('.pose-check');
+            if (chk) chk.style.display = isMatch ? 'inline-block' : 'none';
+            if (isMatch) {
+                matchedName = mi.getAttribute('data-name') || mi.innerText.replace('✓', '').trim();
+            }
+        });
+    }
+    const label = document.getElementById('pose-selected-label');
+    if (label) {
+        if (matchedName) {
+            label.innerText = matchedName;
+        } else if (sel && sel.options && sel.selectedIndex >= 0) {
+            label.innerText = sel.options[sel.selectedIndex].text;
+        } else {
+            label.innerText = activeStudioPose;
+        }
+    }
+    const actorId = activeInventorySource || (currentWheelData && currentWheelData.activeTargetActorId) || '0x00000007';
+    if (typeof window.SetStudioPose === 'function') {
+        window.SetStudioPose(JSON.stringify({
+            actorID: actorId,
+            eventName: activeStudioPose
+        }));
+    }
+}
+
+function togglePoseDropdown(e) {
+    if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+    const menu = document.getElementById('studio-pose-dropdown-menu');
+    const trigger = document.getElementById('btn-pose-dropdown-trigger');
+    if (!menu || !trigger) return;
+    const isShowing = (menu.style.display === 'flex' || menu.style.display === 'block');
+    if (isShowing) {
+        menu.style.display = 'none';
+        trigger.classList.remove('active');
+    } else {
+        hideAllMenus();
+        if (typeof closeAllDropdowns === 'function') closeAllDropdowns();
+        menu.style.display = 'flex';
+        trigger.classList.add('active');
+        if (!menu._hasWheelListener) {
+            menu._hasWheelListener = true;
+            menu.addEventListener('wheel', (ev) => {
+                let rawDelta = (typeof ev.deltaY === 'number' && ev.deltaY !== 0) ? ev.deltaY : (ev.wheelDelta ? -ev.wheelDelta : (ev.detail ? ev.detail * 40 : 0));
+                if (!rawDelta) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                const sign = rawDelta > 0 ? 1 : -1;
+                menu.scrollTop += sign * Math.max(40, Math.min(100, Math.abs(rawDelta)));
+            }, { passive: false });
+        }
+    }
+}
+
+function selectStudioPoseOption(poseId, poseName, e) {
+    if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+    const menu = document.getElementById('studio-pose-dropdown-menu');
+    const trigger = document.getElementById('btn-pose-dropdown-trigger');
+    if (menu) menu.style.display = 'none';
+    if (trigger) trigger.classList.remove('active');
+    onStudioPoseChange(poseId);
+}
+
+function resetStudioPose(e) {
+    if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+    onStudioPoseChange('IdleForceDefaultState');
+}
+
+let lastPopulatedPosePackCount = -1;
+function populatePosePacks(packs) {
+    if (!Array.isArray(packs) || packs.length === 0) return;
+    const select = document.getElementById('studio-pose-select');
+    const dropdownMenu = document.getElementById('studio-pose-dropdown-menu');
+    if (!select && !dropdownMenu) return;
+
+    if (packs.length === lastPopulatedPosePackCount) {
+        if (select) select.value = activeStudioPose || 'IdleForceDefaultState';
+        return;
+    }
+    lastPopulatedPosePackCount = packs.length;
+
+    if (select) {
+        select.innerHTML = '<option value="IdleForceDefaultState">Default Stand</option>';
+        packs.forEach(pack => {
+            if (!pack || !pack.packName || !Array.isArray(pack.poses) || pack.poses.length === 0) return;
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = pack.packName;
+            pack.poses.forEach(pose => {
+                if (!pose || !pose.id) return;
+                const opt = document.createElement('option');
+                opt.value = pose.id;
+                opt.text = pose.name || pose.id;
+                optgroup.appendChild(opt);
+            });
+            select.appendChild(optgroup);
+        });
+        select.value = activeStudioPose || 'IdleForceDefaultState';
+    }
+
+    if (dropdownMenu) {
+        dropdownMenu.innerHTML = '';
+        const defItem = document.createElement('div');
+        defItem.className = 'pose-menu-item' + (activeStudioPose === 'IdleForceDefaultState' ? ' active' : '');
+        defItem.setAttribute('data-pose', 'IdleForceDefaultState');
+        defItem.setAttribute('data-name', 'Default Stand');
+        defItem.onmousedown = (e) => selectStudioPoseOption('IdleForceDefaultState', 'Default Stand', e);
+        defItem.onclick = (e) => selectStudioPoseOption('IdleForceDefaultState', 'Default Stand', e);
+        defItem.innerHTML = '<span>Default Stand</span><span class="pose-check" style="' + (activeStudioPose === 'IdleForceDefaultState' ? 'display:inline-block;' : 'display:none;') + '">&#x2713;</span>';
+        dropdownMenu.appendChild(defItem);
+
+        packs.forEach(pack => {
+            if (!pack || !pack.packName || !Array.isArray(pack.poses) || pack.poses.length === 0) return;
+            const groupLabel = document.createElement('div');
+            groupLabel.className = 'pose-menu-group-label';
+            groupLabel.innerText = pack.packName;
+            dropdownMenu.appendChild(groupLabel);
+
+            pack.poses.forEach(pose => {
+                if (!pose || !pose.id) return;
+                const pId = pose.id;
+                const pName = pose.name || pId;
+                const isMatch = (activeStudioPose === pId);
+                const item = document.createElement('div');
+                item.className = 'pose-menu-item' + (isMatch ? ' active' : '');
+                item.setAttribute('data-pose', pId);
+                item.setAttribute('data-name', pName);
+                item.onmousedown = (e) => selectStudioPoseOption(pId, pName, e);
+                item.onclick = (e) => selectStudioPoseOption(pId, pName, e);
+
+                const nameSpan = document.createElement('span');
+                nameSpan.innerText = pName;
+                const checkSpan = document.createElement('span');
+                checkSpan.className = 'pose-check';
+                checkSpan.innerHTML = '&#x2713;';
+                checkSpan.style.display = isMatch ? 'inline-block' : 'none';
+
+                item.appendChild(nameSpan);
+                item.appendChild(checkSpan);
+                dropdownMenu.appendChild(item);
+            });
+        });
+    }
+
+    const currentLabel = document.getElementById('pose-selected-label');
+    if (currentLabel) {
+        const item = (typeof document.querySelector === 'function') ? document.querySelector(`.pose-menu-item[data-pose="${activeStudioPose}"]`) : null;
+        if (item) {
+            currentLabel.innerText = item.getAttribute('data-name') || item.innerText.replace('✓', '').trim();
+        } else if (activeStudioPose === 'IdleForceDefaultState') {
+            currentLabel.innerText = 'Default Stand';
+        }
+    }
+}
+
+window.populatePosePacks = populatePosePacks;
+window.onPosePacksReady = function(jsonPayload) {
+    try {
+        const packs = (typeof jsonPayload === 'string') ? JSON.parse(jsonPayload) : jsonPayload;
+        if (Array.isArray(packs)) {
+            populatePosePacks(packs);
+        }
+    } catch (e) {}
+};
+
+window.onStudioPoseChange = onStudioPoseChange;
+window.resetStudioPose = resetStudioPose;
+window.togglePoseDropdown = togglePoseDropdown;
+window.selectStudioPoseOption = selectStudioPoseOption;
 
 function initDraggablePanels() {
     panelRafId = null;
@@ -2215,20 +2593,17 @@ function initCustomItemDragDrop() {
             }
 
             if (isItemDragging && dragGhostElement) {
-                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
-                const pointX = e.clientX / scale;
-                const pointY = e.clientY / scale;
-                dragGhostElement.style.left = (pointX + 12) + 'px';
-                dragGhostElement.style.top = (pointY + 12) + 'px';
+                dragGhostElement.style.left = (e.clientX + 12) + 'px';
+                dragGhostElement.style.top = (e.clientY + 12) + 'px';
 
                 document.querySelectorAll('.drag-hover-target').forEach(el => el.classList.remove('drag-hover-target'));
 
-                const elemBelow = document.elementFromPoint(pointX, pointY);
+                const elemBelow = getElementUnderPoint(e.clientX, e.clientY);
                 if (elemBelow) {
                     const targetSlotCard = safeClosest(elemBelow, '.vertical-slot-card');
                     const targetSlicePath = safeClosest(elemBelow, '.slice-path');
                     const targetLabel = safeClosest(elemBelow, '.wheel-slot-label');
-                    const targetInspector = safeClosest(elemBelow, '#panel-slot-details');
+                    const targetInspector = safeClosest(elemBelow, '#panel-slot-details, #right-dock-container, #panel-slots-rail');
 
                     if (targetSlotCard) targetSlotCard.classList.add('drag-hover-target');
                     else if (targetSlicePath) targetSlicePath.classList.add('drag-hover-target');
@@ -2259,15 +2634,12 @@ function initCustomItemDragDrop() {
             }
 
             if (isSlotDragging && slotDragGhostElement) {
-                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
-                const pointX = e.clientX / scale;
-                const pointY = e.clientY / scale;
-                slotDragGhostElement.style.left = (pointX + 12) + 'px';
-                slotDragGhostElement.style.top = (pointY + 12) + 'px';
+                slotDragGhostElement.style.left = (e.clientX + 12) + 'px';
+                slotDragGhostElement.style.top = (e.clientY + 12) + 'px';
 
                 document.querySelectorAll('.slot-drop-hover').forEach(el => el.classList.remove('slot-drop-hover'));
 
-                const elemBelow = document.elementFromPoint(pointX, pointY);
+                const elemBelow = getElementUnderPoint(e.clientX, e.clientY);
                 if (elemBelow) {
                     const targetCard = safeClosest(elemBelow, '.vertical-slot-card');
                     if (targetCard) {
@@ -2281,15 +2653,12 @@ function initCustomItemDragDrop() {
     window.addEventListener('mouseup', (e) => {
         if (activeDraggedItem) {
             if (isItemDragging) {
-                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
-                const pointX = e.clientX / scale;
-                const pointY = e.clientY / scale;
-                const elemBelow = document.elementFromPoint(pointX, pointY);
+                const elemBelow = getElementUnderPoint(e.clientX, e.clientY);
                 if (elemBelow) {
                     const targetSlotCard = safeClosest(elemBelow, '.vertical-slot-card');
                     const targetSlicePath = safeClosest(elemBelow, '.slice-path');
                     const targetLabel = safeClosest(elemBelow, '.wheel-slot-label');
-                    const targetInspector = safeClosest(elemBelow, '#panel-slot-details');
+                    const targetInspector = safeClosest(elemBelow, '#panel-slot-details, #right-dock-container, #panel-slots-rail');
 
                     let targetSlotIdx = selectedSlotIndex;
                     let foundTarget = false;
@@ -2395,10 +2764,7 @@ function initCustomItemDragDrop() {
 
         if (activeDraggedSlotIndex !== null) {
             if (isSlotDragging) {
-                const scale = (typeof getUiScale === 'function') ? (getUiScale() || 1.0) : 1.0;
-                const pointX = e.clientX / scale;
-                const pointY = e.clientY / scale;
-                const elemBelow = document.elementFromPoint(pointX, pointY);
+                const elemBelow = getElementUnderPoint(e.clientX, e.clientY);
                 if (elemBelow) {
                     const targetCard = safeClosest(elemBelow, '.vertical-slot-card');
                     if (targetCard) {
@@ -2547,10 +2913,123 @@ function selectFollower(targetId) {
     if (targetId && targetId.toUpperCase() !== 'CLOUD' && targetId.toUpperCase() !== 'WARDROBE') {
         activeInventorySource = targetId;
     }
+    const poseSelect = document.getElementById('studio-pose-select');
+    if (poseSelect) poseSelect.value = 'IdleForceDefaultState';
+    activeStudioPose = 'IdleForceDefaultState';
     if (typeof window.SelectTargetActor === 'function') {
         window.SelectTargetActor(JSON.stringify({ id: targetId }));
     }
 }
+
+let isModCatalogSummaryLoaded = false;
+let modCatalogSummaries = [];
+let modCatalogCache = {};
+let pendingCatalogRequests = new Set();
+
+function getCachedModItems(modName) {
+    if (!modName) return null;
+    if (modCatalogCache[modName] && Array.isArray(modCatalogCache[modName])) return modCatalogCache[modName];
+    const targetLower = modName.toLowerCase();
+    for (const key in modCatalogCache) {
+        if (key.toLowerCase() === targetLower && Array.isArray(modCatalogCache[key])) {
+            return modCatalogCache[key];
+        }
+    }
+    return null;
+}
+
+function getFilteredModCatalogItems(modName) {
+    const rawItems = getCachedModItems(modName) || [];
+    return rawItems.filter(item => {
+        if (!item || !item.name || item.name.trim().length === 0) return false;
+        if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
+        if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
+        if (!matchesInventorySearch(item, inventorySearchQuery)) return false;
+        return true;
+    });
+}
+
+window.onModCatalogSummaryReady = function(argument) {
+    let data = argument;
+    if (typeof argument === 'string') {
+        try { data = JSON.parse(argument); } catch (e) { return; }
+    }
+    isModCatalogSummaryLoaded = true;
+    if (Array.isArray(data)) {
+        modCatalogSummaries = data;
+        if (activeInventorySource === 'MODEX') {
+            renderInventoryList();
+        }
+    }
+};
+
+window.onModCatalogItemsReady = function(argument) {
+    let data = argument;
+    if (typeof argument === 'string') {
+        try { data = JSON.parse(argument); } catch (e) { return; }
+    }
+    if (!data || !data.modName || !Array.isArray(data.items)) return;
+    modCatalogCache[data.modName] = data.items;
+    modCatalogCache[data.modName.toLowerCase()] = data.items;
+    pendingCatalogRequests.delete(data.modName);
+    pendingCatalogRequests.delete(data.modName.toLowerCase());
+    const grid = document.getElementById('inventory-items-grid');
+    const srcUpper = (activeInventorySource || '').toUpperCase();
+    if (grid && (srcUpper === 'MODEX' || srcUpper === 'CATALOG')) {
+        const targetModLower = data.modName.toLowerCase();
+        let sec = null;
+        if (grid.children) {
+            for (let i = 0; i < grid.children.length; ++i) {
+                const child = grid.children[i];
+                const mName = child.getAttribute ? child.getAttribute('data-mod-name') : null;
+                if (mName && mName.toLowerCase() === targetModLower) {
+                    sec = child;
+                    break;
+                }
+            }
+        }
+        if (!sec && typeof document.querySelectorAll === 'function') {
+            const sections = document.querySelectorAll('.mod-group-section');
+            for (let i = 0; i < sections.length; ++i) {
+                const mName = sections[i].getAttribute ? sections[i].getAttribute('data-mod-name') : null;
+                if (mName && mName.toLowerCase() === targetModLower) {
+                    sec = sections[i];
+                    break;
+                }
+            }
+        }
+        if (sec) {
+            let gridContainer = null;
+            if (sec.children) {
+                for (let j = 0; j < sec.children.length; ++j) {
+                    const c = sec.children[j];
+                    if (c.classList && c.classList.contains('mod-items-grid')) {
+                        gridContainer = c;
+                        break;
+                    }
+                }
+            }
+            if (!gridContainer && typeof sec.querySelector === 'function') {
+                gridContainer = sec.querySelector('.mod-items-grid');
+            }
+            if (gridContainer) {
+                const sortedGroupItems = sortInventoryItems(getFilteredModCatalogItems(data.modName));
+                renderModItemsIntoGrid(gridContainer, sortedGroupItems, 'MODEX');
+                if (thumbnailBatchTimeout) clearTimeout(thumbnailBatchTimeout);
+                thumbnailBatchTimeout = setTimeout(() => {
+                    updateVisibleThumbnailsPriority();
+                }, 150);
+                if (typeof populateVisibleUncollapsedSections === 'function') {
+                    populateVisibleUncollapsedSections();
+                }
+                return;
+            }
+        }
+    }
+    if (typeof populateVisibleUncollapsedSections === 'function') {
+        populateVisibleUncollapsedSections();
+    }
+};
 
 function getInventorySourcesList() {
     const sources = [];
@@ -2565,6 +3044,7 @@ function getInventorySourcesList() {
     });
 
     sources.push({ id: "CLOUD", type: "CLOUD", name: "📦 Wardrobe Chest" });
+    sources.push({ id: "MODEX", type: "MODEX", name: "🌐 Mod Explorer" });
     return sources;
 }
 
@@ -2585,6 +3065,11 @@ function setInventorySource(sourceId) {
         collapsedInventoryMods.clear();
     }
     activeInventorySource = sourceId;
+    if (sourceId === 'MODEX' && !inventoryGroupByMod) {
+        inventoryGroupByMod = true;
+        const toggle = document.getElementById('group-by-mod-toggle');
+        if (toggle) toggle.checked = true;
+    }
     renderInventorySourceStrip();
     renderInventoryList();
 }
@@ -2636,7 +3121,7 @@ function matchesInventorySearch(item, query) {
     const type = (item.type || '').toLowerCase();
     const category = (item.category || '').toLowerCase();
     const armorClass = (item.armorClass || '').toLowerCase();
-    const modName = (item.modName || '').toLowerCase();
+    const modName = (item.modName || item.plugin || item.pluginName || '').toLowerCase();
     const cleanMod = modName.replace(/\.(esp|esm|esl)$/i, '').replace(/[_\-\.]+/g, ' ').trim();
 
     const fullItemText = name + ' ' + customName + ' ' + type + ' ' + category + ' ' + armorClass + ' ' + modName + ' ' + cleanMod;
@@ -2694,7 +3179,34 @@ var inventoryGroupByMod = true;
 var collapsedInventoryMods = new Set();
 var expandedInventoryMods = new Set();
 
+function updateUiForPreviewsSetting() {
+    const previews = isItemPreviewsEnabled();
+    const panelInv = document.getElementById('panel-inventory');
+    const viewSwitch = (typeof document.querySelector === 'function') ? document.querySelector('.view-mode-switch') : null;
+    const inspectPrev = document.getElementById('inspect-preview-frame');
+    if (panelInv) {
+        panelInv.classList.toggle('v3-classic-mode', !previews);
+    }
+    if (viewSwitch) {
+        viewSwitch.style.display = previews ? 'inline-flex' : 'none';
+    }
+    if (inspectPrev) {
+        inspectPrev.style.display = previews ? 'flex' : 'none';
+    }
+    if (!previews) {
+        inventoryViewMode = 'list';
+        const gridEl = document.getElementById('inventory-items-grid');
+        if (gridEl) {
+            gridEl.classList.remove('grid-mode');
+            gridEl.classList.add('list-mode');
+        }
+    }
+}
+
 function setInventoryViewMode(mode) {
+    if (!isItemPreviewsEnabled()) {
+        mode = 'list';
+    }
     inventoryViewMode = mode;
     const btnGrid = document.getElementById('btn-inv-grid-mode');
     const btnList = document.getElementById('btn-inv-list-mode');
@@ -2708,103 +3220,341 @@ function toggleInventoryGroupByMod(checked) {
     renderInventoryList();
 }
 
+function renderModItemsIntoGrid(gridContainer, sortedGroupItems, srcUpper = 'MODEX', limit = 48) {
+    if (!gridContainer) return;
+    gridContainer.style.minHeight = '';
+    gridContainer.innerHTML = '';
+    if (!sortedGroupItems || sortedGroupItems.length === 0) {
+        gridContainer.innerHTML = '<div style="grid-column:1/-1; font-size:10.5px; color:#64748b; text-align:center; padding:12px;">No matching apparel found in this plugin.</div>';
+        return;
+    }
+
+    const currentLimit = gridContainer._renderLimit || limit;
+    const toRender = sortedGroupItems.slice(0, currentLimit);
+    const frag = document.createDocumentFragment();
+    toRender.forEach(it => {
+        frag.appendChild(createInventoryItemElement(it, srcUpper));
+    });
+    gridContainer.appendChild(frag);
+
+    if (sortedGroupItems.length > currentLimit) {
+        const remaining = sortedGroupItems.length - currentLimit;
+        const moreBtn = document.createElement('div');
+        moreBtn.className = 'mod-load-more-btn';
+        moreBtn.style.cssText = 'grid-column:1/-1; text-align:center; padding:8px 12px; margin:6px 0; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:4px; font-size:11px; color:#94a3b8; cursor:pointer; font-weight:600; user-select:none;';
+        moreBtn.innerText = `+ Show more (${remaining} items remaining)`;
+        moreBtn.onmouseenter = () => { moreBtn.style.background = 'rgba(255,255,255,0.12)'; moreBtn.style.color = '#f8fafc'; };
+        moreBtn.onmouseleave = () => { moreBtn.style.background = 'rgba(255,255,255,0.06)'; moreBtn.style.color = '#94a3b8'; };
+        moreBtn.onclick = (e) => {
+            if (e) e.stopPropagation();
+            gridContainer._renderLimit = currentLimit + 48;
+            renderModItemsIntoGrid(gridContainer, sortedGroupItems, srcUpper, limit);
+        };
+        gridContainer.appendChild(moreBtn);
+    }
+
+    if (!inspectedItemObject && sortedGroupItems.length > 0) {
+        inspectItem(sortedGroupItems[0]);
+    }
+}
+
+function populateModItemsGrid(sec, gridContainer, modName) {
+    if (!sec || !gridContainer || !modName) return;
+    const targetLower = modName.toLowerCase();
+    const srcUpper = activeInventorySource.toUpperCase();
+    if (srcUpper === 'MODEX' || srcUpper === 'CATALOG') {
+        const cached = getCachedModItems(modName);
+        if (cached && Array.isArray(cached)) {
+            const sortedGroupItems = sortInventoryItems(getFilteredModCatalogItems(modName));
+            renderModItemsIntoGrid(gridContainer, sortedGroupItems, 'MODEX');
+        } else {
+            gridContainer.style.minHeight = '';
+            if (gridContainer.children.length === 0) {
+                gridContainer.innerHTML = '<div class="mod-catalog-loading">Fetching mod items...</div>';
+            }
+            if (pendingCatalogRequests.size >= 4) {
+                return;
+            }
+            if (!pendingCatalogRequests.has(targetLower)) {
+                pendingCatalogRequests.add(targetLower);
+                setTimeout(() => {
+                    pendingCatalogRequests.delete(targetLower);
+                }, 4000);
+                if (typeof window.RequestModCatalogItems === 'function') {
+                    window.RequestModCatalogItems(JSON.stringify({ modName: modName }));
+                }
+            }
+        }
+    } else {
+        const inv = getInventoryBySourceId(activeInventorySource);
+        const modItems = inv.filter(item => {
+            if (!item || !item.name || item.name.trim().length === 0) return false;
+            if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
+            if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
+            if (!matchesInventorySearch(item, inventorySearchQuery)) return false;
+            const m = (item.modName && item.modName.trim().length > 0 ? item.modName : 'Skyrim.esm').toLowerCase();
+            return m === targetLower;
+        });
+        const sortedGroupItems = sortInventoryItems(modItems);
+        renderModItemsIntoGrid(gridContainer, sortedGroupItems, srcUpper);
+    }
+}
+
+function populateVisibleUncollapsedSections() {
+    const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
+    if (!scrollable) return;
+    const sRect = (typeof scrollable.getBoundingClientRect === 'function') ? scrollable.getBoundingClientRect() : null;
+    const sections = (typeof document.querySelectorAll === 'function') ? document.querySelectorAll('.mod-group-section') : [];
+    if (!sections || sections.length === 0) return;
+
+    if (pendingCatalogRequests.size >= 4) return;
+
+    const toPopulate = [];
+    for (let i = 0; i < sections.length; ++i) {
+        const sec = sections[i];
+        if (sec.classList.contains('collapsed')) continue;
+        const modName = (typeof sec.getAttribute === 'function') ? sec.getAttribute('data-mod-name') : (sec.attributes ? sec.attributes['data-mod-name'] : null);
+        if (!modName) continue;
+
+        let gridContainer = null;
+        if (sec.children) {
+            for (let j = 0; j < sec.children.length; ++j) {
+                const c = sec.children[j];
+                if (c.classList && c.classList.contains('mod-items-grid')) {
+                    gridContainer = c;
+                    break;
+                }
+            }
+        }
+        if (!gridContainer && typeof sec.querySelector === 'function') {
+            gridContainer = sec.querySelector('.mod-items-grid');
+        }
+        if (!gridContainer) continue;
+
+        const needsPopulate = (gridContainer.children.length === 0 || (typeof gridContainer.querySelector === 'function' && gridContainer.querySelector('.mod-catalog-loading')));
+        if (!needsPopulate) continue;
+
+        let shouldPopulate = false;
+        if (!sRect || sRect.height === 0 || typeof sec.getBoundingClientRect !== 'function') {
+            shouldPopulate = (i < 4);
+        } else {
+            const secRect = sec.getBoundingClientRect();
+            if (secRect.top > (sRect.bottom + 150)) {
+                // Section is below viewport; subsequent sections in DOM flow are also below
+                break;
+            }
+            if (secRect.bottom >= (sRect.top - 100)) {
+                shouldPopulate = true;
+            }
+        }
+
+        if (shouldPopulate) {
+            toPopulate.push({ sec, gridContainer, modName });
+            if (toPopulate.length >= 4) break;
+        }
+    }
+
+    for (let i = 0; i < toPopulate.length; ++i) {
+        if (pendingCatalogRequests.size >= 4) break;
+        populateModItemsGrid(toPopulate[i].sec, toPopulate[i].gridContainer, toPopulate[i].modName);
+    }
+}
+
 function expandAllInventoryMods() {
     collapsedInventoryMods.clear();
-    const inv = getInventoryBySourceId(activeInventorySource);
-    inv.forEach(it => {
-        const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
-        expandedInventoryMods.add(m);
-    });
-    renderInventoryList();
+    const srcUpper = activeInventorySource.toUpperCase();
+    const isCatalog = (srcUpper === 'MODEX' || srcUpper === 'CATALOG');
+
+    const grid = document.getElementById('inventory-items-grid');
+    let sections = [];
+    if (grid && grid.children && grid.children.length > 0) {
+        sections = Array.from(grid.children).filter(c => c.classList && c.classList.contains('mod-group-section'));
+    }
+    if (!sections || sections.length === 0) {
+        sections = (typeof document.querySelectorAll === 'function') ? Array.from(document.querySelectorAll('.mod-group-section')) : [];
+    }
+    const docSections = (typeof document.querySelectorAll === 'function') ? Array.from(document.querySelectorAll('.mod-group-section')) : [];
+
+    if (isCatalog) {
+        expandedInventoryMods.clear();
+        if (sections && sections.length > 0) {
+            for (let i = 0; i < sections.length; ++i) {
+                const sec = sections[i];
+                const modName = (typeof sec.getAttribute === 'function') ? sec.getAttribute('data-mod-name') : (sec.attributes ? sec.attributes['data-mod-name'] : null);
+                if (!modName) continue;
+
+                sec.classList.remove('collapsed');
+                expandedInventoryMods.add(modName);
+
+                let gridContainer = null;
+                if (sec.children) {
+                    for (let j = 0; j < sec.children.length; ++j) {
+                        const c = sec.children[j];
+                        if (c.classList && c.classList.contains('mod-items-grid')) {
+                            gridContainer = c;
+                            break;
+                        }
+                    }
+                }
+                if (!gridContainer && typeof sec.querySelector === 'function') {
+                    gridContainer = sec.querySelector('.mod-items-grid');
+                }
+                if (gridContainer) {
+                    const cached = getCachedModItems(modName);
+                    if (cached && Array.isArray(cached)) {
+                        if (i < 2 && (gridContainer.children.length === 0 || (typeof gridContainer.querySelector === 'function' && gridContainer.querySelector('.mod-catalog-loading')))) {
+                            populateModItemsGrid(sec, gridContainer, modName);
+                        }
+                    } else if (gridContainer.children.length === 0) {
+                        gridContainer.style.minHeight = '140px';
+                        gridContainer.innerHTML = '<div class="mod-catalog-loading">Fetching mod items...</div>';
+                    }
+                }
+                if (typeof observeModSection === 'function') {
+                    observeModSection(sec);
+                }
+            }
+
+            if (docSections.length > 0) {
+                docSections.forEach(sec => sec.classList.remove('collapsed'));
+            }
+
+            if (typeof showSaveToast === 'function') {
+                showSaveToast(`Expanded all ${sections.length} mods`);
+            }
+
+            if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => {
+                    populateVisibleUncollapsedSections();
+                });
+            } else {
+                populateVisibleUncollapsedSections();
+            }
+            return;
+        } else if (modCatalogSummaries) {
+            for (let i = 0; i < modCatalogSummaries.length; ++i) {
+                if (modCatalogSummaries[i].modName) expandedInventoryMods.add(modCatalogSummaries[i].modName);
+            }
+            renderInventoryList();
+            return;
+        }
+    } else {
+        // Standard inventory (Player, Follower, Wardrobe)
+        expandedInventoryMods.clear();
+        if (sections && sections.length > 0) {
+            for (let i = 0; i < sections.length; ++i) {
+                const sec = sections[i];
+                const modName = (typeof sec.getAttribute === 'function') ? sec.getAttribute('data-mod-name') : (sec.attributes ? sec.attributes['data-mod-name'] : null);
+                if (!modName) continue;
+
+                sec.classList.remove('collapsed');
+                expandedInventoryMods.add(modName);
+
+                let gridContainer = null;
+                if (sec.children) {
+                    for (let j = 0; j < sec.children.length; ++j) {
+                        const c = sec.children[j];
+                        if (c.classList && c.classList.contains('mod-items-grid')) {
+                            gridContainer = c;
+                            break;
+                        }
+                    }
+                }
+                if (!gridContainer && typeof sec.querySelector === 'function') {
+                    gridContainer = sec.querySelector('.mod-items-grid');
+                }
+                if (gridContainer && gridContainer.children.length === 0 && i < 4) {
+                    populateModItemsGrid(sec, gridContainer, modName);
+                }
+            }
+
+            populateVisibleUncollapsedSections();
+            updateVisibleThumbnailsPriority();
+            return;
+        } else {
+            const inv = getInventoryBySourceId(activeInventorySource);
+            inv.forEach(it => {
+                const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
+                expandedInventoryMods.add(m);
+            });
+            renderInventoryList();
+            return;
+        }
+    }
 }
 
 function collapseAllInventoryMods() {
     expandedInventoryMods.clear();
-    const inv = getInventoryBySourceId(activeInventorySource);
-    inv.forEach(it => {
-        const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
-        collapsedInventoryMods.add(m);
-    });
+    collapsedInventoryMods.clear();
+    const sections = (typeof document.querySelectorAll === 'function')
+        ? Array.from(document.querySelectorAll('.mod-group-section'))
+        : [];
+
+    if (sections && sections.length > 0) {
+        sections.forEach(sec => {
+            sec.classList.add('collapsed');
+            const modName = (typeof sec.getAttribute === 'function') ? sec.getAttribute('data-mod-name') : (sec.attributes ? sec.attributes['data-mod-name'] : null);
+            if (modName) collapsedInventoryMods.add(modName);
+        });
+        return;
+    }
     renderInventoryList();
 }
 
 function toggleInventoryModCollapse(modName) {
-    const isNowCollapsed = expandedInventoryMods.has(modName);
-    if (isNowCollapsed) {
-        expandedInventoryMods.delete(modName);
-        collapsedInventoryMods.add(modName);
-    } else {
-        expandedInventoryMods.add(modName);
-        collapsedInventoryMods.delete(modName);
-    }
-
+    if (!modName) return;
+    const targetLower = modName.toLowerCase();
+    const sections = (typeof document.querySelectorAll === 'function') ? document.querySelectorAll('.mod-group-section') : [];
     let sec = null;
-    const grid = document.getElementById('inventory-items-grid');
-    if (grid && grid.children) {
-        for (let i = 0; i < grid.children.length; ++i) {
-            const child = grid.children[i];
-            if (child.getAttribute && child.getAttribute('data-mod-name') === modName) {
-                sec = child;
-                break;
-            }
+    for (let i = 0; i < sections.length; ++i) {
+        const mName = (typeof sections[i].getAttribute === 'function') ? sections[i].getAttribute('data-mod-name') : (sections[i].attributes ? sections[i].attributes['data-mod-name'] : null);
+        if (mName && mName.toLowerCase() === targetLower) {
+            sec = sections[i];
+            break;
         }
     }
 
-    if (!sec && typeof document.querySelectorAll === 'function') {
-        const sections = document.querySelectorAll('.mod-group-section');
-        for (let i = 0; i < sections.length; ++i) {
-            if (sections[i].getAttribute && sections[i].getAttribute('data-mod-name') === modName) {
-                sec = sections[i];
-                break;
-            }
-        }
-    }
-
-    if (sec) {
-        if (isNowCollapsed) {
-            sec.classList.add('collapsed');
-        } else {
-            sec.classList.remove('collapsed');
-            let gridContainer = null;
-            if (sec.children) {
-                for (let j = 0; j < sec.children.length; ++j) {
-                    const c = sec.children[j];
-                    if (c.classList && c.classList.contains('mod-items-grid')) {
-                        gridContainer = c;
-                        break;
-                    }
-                }
-            }
-            if (!gridContainer && typeof sec.querySelector === 'function') {
-                gridContainer = sec.querySelector('.mod-items-grid');
-            }
-            if (gridContainer && (!gridContainer.children || gridContainer.children.length === 0)) {
-                const inv = getInventoryBySourceId(activeInventorySource);
-                const srcUpper = activeInventorySource.toUpperCase();
-                const targetModLower = (modName || 'Skyrim.esm').toLowerCase();
-                const modItems = inv.filter(item => {
-                    if (!item || !item.name || item.name.trim().length === 0) return false;
-                    if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
-                    if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
-                    if (!matchesInventorySearch(item, inventorySearchQuery)) return false;
-                    const m = (item.modName && item.modName.trim().length > 0 ? item.modName : 'Skyrim.esm').toLowerCase();
-                    return m === targetModLower;
-                });
-                const sortedGroupItems = sortInventoryItems(modItems);
-                sortedGroupItems.forEach(it => {
-                    gridContainer.appendChild(createInventoryItemElement(it, srcUpper));
-                });
-                if (gridContainer.children.length === 0) {
-                    renderInventoryList();
-                    return;
-                }
-            }
-            updateVisibleThumbnailsPriority();
-        }
+    if (!sec) {
+        renderInventoryList();
         return;
     }
 
-    renderInventoryList();
+    const isCurrentlyCollapsed = sec.classList.contains('collapsed');
+    if (isCurrentlyCollapsed) {
+        sec.classList.remove('collapsed');
+        collapsedInventoryMods.delete(modName);
+        for (const m of collapsedInventoryMods) {
+            if (m.toLowerCase() === targetLower) collapsedInventoryMods.delete(m);
+        }
+        expandedInventoryMods.add(modName);
+
+        let gridContainer = null;
+        if (sec.children) {
+            for (let j = 0; j < sec.children.length; ++j) {
+                const c = sec.children[j];
+                if (c.classList && c.classList.contains('mod-items-grid')) {
+                    gridContainer = c;
+                    break;
+                }
+            }
+        }
+        if (!gridContainer && typeof sec.querySelector === 'function') {
+            gridContainer = sec.querySelector('.mod-items-grid');
+        }
+        if (gridContainer && (gridContainer.children.length === 0 || (typeof gridContainer.querySelector === 'function' && gridContainer.querySelector('.mod-catalog-loading')))) {
+            pendingCatalogRequests.delete(modName);
+            pendingCatalogRequests.delete(targetLower);
+            populateModItemsGrid(sec, gridContainer, modName);
+        }
+        updateVisibleThumbnailsPriority();
+    } else {
+        sec.classList.add('collapsed');
+        expandedInventoryMods.delete(modName);
+        for (const m of expandedInventoryMods) {
+            if (m.toLowerCase() === targetLower) expandedInventoryMods.delete(m);
+        }
+        collapsedInventoryMods.add(modName);
+    }
 }
 
 function sortInventoryItems(itemList) {
@@ -2843,16 +3593,86 @@ function sortInventoryItems(itemList) {
     });
 }
 
+function isItemPreviewsEnabled() {
+    if (typeof currentWheelData !== 'undefined' && currentWheelData && currentWheelData.showItemPreviews !== undefined) {
+        return currentWheelData.showItemPreviews !== false;
+    }
+    if (typeof safeGetStorage === 'function') {
+        return safeGetStorage('outfit_wheeler_show_previews', 'true') !== 'false';
+    }
+    return true;
+}
+
+function getItemSlotSvg(item) {
+    const rawType = ((item && (item.type || item.category || '')) || '').toLowerCase();
+    const rawSlot = ((item && (item.slot || item.equipSlot || '')) || '').toLowerCase();
+    const rawName = ((item && item.name) || '').toLowerCase();
+    const t = rawType + ' ' + rawSlot + ' ' + rawName;
+
+    if (t.includes('shield')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
+    }
+    if (t.includes('head') || t.includes('helm') || t.includes('circlet') || t.includes('hood') || t.includes('crown') || t.includes('mask') || t.includes('hat') || t.includes('hair')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M12 3a9 9 0 0 0-9 9v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-2h8v2a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a9 9 0 0 0-9-9z"/><path d="M7 13h10"/><path d="M12 3v5"/></svg>';
+    }
+    if (t.includes('glove') || t.includes('gauntlet') || t.includes('hand') || t.includes('bracer') || t.includes('wrist') || t.includes('arm')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M7 11V5a2 2 0 0 1 4 0v6"/><path d="M11 5a2 2 0 0 1 4 0v6"/><path d="M15 7a2 2 0 0 1 4 0v5a7 7 0 0 1-7 7h-2a5 5 0 0 1-5-5v-3a2 2 0 0 1 4 0"/></svg>';
+    }
+    if (t.includes('boot') || t.includes('shoe') || t.includes('foot') || t.includes('feet') || t.includes('greave') || t.includes('sandal') || t.includes('heel') || t.includes('calf') || t.includes('calves')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M7 4h7v9l3 3v4H5v-2a4 4 0 0 1 2-3.5V4z"/><path d="M5 18h12"/></svg>';
+    }
+    if (t.includes('ring') || t.includes('band')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><circle cx="12" cy="14" r="6"/><path d="M9 8l3-4 3 4H9z"/></svg>';
+    }
+    if (t.includes('amulet') || t.includes('necklace') || t.includes('pendant') || t.includes('choker') || t.includes('collar') || t.includes('locket')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><circle cx="12" cy="7" r="4"/><path d="M12 11v6"/><path d="M9.5 17h5l-2.5 4-2.5-4z"/></svg>';
+    }
+    if (t.includes('pant') || t.includes('trousers') || t.includes('skirt') || t.includes('legging') || t.includes('bottom') || t.includes('thong') || t.includes('panties') || t.includes('underwear')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M6 4h12l1 16h-5l-2-8-2 8H5L6 4z"/></svg>';
+    }
+    if (t.includes('robe') || t.includes('cloak') || t.includes('cape') || t.includes('dress') || t.includes('gown')) {
+        return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M9 4l3 2 3-2 3 4-2 14H8L6 8l3-4z"/><path d="M12 6v16"/></svg>';
+    }
+    return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="item-slot-svg"><path d="M16 3H8l-2 5 2 2v11h8V10l2-2-2-5z"/><path d="M12 3v18"/><path d="M8 8h8"/></svg>';
+}
+
+function getItemTypeIcon(item) {
+    const rawType = ((item && (item.type || item.category || '')) || '').toLowerCase();
+    const rawSlot = ((item && (item.slot || item.equipSlot || '')) || '').toLowerCase();
+    const rawName = ((item && item.name) || '').toLowerCase();
+    const t = rawType + ' ' + rawSlot + ' ' + rawName;
+    if (t.includes('head') || t.includes('helm') || t.includes('circlet') || t.includes('hood') || t.includes('crown') || t.includes('mask')) return '🪖';
+    if (t.includes('glove') || t.includes('gauntlet') || t.includes('hand') || t.includes('bracer')) return '🧤';
+    if (t.includes('boot') || t.includes('shoe') || t.includes('foot') || t.includes('feet')) return '👢';
+    if (t.includes('ring')) return '💍';
+    if (t.includes('amulet') || t.includes('necklace') || t.includes('pendant')) return '📿';
+    if (t.includes('shield')) return '🛡️';
+    if (t.includes('pant') || t.includes('trousers') || t.includes('skirt') || t.includes('legging')) return '🩲';
+    if (t.includes('dress') || t.includes('robe') || t.includes('cloak')) return '👗';
+    return '🥋';
+}
+
+if (typeof window !== 'undefined') {
+    window.isItemPreviewsEnabled = isItemPreviewsEnabled;
+    window.getItemTypeIcon = getItemTypeIcon;
+    window.getItemSlotSvg = getItemSlotSvg;
+}
+
 const pendingThumbnailRequests = new Set();
+const requestedThumbnailRequests = new Set();
+const failedThumbnailRequests = new Set();
 let thumbnailBatchTimeout = null;
 let visibleThumbnailsScheduled = false;
 
 function queueThumbnailRequest(rawID, highPriority = false) {
+    if (!isItemPreviewsEnabled()) return;
     if (!rawID || typeof window.RequestThumbnail !== 'function') return;
     const idNum = Number(rawID);
-    if (!idNum || idNum === 0) return;
+    if (!idNum || idNum === 0 || failedThumbnailRequests.has(idNum)) return;
+    if (!highPriority && requestedThumbnailRequests.has(idNum)) return;
 
     if (highPriority) {
+        requestedThumbnailRequests.add(idNum);
         window.RequestThumbnail(JSON.stringify({ rawIDs: [idNum], highPriority: true }));
         return;
     }
@@ -2860,139 +3680,274 @@ function queueThumbnailRequest(rawID, highPriority = false) {
     if (pendingThumbnailRequests.has(idNum)) return;
     pendingThumbnailRequests.add(idNum);
 
+    if (isInventoryScrolling) return;
+
     if (!thumbnailBatchTimeout) {
         thumbnailBatchTimeout = setTimeout(() => {
             thumbnailBatchTimeout = null;
-            if (pendingThumbnailRequests.size === 0) return;
-            const ids = Array.from(pendingThumbnailRequests);
-            pendingThumbnailRequests.clear();
-            window.RequestThumbnail(JSON.stringify({ rawIDs: ids, highPriority: false }));
-        }, 40);
+            if (isInventoryScrolling) return;
+            flushPendingThumbnails();
+        }, 120);
+    }
+}
+
+function flushPendingThumbnails() {
+    if (thumbnailBatchTimeout) {
+        clearTimeout(thumbnailBatchTimeout);
+        thumbnailBatchTimeout = null;
+    }
+    if (pendingThumbnailRequests.size > 0) {
+        const allIds = Array.from(pendingThumbnailRequests).slice(0, 6);
+        for (let i = 0; i < allIds.length; i++) {
+            requestedThumbnailRequests.add(allIds[i]);
+        }
+        pendingThumbnailRequests.clear();
+        if (typeof window.RequestThumbnail === 'function') {
+            window.RequestThumbnail(JSON.stringify({ rawIDs: allIds, highPriority: false }));
+        }
+    } else {
+        requestVisibleThumbnails();
     }
 }
 
 let thumbnailIntersectionObserver = null;
 function observeThumbnailCard(card) {
+    if (!isItemPreviewsEnabled()) return;
     if (typeof window === 'undefined' || typeof window.IntersectionObserver !== 'function') return;
     if (!thumbnailIntersectionObserver) {
-        const scrollable = document.getElementById('inventory-body-scrollable');
+        const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
         thumbnailIntersectionObserver = new IntersectionObserver((entries) => {
+            if (isInventoryScrolling || isMouseLeftDown) return;
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     const el = entry.target;
                     const lazyImg = el.querySelector('.item-thumb-img[data-src]');
                     if (lazyImg) {
+                        lazyImg.onload = () => {
+                            lazyImg.style.display = 'block';
+                            const plc = el.querySelector('.item-thumb-placeholder');
+                            if (plc) plc.style.display = 'none';
+                        };
+                        lazyImg.onerror = () => {
+                            lazyImg.style.display = 'none';
+                            const plc = el.querySelector('.item-thumb-placeholder');
+                            if (plc) plc.style.display = 'flex';
+                        };
                         lazyImg.src = lazyImg.getAttribute('data-src');
                         lazyImg.removeAttribute('data-src');
-                        lazyImg.style.display = 'block';
-                        const plc = el.querySelector('.item-thumb-placeholder');
-                        if (plc) plc.style.display = 'none';
+                        thumbnailIntersectionObserver.unobserve(el);
                     }
-                    thumbnailIntersectionObserver.unobserve(el);
+                    const rawId = el.getAttribute('data-raw-id');
+                    if (rawId) {
+                        const img = el.querySelector('.item-thumb-img');
+                        if (!img || !img.src) {
+                            queueThumbnailRequest(Number(rawId), false);
+                            if (thumbnailIntersectionObserver) {
+                                thumbnailIntersectionObserver.unobserve(el);
+                            }
+                        }
+                    }
                 }
             });
-        }, { root: scrollable, rootMargin: '300px 0px' });
+        }, { root: scrollable, rootMargin: '80px 0px' });
     }
     thumbnailIntersectionObserver.observe(card);
 }
 
-function updateVisibleThumbnailsPriority() {
-    if (visibleThumbnailsScheduled) return;
-    visibleThumbnailsScheduled = true;
-    requestAnimationFrame(() => {
-        visibleThumbnailsScheduled = false;
+let modSectionObserver = null;
+function observeModSection(sec) {
+    if (typeof window === 'undefined' || typeof window.IntersectionObserver !== 'function' || !sec) return;
+    if (!modSectionObserver) {
         const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
-
-        const cards = scrollable ? scrollable.querySelectorAll('.item-card, .item-row-card') : document.querySelectorAll('.item-card, .item-row-card');
-        if (!cards || cards.length === 0) return;
-
-        const sRect = scrollable ? scrollable.getBoundingClientRect() : null;
-        const hasRect = sRect && sRect.height > 0 && sRect.width > 0;
-        const visibleHighPriIDs = [];
-        const proximityPreFetchIDs = [];
-
-        cards.forEach(card => {
-            const rawId = card.getAttribute('data-raw-id');
-            if (!rawId) return;
-
-            const cRect = hasRect ? card.getBoundingClientRect() : null;
-            const inViewport = hasRect ? (cRect.bottom >= sRect.top && cRect.top <= sRect.bottom) : true;
-            const inProximity = hasRect ? (cRect.bottom >= (sRect.top - sRect.height) && cRect.top <= (sRect.bottom + sRect.height)) : true;
-
-            if (inViewport || inProximity) {
-                const lazyImg = card.querySelector('.item-thumb-img[data-src]');
-                if (lazyImg) {
-                    lazyImg.src = lazyImg.getAttribute('data-src');
-                    lazyImg.removeAttribute('data-src');
-                    lazyImg.style.display = 'block';
-                    const plc = card.querySelector('.item-thumb-placeholder');
-                    if (plc) plc.style.display = 'none';
+        modSectionObserver = new IntersectionObserver((entries) => {
+            if (isInventoryScrolling || isMouseLeftDown) return;
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const secEl = entry.target;
+                    if (!secEl.classList.contains('collapsed')) {
+                        const modName = (typeof secEl.getAttribute === 'function') ? secEl.getAttribute('data-mod-name') : (secEl.attributes ? secEl.attributes['data-mod-name'] : null);
+                        let gridContainer = null;
+                        if (secEl.children) {
+                            for (let j = 0; j < secEl.children.length; ++j) {
+                                const c = secEl.children[j];
+                                if (c.classList && c.classList.contains('mod-items-grid')) {
+                                    gridContainer = c;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!gridContainer && typeof secEl.querySelector === 'function') {
+                            gridContainer = secEl.querySelector('.mod-items-grid');
+                        }
+                        if (modName && gridContainer && (gridContainer.children.length === 0 || (typeof gridContainer.querySelector === 'function' && gridContainer.querySelector('.mod-catalog-loading')))) {
+                            if (pendingCatalogRequests.size < 4) {
+                                populateModItemsGrid(secEl, gridContainer, modName);
+                            }
+                        }
+                    }
                 }
+            });
+        }, { root: scrollable, rootMargin: '100px 0px' });
+    }
+    modSectionObserver.observe(sec);
+}
+
+function updateVisibleThumbnailsPriority() {
+    requestVisibleThumbnails();
+}
+
+function queueAllInventoryThumbnailsBackground() {}
+
+function autoUnequipConflictingSlots(newItem) {
+    if (!newItem || !newItem.type || !currentWheelData) return;
+    const exclusiveTypes = ['Helmet', 'Cuirass', 'Boots', 'Gauntlets', 'Shield'];
+    if (!exclusiveTypes.includes(newItem.type)) return;
+    const srcUpper = (currentWheelData.activeTargetActorId || '0x00000007').toUpperCase();
+    let inv = [];
+    if (srcUpper === '0X00000007' || srcUpper === '0X00000014' || srcUpper === 'PLAYER') {
+        inv = currentWheelData.playerInventory || currentWheelData.inventory || [];
+    } else if (currentWheelData.actorInventories && currentWheelData.actorInventories[srcUpper]) {
+        inv = currentWheelData.actorInventories[srcUpper];
+    } else if (currentWheelData.followerInventory) {
+        inv = currentWheelData.followerInventory;
+    }
+    const newRaw = Number(newItem.rawID) || (newItem.id ? parseInt(newItem.id, 16) : 0) || 0;
+    inv.forEach(other => {
+        if (!other || !other.equipped || other.type !== newItem.type) return;
+        const oRaw = Number(other.rawID) || (other.id ? parseInt(other.id, 16) : 0) || 0;
+        if (newRaw && oRaw && newRaw === oRaw) return;
+        other.equipped = false;
+        const oSelector = oRaw ? `[data-raw-id="${oRaw}"]` : `[data-form-id="${other.id}"]`;
+        document.querySelectorAll(oSelector).forEach(c => {
+            c.classList.remove('is-equipped-item');
+            const b = c.querySelector('.item-badges-strip .tag-equipped');
+            if (b) b.remove();
+        });
+    });
+    if (typeof modCatalogCache === 'object' && modCatalogCache !== null) {
+        for (let modKey in modCatalogCache) {
+            let list = modCatalogCache[modKey];
+            if (Array.isArray(list)) {
+                list.forEach(other => {
+                    if (!other || !other.equipped || other.type !== newItem.type) return;
+                    const oRaw = Number(other.rawID) || (other.id ? parseInt(other.id, 16) : 0) || 0;
+                    if (newRaw && oRaw && newRaw === oRaw) return;
+                    other.equipped = false;
+                });
             }
+        }
+    }
+}
 
-            if (typeof window.RequestThumbnail !== 'function') return;
+window.onItemEquipToggled = function(argument) {
+    let data = argument;
+    if (typeof argument === 'string') {
+        try { data = JSON.parse(argument); } catch (e) { return; }
+    }
+    if (!data) return;
+    const rawID = Number(data.rawID) || 0;
+    const formIDStr = (data.id || '').toUpperCase();
+    const isEquipped = !!data.equipped;
 
-            const img = card.querySelector('.item-thumb-img');
-            const hasThumb = (img && img.src && img.src.length > 0 && img.style.display !== 'none') || (img && img.hasAttribute && img.hasAttribute('data-src'));
-            if (hasThumb) return;
-
-            const idNum = Number(rawId);
-            if (!idNum) return;
-
-            if (inViewport) {
-                visibleHighPriIDs.push(idNum);
-            } else if (inProximity) {
-                proximityPreFetchIDs.push(idNum);
+    const updateInList = (list) => {
+        if (!Array.isArray(list)) return;
+        list.forEach(it => {
+            const rId = Number(it.rawID) || (it.id ? parseInt(it.id, 16) : 0) || 0;
+            const fStr = (it.id || '').toUpperCase();
+            if ((rawID && rId === rawID) || (formIDStr && fStr === formIDStr)) {
+                it.equipped = isEquipped;
             }
         });
+    };
+    if (currentWheelData) {
+        updateInList(currentWheelData.playerInventory);
+        updateInList(currentWheelData.inventory);
+        updateInList(currentWheelData.followerInventory);
+        if (currentWheelData.actorInventories) {
+            for (let k in currentWheelData.actorInventories) {
+                updateInList(currentWheelData.actorInventories[k]);
+            }
+        }
+    }
+    if (typeof modCatalogCache === 'object' && modCatalogCache !== null) {
+        for (let modKey in modCatalogCache) {
+            updateInList(modCatalogCache[modKey]);
+        }
+    }
 
-        if (typeof window.RequestThumbnail === 'function') {
-            if (visibleHighPriIDs.length > 0) {
-                window.RequestThumbnail(JSON.stringify({ rawIDs: visibleHighPriIDs, highPriority: true }));
-            } else if (proximityPreFetchIDs.length > 0) {
-                const prefetchBatch = proximityPreFetchIDs.slice(0, 24);
-                window.RequestThumbnail(JSON.stringify({ rawIDs: prefetchBatch, highPriority: true }));
+    const selector = rawID ? `[data-raw-id="${rawID}"]` : `[data-form-id="${formIDStr}"]`;
+    document.querySelectorAll(selector).forEach(card => {
+        card.classList.toggle('is-equipped-item', isEquipped);
+        let bStrip = card.querySelector('.item-badges-strip');
+        if (bStrip) {
+            let eqBadge = bStrip.querySelector('.tag-equipped');
+            if (isEquipped && !eqBadge) {
+                const span = document.createElement('span');
+                span.className = 'badge-tag tag-equipped';
+                span.style = 'background:rgba(16,185,129,0.2); color:#10b981; border:1px solid #10b981; font-weight:bold;';
+                span.innerText = 'EQUIPPED';
+                bStrip.prepend(span);
+            } else if (!isEquipped && eqBadge) {
+                eqBadge.remove();
             }
         }
     });
+};
+
+let cachedEquippedFormIdsSet = null;
+let cachedEquippedActorId = null;
+
+function invalidateEquippedItemCache() {
+    cachedEquippedFormIdsSet = null;
+    cachedEquippedActorId = null;
 }
 
-function queueAllInventoryThumbnailsBackground() {
-    if (typeof window.RequestThumbnail !== 'function') return;
-    const inv = getInventoryBySourceId(activeInventorySource);
-    if (!Array.isArray(inv) || inv.length === 0) return;
-
-    const normalIDs = [];
-    for (let i = 0; i < inv.length; ++i) {
-        const item = inv[i];
-        if (!item.thumbnail || item.thumbnail.length === 0) {
-            const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
-            if (rawIdVal && !pendingThumbnailRequests.has(rawIdVal)) {
-                normalIDs.push(Number(rawIdVal));
-                pendingThumbnailRequests.add(rawIdVal);
-                if (normalIDs.length >= 256) break;
-            }
-        }
+function getEquippedItemIdsSet() {
+    if (!currentWheelData) return new Set();
+    const srcUpper = (currentWheelData.activeTargetActorId || '0x00000007').toUpperCase();
+    if (cachedEquippedFormIdsSet && cachedEquippedActorId === srcUpper) {
+        return cachedEquippedFormIdsSet;
     }
-
-    if (normalIDs.length > 0) {
-        if (!thumbnailBatchTimeout) {
-            thumbnailBatchTimeout = setTimeout(() => {
-                thumbnailBatchTimeout = null;
-                window.RequestThumbnail(JSON.stringify({ rawIDs: normalIDs, highPriority: false }));
-                if (normalIDs.length >= 256) {
-                    queueAllInventoryThumbnailsBackground();
-                }
-            }, 60);
-        }
+    let inv = [];
+    if (srcUpper === '0X00000007' || srcUpper === '0X00000014' || srcUpper === 'PLAYER') {
+        inv = currentWheelData.playerInventory || currentWheelData.inventory || [];
+    } else if (currentWheelData.actorInventories && currentWheelData.actorInventories[srcUpper]) {
+        inv = currentWheelData.actorInventories[srcUpper];
+    } else if (currentWheelData.followerInventory) {
+        inv = currentWheelData.followerInventory;
     }
+    const set = new Set();
+    inv.forEach(x => {
+        if (!x || !x.equipped) return;
+        const xRaw = Number(x.rawID) || (x.id ? parseInt(x.id, 16) : 0) || 0;
+        if (xRaw) set.add(xRaw);
+        if (x.id) set.add(String(x.id).toUpperCase());
+    });
+    cachedEquippedFormIdsSet = set;
+    cachedEquippedActorId = srcUpper;
+    return set;
+}
+
+function isItemEquippedOnCurrentActor(rawID, formIDStr) {
+    const set = getEquippedItemIdsSet();
+    const rId = Number(rawID) || 0;
+    if (rId && set.has(rId)) return true;
+    if (formIDStr && set.has(String(formIDStr).toUpperCase())) return true;
+    return false;
 }
 
 function createInventoryItemElement(item, srcUpper) {
     const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
-    const isGrid = (inventoryViewMode === 'grid');
+    const previewsEnabled = isItemPreviewsEnabled();
+    const isGrid = previewsEnabled && (inventoryViewMode === 'grid');
+
+    if (srcUpper === 'MODEX' || srcUpper === 'CATALOG' || item.source === 'MODEX') {
+        item.equipped = isItemEquippedOnCurrentActor(rawIdVal, item.id);
+    }
+
     const card = document.createElement('div');
     card.className = (isGrid ? 'item-card ' : 'item-row-card ') + (item.equipped ? 'is-equipped-item' : '');
+    card._item = item;
 
     let badgeTagsHtml = '';
     if (item.equipped) badgeTagsHtml += '<span class="badge-tag tag-equipped" style="background:rgba(16,185,129,0.2); color:#10b981; border:1px solid #10b981; font-weight:bold;">EQUIPPED</span>';
@@ -3000,23 +3955,42 @@ function createInventoryItemElement(item, srcUpper) {
     if (item.tags && item.tags.includes('enchanted')) badgeTagsHtml += '<span class="badge-tag tag-enchanted">ENCH</span>';
     if (item.tags && item.tags.includes('stolen')) badgeTagsHtml += '<span class="badge-tag tag-stolen">STOLEN</span>';
 
-    const hasThumb = (item.thumbnail && item.thumbnail.length > 0);
-    if (isGrid) {
+    if (!previewsEnabled) {
+        // EXACT VERSION 3.0 ROW FORMAT (Clean, compact, no thumbnail box or placeholder)
+        let statPillText = 'ARM ' + (item.armor || 0);
+        card.innerHTML = `
+            <div class="item-left-info">
+                <div class="item-meta-titles">
+                    <span class="item-name-text">${item.name}</span>
+                    <span class="item-sub-desc">${item.type || 'Apparel'} &bull; Wt ${Number(item.weight || 0).toFixed(1)} &bull; ${item.value || 0}g</span>
+                </div>
+            </div>
+            <div class="item-right-stats">
+                <div class="item-badges-strip">${badgeTagsHtml}</div>
+                <span class="item-stat-pill">${statPillText}</span>
+            </div>
+        `;
+    } else if (isGrid) {
+        const hasThumb = item.thumbnail && item.thumbnail.length > 0;
+        const slotSvg = getItemSlotSvg(item);
         const thumbHtml = hasThumb
-            ? `<img class="item-thumb-img" data-src="${item.thumbnail}" alt="" style="display:none;"><span class="item-thumb-placeholder">👗</span>`
-            : `<span class="item-thumb-placeholder">👗</span>`;
+            ? `<img class="item-thumb-img" data-src="${item.thumbnail}" alt="" style="display:none;"><span class="item-thumb-placeholder">${slotSvg}</span>`
+            : `<span class="item-thumb-placeholder">${slotSvg}</span>`;
         card.innerHTML = `
             <span class="card-type-tag">${item.type || 'Armor'}</span>
             <span class="card-equipped-indicator"></span>
+            <div class="item-badges-strip">${badgeTagsHtml}</div>
             <div class="item-thumb-wrapper">${thumbHtml}</div>
             <div class="card-name-label" title="${item.name}">${item.name}</div>
             <div class="card-stat-pill">ARM ${item.armor || 0} &bull; ${Number(item.weight || 0).toFixed(1)}w</div>
         `;
     } else {
-        const thumbHtml = hasThumb
-            ? `<div class="item-row-thumb-frame"><img class="item-thumb-img" data-src="${item.thumbnail}" alt="" style="display:none;"><span class="item-thumb-placeholder">👗</span></div>`
-            : `<div class="item-row-thumb-frame"><span class="item-thumb-placeholder">👗</span></div>`;
         let statPillText = 'ARM ' + (item.armor || 0);
+        const hasThumb = item.thumbnail && item.thumbnail.length > 0;
+        const slotSvg = getItemSlotSvg(item);
+        const thumbHtml = hasThumb
+            ? `<div class="item-row-thumb-frame"><img class="item-thumb-img" data-src="${item.thumbnail}" alt="" style="display:none;"><span class="item-thumb-placeholder">${slotSvg}</span></div>`
+            : `<div class="item-row-thumb-frame"><span class="item-thumb-placeholder">${slotSvg}</span></div>`;
         card.innerHTML = `
             <div class="item-left-info">
                 ${thumbHtml}
@@ -3032,7 +4006,11 @@ function createInventoryItemElement(item, srcUpper) {
         `;
     }
 
-    if (hasThumb && typeof observeThumbnailCard === 'function') {
+    if (rawIdVal) card.setAttribute('data-raw-id', String(rawIdVal));
+    if (item.id) card.setAttribute('data-form-id', String(item.id));
+    if (item.uniqueID !== undefined) card.setAttribute('data-unique-id', String(item.uniqueID));
+
+    if (previewsEnabled && typeof observeThumbnailCard === 'function') {
         observeThumbnailCard(card);
     }
 
@@ -3054,6 +4032,85 @@ function createInventoryItemElement(item, srcUpper) {
 
     card.onpointerenter = () => inspectItem(item);
     card.onclick = () => {
+        inspectItem(item);
+        const wasEquipped = !!item.equipped;
+        const newEquipped = !wasEquipped;
+        item.equipped = newEquipped;
+        card.classList.toggle('is-equipped-item', newEquipped);
+
+        let bStrip = card.querySelector('.item-badges-strip');
+        if (bStrip) {
+            let eqBadge = bStrip.querySelector('.tag-equipped');
+            if (newEquipped && !eqBadge) {
+                const span = document.createElement('span');
+                span.className = 'badge-tag tag-equipped';
+                span.style = 'background:rgba(16,185,129,0.2); color:#10b981; border:1px solid #10b981; font-weight:bold;';
+                span.innerText = 'EQUIPPED';
+                bStrip.prepend(span);
+            } else if (!newEquipped && eqBadge) {
+                eqBadge.remove();
+            }
+        }
+        card.classList.add('just-equipped');
+        setTimeout(() => card.classList.remove('just-equipped'), 1200);
+
+        const itemName = item.name || 'Apparel';
+        if (typeof showSaveToast === 'function') {
+            showSaveToast((newEquipped ? 'Equipped: ' : 'Unequipped: ') + itemName);
+        }
+
+        if (srcUpper === 'MODEX' || (item.source && item.source.toUpperCase() === 'MODEX')) {
+            if (newEquipped) {
+                if (typeof window.SpawnModItem === 'function') {
+                    window.SpawnModItem(JSON.stringify({
+                        rawID: item.rawID || item.id,
+                        id: item.id,
+                        targetActorId: (currentWheelData && currentWheelData.activeTargetActorId) ? currentWheelData.activeTargetActorId : '0x00000007',
+                        autoEquip: true,
+                        destination: 'INVENTORY'
+                    }));
+                }
+            } else {
+                if (typeof window.ToggleItemEquip === 'function') {
+                    window.ToggleItemEquip(JSON.stringify({
+                        rawID: item.rawID || item.id,
+                        id: item.id,
+                        uniqueID: item.uniqueID || 0,
+                        enchantmentID: item.enchantmentID || 0,
+                        customName: item.customName || '',
+                        source: (currentWheelData && currentWheelData.activeTargetActorId) ? currentWheelData.activeTargetActorId : '0x00000007'
+                    }));
+                }
+            }
+
+            if (currentWheelData) {
+                const targetActorId = (currentWheelData && currentWheelData.activeTargetActorId) ? currentWheelData.activeTargetActorId : '0x00000007';
+                let targetInv = (targetActorId === '0x00000007' || targetActorId === 'PLAYER')
+                    ? (currentWheelData.playerInventory || currentWheelData.inventory)
+                    : (currentWheelData.followerInventory || (currentWheelData.actorInventories && currentWheelData.actorInventories[targetActorId]));
+                if (!targetInv && (targetActorId === '0x00000007' || targetActorId === 'PLAYER')) {
+                    targetInv = currentWheelData.playerInventory = [];
+                }
+                if (targetInv && Array.isArray(targetInv)) {
+                    const rawIdVal = item.rawID || item.id;
+                    const exists = targetInv.find(x => (x.rawID && rawIdVal && x.rawID === rawIdVal) || (x.id && item.id && x.id === item.id));
+                    if (exists) {
+                        exists.equipped = newEquipped;
+                    } else if (newEquipped) {
+                        targetInv.unshift({
+                            ...item,
+                            equipped: true,
+                            source: targetActorId
+                        });
+                    }
+                }
+                if (newEquipped) autoUnequipConflictingSlots(item);
+            }
+            return;
+        }
+
+        if (newEquipped) autoUnequipConflictingSlots(item);
+
         if (typeof window.ToggleItemEquip === 'function') {
             window.ToggleItemEquip(JSON.stringify({
                 rawID: item.rawID,
@@ -3065,10 +4122,6 @@ function createInventoryItemElement(item, srcUpper) {
             }));
         }
     };
-
-    if (rawIdVal) card.setAttribute('data-raw-id', String(rawIdVal));
-    if (item.id) card.setAttribute('data-form-id', String(item.id));
-    if (item.uniqueID !== undefined) card.setAttribute('data-unique-id', String(item.uniqueID));
 
     card.oncontextmenu = (e) => {
         e.preventDefault();
@@ -3082,29 +4135,137 @@ function createInventoryItemElement(item, srcUpper) {
 }
 
 let inventoryRenderLimit = 48;
+let scrollThumbTimeout = null;
+var isInventoryScrolling = false;
+if (typeof window !== 'undefined') window.isInventoryScrolling = false;
+let scrollStopTimer = null;
+let isMouseLeftDown = false;
+let scrollChunkRafPending = false;
+
+if (typeof window !== 'undefined' && !window._hasInventoryScrollMouseListeners) {
+    window._hasInventoryScrollMouseListeners = true;
+    window.addEventListener('mousedown', (e) => {
+        if (e.button === 0) isMouseLeftDown = true;
+    }, { capture: true, passive: true });
+
+    window.addEventListener('mouseup', (e) => {
+        if (e.button === 0) {
+            isMouseLeftDown = false;
+            if (isInventoryScrolling || scrollStopTimer) {
+                if (scrollStopTimer) clearTimeout(scrollStopTimer);
+                scrollStopTimer = setTimeout(() => {
+                    isInventoryScrolling = false;
+                    if (typeof window !== 'undefined') window.isInventoryScrolling = false;
+                    populateVisibleUncollapsedSections();
+                    flushPendingThumbnails();
+                }, 250);
+            }
+        }
+    }, { capture: true, passive: true });
+}
+
+function requestVisibleThumbnails() {
+    if (typeof window === 'undefined') return;
+    if (!isItemPreviewsEnabled()) return;
+    if (isInventoryScrolling) return;
+    const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
+    if (!scrollable) return;
+    const sRect = (typeof scrollable.getBoundingClientRect === 'function') ? scrollable.getBoundingClientRect() : null;
+    if (!sRect || sRect.height === 0) return;
+
+    const cards = (typeof scrollable.querySelectorAll === 'function') ? scrollable.querySelectorAll('.item-card, .item-row-card') : [];
+    if (!cards || cards.length === 0) return;
+
+    const visibleIds = [];
+    for (let i = 0; i < cards.length; ++i) {
+        const card = cards[i];
+        if (card.offsetParent === null) continue;
+        if (typeof card.getBoundingClientRect !== 'function') continue;
+        const cRect = card.getBoundingClientRect();
+        if (cRect.top > (sRect.bottom + 120)) {
+            break;
+        }
+        if (cRect.bottom >= (sRect.top - 60) && cRect.top <= (sRect.bottom + 60)) {
+            const lazyImg = card.querySelector('.item-thumb-img[data-src]');
+            if (lazyImg) {
+                lazyImg.src = lazyImg.getAttribute('data-src');
+                lazyImg.removeAttribute('data-src');
+                lazyImg.style.display = 'block';
+                const plc = card.querySelector('.item-thumb-placeholder');
+                if (plc) plc.style.display = 'none';
+            }
+            const img = card.querySelector('.item-thumb-img');
+            if (!img || !img.src) {
+                const rawId = card.getAttribute('data-raw-id');
+                if (rawId) {
+                    const idNum = Number(rawId);
+                    if (idNum && !visibleIds.includes(idNum)) {
+                        visibleIds.push(idNum);
+                        if (visibleIds.length >= 6) break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (visibleIds.length > 0 && typeof window.RequestThumbnail === 'function') {
+        window.RequestThumbnail(JSON.stringify({ rawIDs: visibleIds, highPriority: false }));
+    }
+}
 
 function setupInventoryScrollChunking() {
     const scrollable = document.getElementById('inventory-body-scrollable') || (typeof document.querySelector === 'function' ? document.querySelector('#panel-inventory .panel-body-scrollable') : null);
     if (scrollable && !scrollable._hasChunkScroll) {
         scrollable._hasChunkScroll = true;
         scrollable.addEventListener('scroll', () => {
-            updateVisibleThumbnailsPriority();
-            if (!inventoryGroupByMod && scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 300) {
-                const inv = getInventoryBySourceId(activeInventorySource);
-                if (inventoryRenderLimit < inv.length) {
-                    inventoryRenderLimit += 48;
-                    renderInventoryList(true);
-                }
+            isInventoryScrolling = true;
+            if (typeof window !== 'undefined') window.isInventoryScrolling = true;
+            pendingThumbnailRequests.clear();
+            if (thumbnailBatchTimeout) {
+                clearTimeout(thumbnailBatchTimeout);
+                thumbnailBatchTimeout = null;
             }
-        });
+            if (scrollStopTimer) clearTimeout(scrollStopTimer);
+            scrollStopTimer = setTimeout(() => {
+                if (isMouseLeftDown) return;
+                isInventoryScrolling = false;
+                if (typeof window !== 'undefined') window.isInventoryScrolling = false;
+                populateVisibleUncollapsedSections();
+                flushPendingThumbnails();
+            }, 250);
+
+            if (!inventoryGroupByMod && !scrollChunkRafPending) {
+                scrollChunkRafPending = true;
+                requestAnimationFrame(() => {
+                    scrollChunkRafPending = false;
+                    if (!scrollable) return;
+                    if (scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 300) {
+                        const inv = getInventoryBySourceId(activeInventorySource);
+                        if (inventoryRenderLimit < inv.length) {
+                            inventoryRenderLimit += 48;
+                            renderInventoryList(true);
+                        }
+                    }
+                });
+            }
+        }, { passive: true });
     }
 }
 
 function renderInventoryList(isChunkAppend) {
     if (!isChunkAppend) {
         inventoryRenderLimit = 48;
+        if (thumbnailIntersectionObserver) {
+            thumbnailIntersectionObserver.disconnect();
+            thumbnailIntersectionObserver = null;
+        }
+        if (modSectionObserver) {
+            modSectionObserver.disconnect();
+            modSectionObserver = null;
+        }
     }
     setupInventoryScrollChunking();
+    updateUiForPreviewsSetting();
 
     const grid = document.getElementById('inventory-items-grid');
     if (!grid) return;
@@ -3131,7 +4292,7 @@ function renderInventoryList(isChunkAppend) {
 
     const statWeight = document.getElementById('stat-carry-weight');
     if (statWeight) {
-        if (srcUpper === 'CLOUD' || srcUpper === 'WARDROBE') {
+        if (srcUpper === 'CLOUD' || srcUpper === 'WARDROBE' || srcUpper === 'MODEX' || srcUpper === 'CATALOG') {
             statWeight.innerText = '-- / --';
         } else {
             const fList = (currentWheelData && currentWheelData.followers) ? currentWheelData.followers : [];
@@ -3145,7 +4306,24 @@ function renderInventoryList(isChunkAppend) {
         }
     }
 
-    if (items.length === 0) {
+    if (srcUpper === 'MODEX' || srcUpper === 'CATALOG') {
+        if (!isModCatalogSummaryLoaded && modCatalogSummaries.length === 0) {
+            if (typeof window.RequestModCatalogSummary === 'function') {
+                window.RequestModCatalogSummary("{}");
+            }
+            grid.innerHTML = '<div style="font-size:10.5px; color:#64748b; text-align:center; padding:24px;">Scanning installed mod plugins...</div>';
+            return;
+        }
+        if (modCatalogSummaries.length === 0) {
+            grid.innerHTML = '<div style="font-size:10.5px; color:#64748b; text-align:center; padding:24px;">No mod plugins with apparel items were found.</div>';
+            return;
+        }
+        let totalCount = 0;
+        modCatalogSummaries.forEach(s => { totalCount += (s.count || 0); });
+        if (cAll) cAll.innerText = totalCount;
+        if (cArm) cArm.innerText = totalCount;
+        if (cJwl) cJwl.innerText = 0;
+    } else if (items.length === 0) {
         grid.innerHTML = '';
         let emptyMsg = 'No apparel items found.';
         if (srcUpper === 'CLOUD') emptyMsg = 'Wardrobe Chest is empty.';
@@ -3162,101 +4340,234 @@ function renderInventoryList(isChunkAppend) {
 
     if (inventoryGroupByMod) {
         grid.innerHTML = '';
-        const groups = {};
-        items.forEach(it => {
-            const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
-            if (!groups[m]) groups[m] = [];
-            groups[m].push(it);
-        });
-
-        const modNames = Object.keys(groups);
-        modNames.sort((a, b) => a.localeCompare(b));
-
-        const hasAnyState = (expandedInventoryMods.size > 0 || collapsedInventoryMods.size > 0);
-        const fragment = document.createDocumentFragment();
-
-        for (let i = 0; i < modNames.length; ++i) {
-            const modName = modNames[i];
-            const groupList = groups[modName];
-
-            let isExpanded = true;
+        if (srcUpper === 'MODEX' || srcUpper === 'CATALOG') {
+            let summariesToRender = modCatalogSummaries;
             if (inventorySearchQuery && inventorySearchQuery.trim().length > 0) {
-                isExpanded = true;
-            } else if (hasAnyState) {
-                isExpanded = !collapsedInventoryMods.has(modName);
-            } else {
-                isExpanded = true;
-                expandedInventoryMods.add(modName);
-            }
-            const isCollapsed = !isExpanded;
-
-            const section = document.createElement('div');
-            section.className = 'mod-group-section' + (isCollapsed ? ' collapsed' : '');
-            section.setAttribute('data-mod-name', modName);
-
-            const header = document.createElement('div');
-            header.className = 'mod-header-banner';
-            header.onclick = () => toggleInventoryModCollapse(modName);
-
-            const titleBox = document.createElement('div');
-            titleBox.className = 'mod-title-box';
-
-            const iconSpan = document.createElement('span');
-            iconSpan.className = 'mod-icon';
-            iconSpan.innerText = '📦';
-
-            const nameSpan = document.createElement('span');
-            nameSpan.className = 'mod-name';
-            nameSpan.innerText = modName;
-
-            const badgeSpan = document.createElement('span');
-            badgeSpan.className = 'mod-badge';
-            badgeSpan.innerText = groupList.length;
-
-            titleBox.appendChild(iconSpan);
-            titleBox.appendChild(nameSpan);
-            titleBox.appendChild(badgeSpan);
-
-            const chevronSpan = document.createElement('span');
-            chevronSpan.className = 'mod-chevron';
-            chevronSpan.innerHTML = '&#9660;';
-
-            header.appendChild(titleBox);
-            header.appendChild(chevronSpan);
-            section.appendChild(header);
-
-            const gridContainer = document.createElement('div');
-            gridContainer.className = 'mod-items-grid';
-
-            if (!isCollapsed) {
-                const sortedGroupItems = sortInventoryItems(groupList);
-                sortedGroupItems.forEach(it => {
-                    gridContainer.appendChild(createInventoryItemElement(it, srcUpper));
+                const q = inventorySearchQuery.trim().toLowerCase();
+                summariesToRender = modCatalogSummaries.filter(s => {
+                    if (s.modName && s.modName.toLowerCase().includes(q)) return true;
+                    const cached = getCachedModItems(s.modName);
+                    if (cached && cached.some(it => matchesInventorySearch(it, inventorySearchQuery))) return true;
+                    return false;
                 });
             }
+            const hasAnyState = (expandedInventoryMods.size > 0 || collapsedInventoryMods.size > 0);
+            const fragment = document.createDocumentFragment();
+            let expandedCount = 0;
+            for (let i = 0; i < summariesToRender.length; ++i) {
+                const summary = summariesToRender[i];
+                const modName = summary.modName || 'Skyrim.esm';
+                const count = summary.count || 0;
+                let isExpanded = false;
+                if (inventorySearchQuery && inventorySearchQuery.trim().length > 0) {
+                    isExpanded = (i < 12);
+                } else if (hasAnyState) {
+                    isExpanded = expandedInventoryMods.has(modName);
+                } else {
+                    isExpanded = false;
+                    collapsedInventoryMods.add(modName);
+                }
+                const isCollapsed = !isExpanded;
 
-            section.appendChild(gridContainer);
-            fragment.appendChild(section);
+                const section = document.createElement('div');
+                section.className = 'mod-group-section' + (isCollapsed ? ' collapsed' : '');
+                section.setAttribute('data-mod-name', modName);
+
+                const header = document.createElement('div');
+                header.className = 'mod-header-banner';
+                header.onclick = () => toggleInventoryModCollapse(modName);
+
+                const titleBox = document.createElement('div');
+                titleBox.className = 'mod-title-box';
+
+                const iconSpan = document.createElement('span');
+                iconSpan.className = 'mod-icon';
+                iconSpan.innerText = '📦';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'mod-name';
+                nameSpan.innerText = modName;
+
+                const badgeSpan = document.createElement('span');
+                badgeSpan.className = 'mod-badge';
+                badgeSpan.innerText = count;
+
+                titleBox.appendChild(iconSpan);
+                titleBox.appendChild(nameSpan);
+                titleBox.appendChild(badgeSpan);
+
+                const chevronSpan = document.createElement('span');
+                chevronSpan.className = 'mod-chevron';
+                chevronSpan.innerHTML = '&#9660;';
+
+                header.appendChild(titleBox);
+                header.appendChild(chevronSpan);
+                section.appendChild(header);
+
+                const gridContainer = document.createElement('div');
+                gridContainer.className = 'mod-items-grid';
+
+                if (!isCollapsed) {
+                    const cached = getCachedModItems(modName);
+                    if (cached && Array.isArray(cached)) {
+                        const sortedGroupItems = sortInventoryItems(getFilteredModCatalogItems(modName));
+                        renderModItemsIntoGrid(gridContainer, sortedGroupItems, 'MODEX');
+                    } else if (i < 3) {
+                        gridContainer.style.minHeight = '140px';
+                        gridContainer.innerHTML = '<div class="mod-catalog-loading">Fetching mod items...</div>';
+                        const targetLower = modName.toLowerCase();
+                        if (pendingCatalogRequests.size < 4 && !pendingCatalogRequests.has(targetLower)) {
+                            pendingCatalogRequests.add(targetLower);
+                            if (typeof window.RequestModCatalogItems === 'function') {
+                                window.RequestModCatalogItems(JSON.stringify({ modName: modName }));
+                            }
+                        }
+                    }
+                    if (typeof observeModSection === 'function') {
+                        observeModSection(section);
+                    }
+                }
+
+                section.appendChild(gridContainer);
+                fragment.appendChild(section);
+            }
+            grid.appendChild(fragment);
+        } else {
+            const groups = {};
+            items.forEach(it => {
+                const m = it.modName && it.modName.trim().length > 0 ? it.modName : 'Skyrim.esm';
+                if (!groups[m]) groups[m] = [];
+                groups[m].push(it);
+            });
+
+            const modNames = Object.keys(groups);
+            modNames.sort((a, b) => a.localeCompare(b));
+
+            const hasAnyState = (expandedInventoryMods.size > 0 || collapsedInventoryMods.size > 0);
+            const fragment = document.createDocumentFragment();
+
+            for (let i = 0; i < modNames.length; ++i) {
+                const modName = modNames[i];
+                const groupList = groups[modName];
+
+                let isExpanded = true;
+                if (inventorySearchQuery && inventorySearchQuery.trim().length > 0) {
+                    isExpanded = true;
+                } else if (hasAnyState) {
+                    isExpanded = !collapsedInventoryMods.has(modName);
+                } else {
+                    isExpanded = true;
+                    expandedInventoryMods.add(modName);
+                }
+                const isCollapsed = !isExpanded;
+
+                const section = document.createElement('div');
+                section.className = 'mod-group-section' + (isCollapsed ? ' collapsed' : '');
+                section.setAttribute('data-mod-name', modName);
+
+                const header = document.createElement('div');
+                header.className = 'mod-header-banner';
+                header.onclick = () => toggleInventoryModCollapse(modName);
+
+                const titleBox = document.createElement('div');
+                titleBox.className = 'mod-title-box';
+
+                const iconSpan = document.createElement('span');
+                iconSpan.className = 'mod-icon';
+                iconSpan.innerText = '📦';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'mod-name';
+                nameSpan.innerText = modName;
+
+                const badgeSpan = document.createElement('span');
+                badgeSpan.className = 'mod-badge';
+                badgeSpan.innerText = groupList.length;
+
+                titleBox.appendChild(iconSpan);
+                titleBox.appendChild(nameSpan);
+                titleBox.appendChild(badgeSpan);
+
+                const chevronSpan = document.createElement('span');
+                chevronSpan.className = 'mod-chevron';
+                chevronSpan.innerHTML = '&#9660;';
+
+                header.appendChild(titleBox);
+                header.appendChild(chevronSpan);
+                section.appendChild(header);
+
+                const gridContainer = document.createElement('div');
+                gridContainer.className = 'mod-items-grid';
+
+                if (!isCollapsed) {
+                    const sortedGroupItems = sortInventoryItems(groupList);
+                    renderModItemsIntoGrid(gridContainer, sortedGroupItems, srcUpper);
+                    if (typeof observeModSection === 'function') {
+                        observeModSection(section);
+                    }
+                }
+
+                section.appendChild(gridContainer);
+                fragment.appendChild(section);
+            }
+
+            grid.appendChild(fragment);
         }
-
-        grid.appendChild(fragment);
     } else {
-        grid.innerHTML = '';
-        const sortedItems = sortInventoryItems(items);
-        const gridContainer = document.createElement('div');
-        gridContainer.className = 'mod-items-grid';
-        const toRender = sortedItems.slice(0, inventoryRenderLimit);
-        toRender.forEach(it => {
-            gridContainer.appendChild(createInventoryItemElement(it, srcUpper));
-        });
-        grid.appendChild(gridContainer);
+        if (!isChunkAppend) {
+            grid.innerHTML = '';
+        }
+        if (srcUpper === 'MODEX' || srcUpper === 'CATALOG') {
+            const rawCached = getInventoryBySourceId('MODEX');
+            const allCached = rawCached.filter(item => {
+                if (!item || !item.name || item.name.trim().length === 0) return false;
+                if (activeCategoryFilter === 'ARMORS' && item.category !== 'ARMORS') return false;
+                if (activeCategoryFilter === 'JEWELRY' && item.category !== 'JEWELRY') return false;
+                if (!matchesInventorySearch(item, inventorySearchQuery)) return false;
+                return true;
+            });
+            if (allCached.length === 0) {
+                grid.innerHTML = '<div style="font-size:10.5px; color:#64748b; text-align:center; padding:24px;">Mod Explorer groups armors by plugin. Enable Mod Grouping to browse all installed mods.</div>';
+            } else {
+                const sortedItems = sortInventoryItems(allCached);
+                let gridContainer = grid.querySelector('.mod-items-grid');
+                if (!gridContainer || !isChunkAppend) {
+                    grid.innerHTML = '';
+                    gridContainer = document.createElement('div');
+                    gridContainer.className = 'mod-items-grid';
+                    grid.appendChild(gridContainer);
+                }
+                const startIndex = isChunkAppend ? Math.max(0, inventoryRenderLimit - 48) : 0;
+                const toRender = sortedItems.slice(startIndex, inventoryRenderLimit);
+                const frag = document.createDocumentFragment();
+                toRender.forEach(it => {
+                    frag.appendChild(createInventoryItemElement(it, 'MODEX'));
+                });
+                gridContainer.appendChild(frag);
+            }
+        } else {
+            const sortedItems = sortInventoryItems(items);
+            let gridContainer = grid.querySelector('.mod-items-grid');
+            if (!gridContainer || !isChunkAppend) {
+                grid.innerHTML = '';
+                gridContainer = document.createElement('div');
+                gridContainer.className = 'mod-items-grid';
+                grid.appendChild(gridContainer);
+            }
+            const startIndex = isChunkAppend ? Math.max(0, inventoryRenderLimit - 48) : 0;
+            const toRender = sortedItems.slice(startIndex, inventoryRenderLimit);
+            const frag = document.createDocumentFragment();
+            toRender.forEach(it => {
+                frag.appendChild(createInventoryItemElement(it, srcUpper));
+            });
+            gridContainer.appendChild(frag);
+        }
     }
 
-    if (scrollable && savedScrollTop > 0) {
+    if (!isChunkAppend && scrollable && savedScrollTop > 0) {
         scrollable.scrollTop = savedScrollTop;
     }
     updateVisibleThumbnailsPriority();
-    queueAllInventoryThumbnailsBackground();
 }
 
 function showItemContextMenu(x, y, item) {
@@ -3277,12 +4588,111 @@ function showItemContextMenu(x, y, item) {
     targetsList.innerHTML = '';
     if (allTargetsList) allTargetsList.innerHTML = '';
 
+    const slotActionBtn = document.getElementById('ctx-item-slot-action');
+    if (slotActionBtn) {
+        const slot = (currentWheelData && currentWheelData.slots) ? (currentWheelData.slots.find(s => (s.index !== undefined ? s.index : 0) === selectedSlotIndex) || currentWheelData.slots[selectedSlotIndex]) : null;
+        let isInSelectedSlot = false;
+        if (slot && slot.items) {
+            const rawIdVal = item.rawID || item.formID || parseInt(item.id, 16) || 0;
+            const uId = item.uniqueID || 0;
+            const enchId = item.enchantmentID || 0;
+            const custName = item.customName || '';
+            isInSelectedSlot = slot.items.some(it => {
+                const itRaw = (typeof it === 'object') ? (it.rawID || it.formID || parseInt(it.id, 16)) : (typeof it === 'number' ? it : parseInt(it, 16));
+                const itUID = (typeof it === 'object') ? (it.uniqueID || 0) : 0;
+                const itEnch = (typeof it === 'object') ? (it.enchantmentID || 0) : 0;
+                const itName = (typeof it === 'object') ? (it.customName || '') : '';
+                return itRaw === rawIdVal && itUID === uId && itEnch === enchId && itName === custName;
+            });
+        }
+        if (isInSelectedSlot) {
+            slotActionBtn.innerText = '- Remove from Current Slot';
+            slotActionBtn.className = 'ctx-item ctx-danger';
+            slotActionBtn.onclick = (e) => {
+                if (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                removeItemFromCurrentSlot(item.rawID || item.id, item.id);
+                hideAllMenus();
+            };
+        } else {
+            slotActionBtn.innerText = '+ Add to Current Slot';
+            slotActionBtn.className = 'ctx-item';
+            slotActionBtn.onclick = (e) => {
+                ctxItemAddToCurrentSlot(e);
+            };
+        }
+    }
+
     const currentItemSource = (activeInventorySource || item.source || '0x00000007').toUpperCase();
+    if (currentItemSource === 'MODEX' || (item.source && item.source.toUpperCase() === 'MODEX')) {
+        const btnWear = document.createElement('div');
+        btnWear.className = 'ctx-item';
+        btnWear.innerHTML = '<span>⚡ Equip (Add & Wear)</span>';
+        btnWear.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.SpawnModItem === 'function') {
+                window.SpawnModItem(JSON.stringify({ rawID: item.rawID || item.id, id: item.id, autoEquip: true, destination: 'INVENTORY' }));
+            }
+            hideAllMenus();
+        };
+        targetsList.appendChild(btnWear);
+
+        const btnAdd = document.createElement('div');
+        btnAdd.className = 'ctx-item';
+        btnAdd.innerHTML = '<span>🎒 Add to Inventory (1x)</span>';
+        btnAdd.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.SpawnModItem === 'function') {
+                window.SpawnModItem(JSON.stringify({ rawID: item.rawID || item.id, id: item.id, autoEquip: false, destination: 'INVENTORY' }));
+            }
+            hideAllMenus();
+        };
+        targetsList.appendChild(btnAdd);
+
+        const btnStash = document.createElement('div');
+        btnStash.className = 'ctx-item';
+        btnStash.innerHTML = '<span>📦 Send to Wardrobe Chest</span>';
+        btnStash.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.SpawnModItem === 'function') {
+                window.SpawnModItem(JSON.stringify({ rawID: item.rawID || item.id, id: item.id, autoEquip: false, destination: 'CLOUD' }));
+            }
+            hideAllMenus();
+        };
+        targetsList.appendChild(btnStash);
+
+        if (currentWheelData && currentWheelData.followers && currentWheelData.followers.length > 0) {
+            currentWheelData.followers.forEach(fol => {
+                if (fol.type !== 'PLAYER' && fol.id && fol.id.toUpperCase() !== '0X00000007' && fol.id.toUpperCase() !== '0X00000014') {
+                    const btnFol = document.createElement('div');
+                    btnFol.className = 'ctx-item';
+                    btnFol.innerHTML = '<span>👤 Give & Equip to ' + (fol.name || 'Follower') + '</span>';
+                    btnFol.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (typeof window.SpawnModItem === 'function') {
+                            window.SpawnModItem(JSON.stringify({ rawID: item.rawID || item.id, id: item.id, targetActorId: fol.id, autoEquip: true, destination: 'INVENTORY' }));
+                        }
+                        hideAllMenus();
+                    };
+                    targetsList.appendChild(btnFol);
+                }
+            });
+        }
+        positionContextMenu(menu, x, y);
+        return;
+    }
+
     const allSources = getInventorySourcesList();
 
     allSources.forEach(src => {
         const srcUpper = src.id.toUpperCase();
-        if (srcUpper !== currentItemSource) {
+        if (srcUpper !== currentItemSource && srcUpper !== 'MODEX') {
             const btnSingle = document.createElement('div');
             btnSingle.className = 'ctx-item';
             btnSingle.innerHTML = '<span>' + src.name + '</span>';
@@ -3344,7 +4754,8 @@ function openTransferAllMenu(e) {
     const allSources = getInventorySourcesList();
 
     allSources.forEach(src => {
-        if (src.id.toUpperCase() !== currentSource) {
+        const sUpper = src.id.toUpperCase();
+        if (sUpper !== currentSource && sUpper !== 'MODEX') {
             const btn = document.createElement('div');
             btn.className = 'ctx-item';
             btn.innerHTML = '<span>' + src.name + '</span>';
@@ -3374,14 +4785,22 @@ function openTransferAllMenu(e) {
     positionContextMenu(menu, posX, posY);
 }
 
-function performLocalItemTransfer(rawIdVal, fromSrc, toTargetId) {
+function performLocalItemTransfer(rawIdVal, fromSrc, toTargetId, uniqueID, enchantmentID, customName) {
     const srcList = getInventoryBySourceId(fromSrc);
     const dstList = getInventoryBySourceId(toTargetId);
 
     if (Array.isArray(srcList) && Array.isArray(dstList) && srcList !== dstList) {
-        const idx = srcList.findIndex(it => (it.rawID || parseInt(it.id, 16)) === rawIdVal);
-        if (idx !== -1) {
-            const [item] = srcList.splice(idx, 1);
+        const idx = srcList.findIndex(it => {
+            const itRaw = it.rawID || parseInt(it.id, 16);
+            if (itRaw !== rawIdVal) return false;
+            if (uniqueID !== undefined && (it.uniqueID || 0) !== uniqueID) return false;
+            if (enchantmentID !== undefined && (it.enchantmentID || 0) !== enchantmentID) return false;
+            if (customName !== undefined && customName !== '' && (it.customName || '') !== customName) return false;
+            return true;
+        });
+        const targetIdx = (idx !== -1) ? idx : srcList.findIndex(it => (it.rawID || parseInt(it.id, 16)) === rawIdVal);
+        if (targetIdx !== -1) {
+            const [item] = srcList.splice(targetIdx, 1);
             item.source = toTargetId;
             item.equipped = false;
             dstList.unshift(item);
@@ -3454,13 +4873,19 @@ function ctxItemTransfer(toTargetId) {
     const rawIdVal = inspectedItemObject.rawID || inspectedItemObject.formID || parseInt(inspectedItemObject.id, 16) || 0;
     const idStrVal = inspectedItemObject.id || ('0x' + Number(rawIdVal).toString(16).toUpperCase());
     const fromSrc = activeInventorySource || inspectedItemObject.source || '0x00000007';
+    const uniqueIDVal = inspectedItemObject.uniqueID || 0;
+    const enchantmentIDVal = inspectedItemObject.enchantmentID || 0;
+    const customNameVal = inspectedItemObject.customName || '';
 
-    performLocalItemTransfer(rawIdVal, fromSrc, toTargetId);
+    performLocalItemTransfer(rawIdVal, fromSrc, toTargetId, uniqueIDVal, enchantmentIDVal, customNameVal);
 
     if (typeof window.TransferItem === 'function') {
         window.TransferItem(JSON.stringify({
             rawID: rawIdVal,
             id: idStrVal,
+            uniqueID: uniqueIDVal,
+            enchantmentID: enchantmentIDVal,
+            customName: customNameVal,
             fromSource: fromSrc,
             toTarget: toTargetId
         }));
@@ -3470,7 +4895,12 @@ function ctxItemTransfer(toTargetId) {
     hideAllMenus();
 }
 
+let inspectThumbnailDebounce = null;
 function inspectItem(item) {
+    if (!item) return;
+    if (inspectedItemObject && (inspectedItemObject === item || (inspectedItemObject.id && item.id && inspectedItemObject.id === item.id && inspectedItemObject.uniqueID === item.uniqueID))) {
+        return;
+    }
     inspectedItemObject = item;
     const tag = document.getElementById('inspect-type-tag');
     const title = document.getElementById('inspect-title-text');
@@ -3493,17 +4923,37 @@ function inspectItem(item) {
         modSrc.innerText = item.modName || 'Skyrim.esm';
     }
 
-    if (prevImg && prevPlc) {
-        if (item.thumbnail && item.thumbnail.length > 0) {
-            prevImg.src = item.thumbnail;
-            prevImg.style.display = 'block';
-            prevPlc.style.display = 'none';
-        } else {
-            prevImg.style.display = 'none';
-            prevPlc.style.display = 'block';
-            const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
-            if (rawIdVal) {
-                queueThumbnailRequest(rawIdVal, true);
+    const prevFrame = document.getElementById('inspect-preview-frame');
+    if (!isItemPreviewsEnabled()) {
+        if (inspectThumbnailDebounce) {
+            clearTimeout(inspectThumbnailDebounce);
+            inspectThumbnailDebounce = null;
+        }
+        if (prevFrame) prevFrame.style.display = 'none';
+        if (prevImg) prevImg.style.display = 'none';
+        if (prevPlc) prevPlc.style.display = 'none';
+    } else {
+        if (prevFrame) prevFrame.style.display = 'flex';
+        if (prevImg && prevPlc) {
+            if (item.thumbnail && item.thumbnail.length > 0) {
+                if (inspectThumbnailDebounce) {
+                    clearTimeout(inspectThumbnailDebounce);
+                    inspectThumbnailDebounce = null;
+                }
+                prevImg.src = item.thumbnail;
+                prevImg.style.display = 'block';
+                prevPlc.style.display = 'none';
+            } else {
+                prevImg.style.display = 'none';
+                prevPlc.style.display = 'block';
+                prevPlc.innerHTML = getItemSlotSvg(item);
+                const rawIdVal = item.rawID || item.formID || (item.id ? parseInt(item.id, 16) : 0) || 0;
+                if (rawIdVal) {
+                    if (inspectThumbnailDebounce) clearTimeout(inspectThumbnailDebounce);
+                    inspectThumbnailDebounce = setTimeout(() => {
+                        queueThumbnailRequest(rawIdVal, true);
+                    }, 80);
+                }
             }
         }
     }
@@ -3525,11 +4975,7 @@ function inspectItem(item) {
     }
 }
 
-window.onThumbnailReady = function(argument) {
-    let data = argument;
-    if (typeof argument === 'string') {
-        try { data = JSON.parse(argument); } catch (e) { return; }
-    }
+function applySingleThumbnailReady(data) {
     if (!data || !data.rawID || !data.thumbnail) return;
 
     const rawIdStr = String(data.rawID);
@@ -3558,19 +5004,72 @@ window.onThumbnailReady = function(argument) {
         }
     }
 
-    const card = document.querySelector(`[data-raw-id="${rawIdStr}"]`);
-    if (card) {
+    if (typeof modCatalogCache === 'object' && modCatalogCache !== null) {
+        for (const modKey in modCatalogCache) {
+            if (updateItemInList(modCatalogCache[modKey])) break;
+        }
+    }
+
+    const cards = (typeof document.querySelectorAll === 'function') ? document.querySelectorAll(`[data-raw-id="${rawIdStr}"]`) : [];
+    cards.forEach(card => {
         const thumbImg = card.querySelector('.item-thumb-img');
         const thumbPlc = card.querySelector('.item-thumb-placeholder');
         if (thumbImg) {
+            thumbImg.onload = () => {
+                thumbImg.style.display = 'block';
+                if (thumbPlc) thumbPlc.style.display = 'none';
+            };
+            thumbImg.onerror = () => {
+                failedThumbnailRequests.add(Number(rawIdStr));
+                thumbImg.style.display = 'none';
+                if (thumbPlc) thumbPlc.style.display = 'flex';
+            };
             thumbImg.src = data.thumbnail;
-            thumbImg.style.display = 'block';
         } else if (thumbPlc) {
             const wrapper = thumbPlc.parentElement;
             if (wrapper) {
-                wrapper.innerHTML = `<img class="item-thumb-img" src="${data.thumbnail}" alt="">`;
+                const img = document.createElement('img');
+                img.className = 'item-thumb-img';
+                img.alt = '';
+                img.onload = () => {
+                    img.style.display = 'block';
+                    thumbPlc.style.display = 'none';
+                };
+                img.onerror = () => {
+                    failedThumbnailRequests.add(Number(rawIdStr));
+                    img.remove();
+                    thumbPlc.style.display = 'flex';
+                };
+                img.src = data.thumbnail;
+                wrapper.appendChild(img);
             }
         }
+    });
+
+    const wheelSlotThumbs = (typeof document.querySelectorAll === 'function') ? document.querySelectorAll(`.wheel-slot-thumb-img[data-raw-id="${rawIdStr}"]`) : [];
+    wheelSlotThumbs.forEach(img => {
+        img.onerror = () => {
+            failedThumbnailRequests.add(Number(rawIdStr));
+            img.style.display = 'none';
+            const fallback = img.parentElement ? img.parentElement.querySelector('.fallback-icon') : null;
+            if (fallback) fallback.style.display = 'block';
+        };
+        img.src = data.thumbnail;
+        img.style.display = 'block';
+        const fallback = img.parentElement ? img.parentElement.querySelector('.fallback-icon') : null;
+        if (fallback) fallback.style.display = 'none';
+    });
+
+    if (currentWheelData && currentWheelData.slots) {
+        currentWheelData.slots.forEach(slot => {
+            if (slot.items && Array.isArray(slot.items)) {
+                slot.items.forEach(it => {
+                    if (typeof it === 'object' && it !== null && (String(it.rawID) === rawIdStr || String(it.formID) === rawIdStr || (it.id && it.id.toUpperCase() === formIdStr))) {
+                        it.thumbnail = data.thumbnail;
+                    }
+                });
+            }
+        });
     }
 
     if (inspectedItemObject && (String(inspectedItemObject.rawID) === rawIdStr || String(inspectedItemObject.formID) === rawIdStr || (inspectedItemObject.id && inspectedItemObject.id.toUpperCase() === formIdStr))) {
@@ -3583,7 +5082,58 @@ window.onThumbnailReady = function(argument) {
             inspectPlc.style.display = 'none';
         }
     }
+}
+
+window.onThumbnailReady = function(argument) {
+    let data = argument;
+    if (typeof argument === 'string') {
+        try { data = JSON.parse(argument); } catch (e) { return; }
+    }
+    if (!data) return;
+
+    if (Array.isArray(data)) {
+        data.forEach(applySingleThumbnailReady);
+        return;
+    }
+
+    applySingleThumbnailReady(data);
 };
+
+window.onThumbnailFailed = function(argument) {
+    const rawId = Number(argument);
+    if (rawId) {
+        failedThumbnailRequests.add(rawId);
+        pendingThumbnailRequests.delete(rawId);
+        requestedThumbnailRequests.delete(rawId);
+    }
+};
+
+function clearLoadedThumbnails() {
+    const clearInList = (list) => {
+        if (!Array.isArray(list)) return;
+        list.forEach(item => {
+            if (item && item.thumbnail) delete item.thumbnail;
+        });
+    };
+    if (window.currentWheelData) {
+        clearInList(currentWheelData.playerInventory);
+        clearInList(currentWheelData.cloudInventory);
+        clearInList(currentWheelData.followerInventory);
+        if (Array.isArray(currentWheelData.slots)) {
+            currentWheelData.slots.forEach(slot => {
+                if (slot && Array.isArray(slot.items)) {
+                    clearInList(slot.items);
+                }
+            });
+        }
+    }
+    pendingThumbnailRequests.clear();
+    requestedThumbnailRequests.clear();
+    failedThumbnailRequests.clear();
+    if (typeof renderCurrentView === 'function') renderCurrentView();
+    if (typeof updateWheelUI === 'function') updateWheelUI();
+}
+window.clearLoadedThumbnails = clearLoadedThumbnails;
 
 function renderSlotsRail() {
     const rail = document.getElementById('slots-rail-list');
