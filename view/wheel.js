@@ -40,6 +40,99 @@ function resolvePngIcon(slot) {
     return 'default.png';
 }
 
+function resolveSlotTorsoItem(slot) {
+    if (!slot) return null;
+    let items = slot.items;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+        if (slot.itemIDs && Array.isArray(slot.itemIDs)) {
+            items = slot.itemIDs;
+        }
+    }
+    if (!items || items.length === 0) return null;
+
+    let allInventory = [];
+    if (typeof currentWheelData !== 'undefined' && currentWheelData) {
+        if (Array.isArray(currentWheelData.inventory)) allInventory = allInventory.concat(currentWheelData.inventory);
+        if (Array.isArray(currentWheelData.playerInventory)) allInventory = allInventory.concat(currentWheelData.playerInventory);
+        if (Array.isArray(currentWheelData.cloudInventory)) allInventory = allInventory.concat(currentWheelData.cloudInventory);
+        if (Array.isArray(currentWheelData.followerInventory)) allInventory = allInventory.concat(currentWheelData.followerInventory);
+    }
+
+    const resolveItem = (entry) => {
+        if (!entry) return null;
+        if (typeof entry === 'object') {
+            const rawId = entry.rawID || entry.formID || (entry.id ? parseInt(entry.id, 16) : 0) || 0;
+            const formIdStr = entry.id || ('0x' + Number(rawId).toString(16).toUpperCase());
+            let thumb = entry.thumbnail || '';
+            let type = entry.type || entry.category || '';
+            let name = entry.name || '';
+            if (!thumb || !type || !name) {
+                const found = allInventory.find(x => (rawId && x.rawID === rawId) || (x.id && x.id.toUpperCase() === formIdStr.toUpperCase()));
+                if (found) {
+                    if (!thumb) thumb = found.thumbnail || '';
+                    if (!type) type = found.type || found.category || '';
+                    if (!name) name = found.name || '';
+                }
+            }
+            return { rawID: rawId, id: formIdStr, name, type, thumbnail: thumb };
+        } else {
+            const formIdNum = typeof entry === 'number' ? entry : (parseInt(entry, 16) || 0);
+            const formIdStr = typeof entry === 'number' ? ('0x' + entry.toString(16).toUpperCase()) : String(entry);
+            const found = allInventory.find(x => (formIdNum && x.rawID === formIdNum) || (x.id && x.id.toUpperCase() === formIdStr.toUpperCase()));
+            if (found) {
+                return { rawID: formIdNum, id: formIdStr, name: found.name || '', type: found.type || found.category || '', thumbnail: found.thumbnail || '' };
+            }
+            return { rawID: formIdNum, id: formIdStr, name: 'Apparel', type: 'Armor', thumbnail: '' };
+        }
+    };
+
+    const resolved = items.map(resolveItem).filter(Boolean);
+    if (resolved.length === 0) return null;
+
+    const isBox = (it) => {
+        const str = ((it.name || '') + ' ' + (it.type || '')).toLowerCase();
+        return str.includes('box') || str.includes('crate') || str.includes('package') || str.includes('container');
+    };
+
+    // 1. Check type: Cuirass, Torso, Robe, Body, Chest (non-box)
+    let best = resolved.find(it => {
+        if (isBox(it)) return false;
+        const t = (it.type || '').toLowerCase();
+        return t === 'cuirass' || t.includes('cuirass') || t.includes('torso') || t.includes('robe') || t.includes('body') || t.includes('chest');
+    });
+
+    // 2. Check name keywords (non-box)
+    if (!best) {
+        best = resolved.find(it => {
+            if (isBox(it)) return false;
+            const n = (it.name || '').toLowerCase();
+            return n.includes('cuirass') || n.includes('armor') || n.includes('robe') || n.includes('torso') || n.includes('chest') || n.includes('body') || n.includes('tunic') || n.includes('dress') || n.includes('top');
+        });
+    }
+
+    // 3. Filter out non-chest apparel (helmet, boot, glove, shield, jewelry, box)
+    if (!best) {
+        best = resolved.find(it => {
+            if (isBox(it)) return false;
+            const combined = ((it.type || '') + ' ' + (it.name || '')).toLowerCase();
+            if (combined.includes('helmet') || combined.includes('hood') || combined.includes('circlet') ||
+                combined.includes('gauntlet') || combined.includes('glove') || combined.includes('bracer') ||
+                combined.includes('boot') || combined.includes('shoe') || combined.includes('foot') ||
+                combined.includes('shield') || combined.includes('ring') || combined.includes('amulet') || combined.includes('necklace')) {
+                return false;
+            }
+            return true;
+        });
+    }
+
+    // 4. Any non-box item
+    if (!best) {
+        best = resolved.find(it => !isBox(it));
+    }
+
+    return best || resolved[0];
+}
+
 function describeArc(x, y, innerRadius, outerRadius, startAngle, endAngle) {
     const x1_out = x + outerRadius * Math.cos(startAngle);
     const y1_out = y + outerRadius * Math.sin(startAngle);
@@ -120,6 +213,8 @@ function updateWheelUI() {
                 if (isEdit || hasOutfit) {
                     displaySlots.push({ ...s, realIndex: realIdx });
                 }
+            } else if (isEdit && (!s.contextTag || s.contextTag.trim().length === 0)) {
+                displaySlots.push({ ...s, realIndex: realIdx });
             }
         });
     } else {
@@ -148,7 +243,12 @@ function updateWheelUI() {
         emptyMsg.className = 'wheel-slot-label';
         emptyMsg.style.left = '290px';
         emptyMsg.style.top = '290px';
-        emptyMsg.innerHTML = '<div class="slot-title" style="color:#64748b;">No Outfits in Filter</div>';
+        const isFollower = currentWheelData && currentWheelData.activeTargetActorId && currentWheelData.activeTargetActorId.toUpperCase() !== '0X00000007' && currentWheelData.activeTargetActorId.toUpperCase() !== '0X7';
+        if (isFollower && !isEdit) {
+            emptyMsg.innerHTML = '<div class="slot-title" style="color:#94a3b8;">Follower has no outfits set</div><div style="font-size:10px; color:#64748b; margin-top:4px;">Open Edit Mode to configure</div>';
+        } else {
+            emptyMsg.innerHTML = '<div class="slot-title" style="color:#64748b;">No Outfits in Filter</div>';
+        }
         labelsContainer.appendChild(emptyMsg);
         return;
     }
@@ -187,7 +287,49 @@ function updateWheelUI() {
 
         let defaultFill, defaultStroke, hoverFill, hoverStroke;
 
-        if (isAddon) {
+        const slotCustomColor = (slot.color && typeof slot.color === 'string' && slot.color.trim().length > 0) ? slot.color.trim() : null;
+        const wheelCustomColor = (currentWheelData && currentWheelData.wheelColor && typeof currentWheelData.wheelColor === 'string' && currentWheelData.wheelColor.trim().length > 0) ? currentWheelData.wheelColor.trim() : null;
+        const effectiveCustomColor = slotCustomColor || wheelCustomColor || null;
+
+        function hexToRgbaStr(hex, alpha) {
+            if (!hex || typeof hex !== 'string') return `rgba(255, 255, 255, ${alpha})`;
+            let c = hex.replace('#', '');
+            if (c.length === 3) c = c.split('').map(x => x + x).join('');
+            if (c.length !== 6) return `rgba(255, 255, 255, ${alpha})`;
+            const num = parseInt(c, 16);
+            const r = (num >> 16) & 255;
+            const g = (num >> 8) & 255;
+            const b = num & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+
+        if (effectiveCustomColor) {
+            if (isAddon) {
+                defaultFill = isEquipped ? hexToRgbaStr(effectiveCustomColor, 0.40) : hexToRgbaStr(effectiveCustomColor, 0.15);
+                defaultStroke = effectiveCustomColor;
+                hoverFill = hexToRgbaStr(effectiveCustomColor, 0.60);
+                hoverStroke = '#ffffff';
+                pathEl.setAttribute("class", isEquipped ? "slice-path equipped" : "slice-path");
+            } else if (isEquipped) {
+                defaultFill = hexToRgbaStr(effectiveCustomColor, 0.35);
+                defaultStroke = effectiveCustomColor;
+                hoverFill = hexToRgbaStr(effectiveCustomColor, 0.55);
+                hoverStroke = '#ffffff';
+                pathEl.setAttribute("class", "slice-path equipped");
+            } else if (hasOutfit) {
+                defaultFill = hexToRgbaStr(effectiveCustomColor, 0.18);
+                defaultStroke = hexToRgbaStr(effectiveCustomColor, 0.70);
+                hoverFill = hexToRgbaStr(effectiveCustomColor, 0.38);
+                hoverStroke = effectiveCustomColor;
+                pathEl.setAttribute("class", "slice-path");
+            } else {
+                defaultFill = 'rgba(13, 18, 26, 0.55)';
+                defaultStroke = hexToRgbaStr(effectiveCustomColor, 0.35);
+                hoverFill = 'rgba(255, 255, 255, 0.08)';
+                hoverStroke = effectiveCustomColor;
+                pathEl.setAttribute("class", "slice-path empty");
+            }
+        } else if (isAddon) {
             defaultFill = isEquipped ? 'rgba(168, 85, 247, 0.35)' : 'rgba(168, 85, 247, 0.12)';
             defaultStroke = '#c084fc';
             hoverFill = 'rgba(168, 85, 247, 0.55)';
@@ -234,7 +376,10 @@ function updateWheelUI() {
             if (e && e.button === 0) {
                 if (isEditModeActive()) {
                     if (typeof isClassicEditMode === 'function' && isClassicEditMode()) {
-                        saveOutfit(realSlotIndex);
+                        selectedSlotIndex = realSlotIndex;
+                        if (typeof showSlotContextMenu === 'function') {
+                            showSlotContextMenu(e ? e.clientX : 0, e ? e.clientY : 0, realSlotIndex);
+                        }
                     } else {
                         selectedSlotIndex = realSlotIndex;
                         renderSlotsRail();
@@ -279,7 +424,10 @@ function updateWheelUI() {
             if (e && e.button === 0) {
                 if (isEditModeActive()) {
                     if (typeof isClassicEditMode === 'function' && isClassicEditMode()) {
-                        saveOutfit(realSlotIndex);
+                        selectedSlotIndex = realSlotIndex;
+                        if (typeof showSlotContextMenu === 'function') {
+                            showSlotContextMenu(e ? e.clientX : 0, e ? e.clientY : 0, realSlotIndex);
+                        }
                     } else {
                         selectedSlotIndex = realSlotIndex;
                         renderSlotsRail();
@@ -311,9 +459,37 @@ function updateWheelUI() {
 
         if (hasOutfit) {
             const iconName = resolvePngIcon(slot);
-            labelEl.innerHTML = '<div class="slot-icon"><img class="slot-icon-img" src="icons/' + iconName + '" alt=""></div>' +
-                '<div class="slot-title">' + slot.name + '</div>' +
-                '<div class="slot-subtitle">' + slot.count + ' items</div>' +
+            const previewsEnabled = (typeof isItemPreviewsEnabled === 'function') ? isItemPreviewsEnabled() : true;
+            const torsoItem = previewsEnabled ? resolveSlotTorsoItem(slot) : null;
+
+            let iconHtml = '';
+            if (torsoItem && torsoItem.rawID && previewsEnabled) {
+                if (typeof queueThumbnailRequest === 'function' && (!torsoItem.thumbnail || torsoItem.thumbnail.length === 0)) {
+                    queueThumbnailRequest(torsoItem.rawID, false);
+                }
+                const hasThumb = (torsoItem.thumbnail && torsoItem.thumbnail.length > 0);
+                if (hasThumb) {
+                    iconHtml = '<div class="slot-icon">' +
+                        '<img class="slot-icon-img wheel-slot-thumb-img" data-raw-id="' + torsoItem.rawID + '" src="' + torsoItem.thumbnail + '" alt="" onerror="this.style.display=\'none\'; if(this.nextElementSibling) this.nextElementSibling.style.display=\'block\';">' +
+                        '<img class="slot-icon-img fallback-icon" src="icons/' + iconName + '" alt="" style="display:none;">' +
+                        '</div>';
+                } else {
+                    iconHtml = '<div class="slot-icon">' +
+                        '<img class="slot-icon-img fallback-icon" src="icons/' + iconName + '" alt="">' +
+                        '<img class="slot-icon-img wheel-slot-thumb-img" data-raw-id="' + torsoItem.rawID + '" src="" alt="" style="display:none;" onerror="this.style.display=\'none\'; if(this.previousElementSibling) this.previousElementSibling.style.display=\'block\';">' +
+                        '</div>';
+                }
+            } else {
+                iconHtml = '<div class="slot-icon"><img class="slot-icon-img" src="icons/' + iconName + '" alt=""></div>';
+            }
+
+            const displayName = slot.name || ('Slot ' + (realSlotIndex + 1));
+            const itemCount = (slot.items && slot.items.length > 0) ? slot.items.length : (slot.count !== undefined ? slot.count : 0);
+            const colorDot = slotCustomColor ? `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:${slotCustomColor}; margin-right:4px; box-shadow:0 0 6px ${slotCustomColor}; vertical-align:middle;"></span>` : '';
+
+            labelEl.innerHTML = iconHtml +
+                '<div class="slot-title">' + colorDot + displayName + '</div>' +
+                '<div class="slot-subtitle">' + itemCount + ' items</div>' +
                 (isEquipped ? '<div class="slot-equipped-badge">EQUIPPED</div>' : '');
         } else {
             labelEl.innerHTML = '<div class="slot-icon">' + svgPlusIcon + '</div>' +
