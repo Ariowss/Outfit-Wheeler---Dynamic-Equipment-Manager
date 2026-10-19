@@ -3,9 +3,12 @@
 #include "ThumbnailDiskCache.h"
 #include "ItemPreviewRenderer.h"
 #include "../JSInterop.h"
+#include "../Settings.h"
 #include <atomic>
 
 extern std::atomic<bool> g_gameFullyLoaded;
+extern std::atomic<bool> isMenuOpen;
+extern std::atomic<bool> g_isEditModeOpen;
 
 namespace OutfitWheeler::Thumbnail
 {
@@ -107,7 +110,7 @@ namespace OutfitWheeler::Thumbnail
 
     std::string ItemThumbnailService::GetOrGenerateThumbnail(RE::TESBoundObject* a_item)
     {
-        if (!a_item) return "";
+        if (!g_showItemPreviews.load(std::memory_order_acquire) || !a_item) return "";
 
         auto* file = a_item->GetFile(0);
         std::string modName = file ? std::string(file->GetFilename()) : "Skyrim.esm";
@@ -163,7 +166,7 @@ namespace OutfitWheeler::Thumbnail
 
     void ItemThumbnailService::QueueItem(RE::TESBoundObject* a_item, bool a_highPriority)
     {
-        if (!a_item) return;
+        if (!g_showItemPreviews.load(std::memory_order_acquire) || !a_item) return;
 
         auto* file = a_item->GetFile(0);
         std::string modName = file ? std::string(file->GetFilename()) : "Skyrim.esm";
@@ -191,6 +194,13 @@ namespace OutfitWheeler::Thumbnail
                 if (m_queuedFormIDs.contains(formID) || m_highPriorityFormIDs.contains(formID)) {
                     return;
                 }
+                if (m_normalPriorityQueue.size() >= 6) {
+                    auto* oldItem = m_normalPriorityQueue.front();
+                    m_normalPriorityQueue.pop_front();
+                    if (oldItem) {
+                        m_queuedFormIDs.erase(oldItem->GetFormID());
+                    }
+                }
                 m_queuedFormIDs.insert(formID);
                 m_normalPriorityQueue.push_back(a_item);
             }
@@ -200,12 +210,17 @@ namespace OutfitWheeler::Thumbnail
 
     void ItemThumbnailService::QueueItems(const std::vector<RE::TESBoundObject*>& a_items, bool a_highPriority)
     {
-        if (a_items.empty()) return;
+        if (!g_showItemPreviews.load(std::memory_order_acquire) || a_items.empty()) return;
 
         std::vector<std::pair<RE::FormID, std::string>> readyItems;
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             auto& cache = ThumbnailDiskCache::GetSingleton();
+
+            if (!a_highPriority) {
+                m_normalPriorityQueue.clear();
+                m_queuedFormIDs.clear();
+            }
 
             for (auto* item : a_items) {
                 if (!item) continue;
@@ -213,9 +228,7 @@ namespace OutfitWheeler::Thumbnail
                 std::string modName = file ? std::string(file->GetFilename()) : "Skyrim.esm";
                 uint32_t localFormID = item->GetLocalFormID();
                 if (cache.HasThumbnail(modName, localFormID)) {
-                    if (a_highPriority) {
-                        readyItems.push_back({ item->GetFormID(), cache.GetRelativePath(modName, localFormID) });
-                    }
+                    readyItems.push_back({ item->GetFormID(), cache.GetRelativePath(modName, localFormID) });
                     continue;
                 }
 
@@ -229,6 +242,13 @@ namespace OutfitWheeler::Thumbnail
                 } else {
                     if (m_failedFormIDs.contains(formID)) continue;
                     if (!m_queuedFormIDs.contains(formID) && !m_highPriorityFormIDs.contains(formID)) {
+                        if (m_normalPriorityQueue.size() >= 6) {
+                            auto* oldItem = m_normalPriorityQueue.front();
+                            m_normalPriorityQueue.pop_front();
+                            if (oldItem) {
+                                m_queuedFormIDs.erase(oldItem->GetFormID());
+                            }
+                        }
                         m_queuedFormIDs.insert(formID);
                         m_normalPriorityQueue.push_back(item);
                     }
@@ -236,10 +256,8 @@ namespace OutfitWheeler::Thumbnail
             }
         }
 
-        if (a_highPriority) {
-            for (const auto& [fID, rPath] : readyItems) {
-                NotifyThumbnailReady(fID, rPath);
-            }
+        if (!readyItems.empty()) {
+            NotifyThumbnailsBatchReady(readyItems);
         }
 
         ScheduleProcessing();
@@ -247,7 +265,7 @@ namespace OutfitWheeler::Thumbnail
 
     void ItemThumbnailService::ScheduleProcessing()
     {
-        if (!g_gameFullyLoaded.load(std::memory_order_acquire)) return;
+        if (!g_showItemPreviews.load(std::memory_order_acquire) || !g_gameFullyLoaded.load(std::memory_order_acquire)) return;
         if (m_processingScheduled.exchange(true)) return;
 
         auto* taskInterface = SKSE::GetTaskInterface();
@@ -258,12 +276,38 @@ namespace OutfitWheeler::Thumbnail
 
         taskInterface->AddTask([this]() {
             m_processingScheduled.store(false);
-            try {
-                ProcessQueue(1);
-            } catch (...) {}
+            if (!g_showItemPreviews.load(std::memory_order_acquire) || !g_gameFullyLoaded.load(std::memory_order_acquire)) return;
+
+            auto* ui = RE::UI::GetSingleton();
+            if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::FaderMenu::MENU_NAME))) {
+                return;
+            }
+
+            bool menuVisible = isMenuOpen.load(std::memory_order_acquire) || g_isEditModeOpen.load(std::memory_order_acquire);
+            bool shouldProcess = true;
             {
                 std::lock_guard<std::mutex> lock(m_queueMutex);
-                if ((!m_highPriorityQueue.empty() || !m_normalPriorityQueue.empty()) && g_gameFullyLoaded.load(std::memory_order_acquire)) {
+                if (m_highPriorityQueue.empty()) {
+                    if (!menuVisible) {
+                        shouldProcess = false;
+                    } else {
+                        auto now = std::chrono::steady_clock::now();
+                        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastRenderTime).count() < 120) {
+                            shouldProcess = false;
+                        }
+                    }
+                }
+            }
+            if (shouldProcess) {
+                m_lastRenderTime = std::chrono::steady_clock::now();
+                try {
+                    ProcessQueue(1);
+                } catch (...) {}
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_queueMutex);
+                bool hasMore = !m_highPriorityQueue.empty() || (!m_normalPriorityQueue.empty() && menuVisible);
+                if (hasMore && g_gameFullyLoaded.load(std::memory_order_acquire) && g_showItemPreviews.load(std::memory_order_acquire)) {
                     ScheduleProcessing();
                 }
             }
@@ -272,13 +316,16 @@ namespace OutfitWheeler::Thumbnail
 
     void ItemThumbnailService::ProcessQueue(uint32_t maxItemsPerFrame)
     {
-        uint32_t budget = maxItemsPerFrame;
-        {
+        if (!g_showItemPreviews.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            if (!m_highPriorityQueue.empty()) {
-                budget = (budget > 2u) ? budget : 2u;
-            }
+            m_highPriorityQueue.clear();
+            m_normalPriorityQueue.clear();
+            m_highPriorityFormIDs.clear();
+            m_queuedFormIDs.clear();
+            return;
         }
+
+        uint32_t budget = (maxItemsPerFrame > 0) ? 1u : 0u;
 
         uint32_t processed = 0;
         uint32_t skipped = 0;
@@ -357,6 +404,7 @@ namespace OutfitWheeler::Thumbnail
 
 extern "C" __declspec(dllexport) bool OutfitWheeler_GenerateThumbnail(uint32_t a_formID)
 {
+    if (!g_showItemPreviews.load(std::memory_order_acquire)) return false;
     auto* form = RE::TESForm::LookupByID(a_formID);
     auto* bound = form ? form->As<RE::TESBoundObject>() : nullptr;
     if (!bound) {

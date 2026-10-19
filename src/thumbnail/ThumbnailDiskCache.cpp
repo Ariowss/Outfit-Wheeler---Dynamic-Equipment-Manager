@@ -44,7 +44,9 @@ namespace OutfitWheeler::Thumbnail
         if (std::filesystem::exists(m_baseDir, ec) && std::filesystem::is_directory(m_baseDir, ec)) {
             for (const auto& entry : std::filesystem::directory_iterator(m_baseDir, ec)) {
                 if (entry.is_regular_file(ec) && entry.file_size(ec) > 0) {
-                    m_cachedFileNames.insert(entry.path().filename().string());
+                    std::string fName = entry.path().filename().string();
+                    std::transform(fName.begin(), fName.end(), fName.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    m_cachedFileNames.insert(std::move(fName));
                 }
             }
         }
@@ -81,6 +83,7 @@ namespace OutfitWheeler::Thumbnail
     bool ThumbnailDiskCache::HasThumbnail(const std::string& modName, uint32_t localFormID) const
     {
         std::string fileName = GenerateFileName(modName, localFormID);
+        std::transform(fileName.begin(), fileName.end(), fileName.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         std::shared_lock<std::shared_mutex> lock(m_cacheMutex);
         return m_cachedFileNames.contains(fileName);
     }
@@ -171,8 +174,10 @@ namespace OutfitWheeler::Thumbnail
         if (!SUCCEEDED(hr)) return false;
 
         {
+            std::string savedName = destPath.filename().string();
+            std::transform(savedName.begin(), savedName.end(), savedName.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             std::unique_lock<std::shared_mutex> lock(m_cacheMutex);
-            m_cachedFileNames.insert(destPath.filename().string());
+            m_cachedFileNames.insert(std::move(savedName));
         }
 
         return true;

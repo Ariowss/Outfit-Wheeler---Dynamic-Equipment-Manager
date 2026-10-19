@@ -516,21 +516,25 @@ namespace OutfitWheeler::Thumbnail
         std::string name = raw;
         std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        if (name == "bd" || name.rfind("bd_", 0) == 0 || (name.length() >= 3 && name.rfind("_bd") == name.length() - 3)) return true;
-        if (!a_hasBody && (name == "body" || name == "basebody" || name == "base_body" || name == "bodymesh" || name == "body_mesh" || name == "baseshape")) return true;
-        if (name.find("femalebody") != std::string::npos || name.find("malebody") != std::string::npos) return true;
-        if (name.find("cbbe") != std::string::npos || name.find("3ba") != std::string::npos || name.find("3bbb") != std::string::npos) return true;
-        if (name.find("unp") != std::string::npos || name.find("bhunp") != std::string::npos || name.find("uunp") != std::string::npos) return true;
-        if (name.find("sevenbase") != std::string::npos || name.find("touchedbydibella") != std::string::npos) return true;
-        if (name == "7b" || name.rfind("7b_", 0) == 0 || (name.length() >= 3 && name.rfind("_7b") == name.length() - 3)) return true;
-        if (name == "tbd" || name.rfind("tbd_", 0) == 0 || (name.length() >= 4 && name.rfind("_tbd") == name.length() - 4)) return true;
+        for (const char* prefix : { "cbbe_", "cbbe ", "3ba_", "3ba ", "3bbb_", "3bbb ", "unp_", "unp ", "bhunp_", "bhunp ", "uunp_", "uunp ", "7b_", "tbd_" }) {
+            size_t plen = std::strlen(prefix);
+            if (name.rfind(prefix, 0) == 0) {
+                name = name.substr(plen);
+                break;
+            }
+        }
+
         if (name.find("vagina") != std::string::npos || name.find("anus") != std::string::npos || name.find("nipple") != std::string::npos) return true;
         if (name.find("genitals") != std::string::npos || name.find("penis") != std::string::npos || name.find("clitoris") != std::string::npos) return true;
         if (name.find("areola") != std::string::npos || name.find("pubic") != std::string::npos) return true;
 
-        if (!a_hasHead && (name == "head" || name == "face" || name.rfind("head_", 0) == 0 || name.rfind("face_", 0) == 0)) return true;
-        if (!a_hasHands && (name == "hand" || name == "hands" || name.rfind("hand_", 0) == 0 || name.rfind("hands_", 0) == 0)) return true;
-        if (!a_hasFeet && (name == "foot" || name == "feet" || name == "calf" || name == "calves")) return true;
+        if (name == "bd" || name == "body" || name == "basebody" || name == "base_body" || name == "bodymesh" || name == "body_mesh" || name == "baseshape" || name == "femalebody" || name == "malebody") {
+            return !a_hasBody;
+        }
+
+        if (!a_hasHead && (name == "head" || name == "face" || name == "femalehead" || name == "malehead")) return true;
+        if (!a_hasHands && (name == "hand" || name == "hands" || name == "femalehands" || name == "malehands")) return true;
+        if (!a_hasFeet && (name == "foot" || name == "feet" || name == "femalefeet" || name == "malefeet" || name == "calf" || name == "calves")) return true;
 
         return false;
     }
@@ -544,8 +548,7 @@ namespace OutfitWheeler::Thumbnail
             if (c == '/') c = '\\';
         }
 
-        if (tex.find("actors\\character") != std::string::npos ||
-            tex.find("femalebody") != std::string::npos ||
+        if (tex.find("femalebody") != std::string::npos ||
             tex.find("malebody") != std::string::npos ||
             tex.find("femalehead") != std::string::npos ||
             tex.find("malehead") != std::string::npos ||
@@ -556,9 +559,9 @@ namespace OutfitWheeler::Thumbnail
             tex.find("mouthhuman") != std::string::npos ||
             tex.find("eyesmale") != std::string::npos ||
             tex.find("eyesfemale") != std::string::npos ||
-            tex.find("\\skin\\") != std::string::npos ||
             tex.find("bodymale") != std::string::npos ||
-            tex.find("bodyfemale") != std::string::npos) {
+            tex.find("bodyfemale") != std::string::npos ||
+            tex.find("humanbody") != std::string::npos) {
             return true;
         }
         return false;
@@ -1128,7 +1131,7 @@ namespace OutfitWheeler::Thumbnail
             TempSubmeshEntry entry;
             entry.isAbsoluteJunk = HasAbsoluteJunkNodeName(geom) || IsJunkTexture(submesh.diffuseTexture);
             entry.isBody = IsBodyNodeName(geom, armorHasBody, armorHasHead, armorHasHands, armorHasFeet) ||
-                           IsBodyTexture(submesh.diffuseTexture) ||
+                           (!armorHasBody && IsBodyTexture(submesh.diffuseTexture)) ||
                            partitionMismatch ||
                            !hasShaderProp;
 
@@ -1137,7 +1140,7 @@ namespace OutfitWheeler::Thumbnail
                     for (uint32_t idx : submesh.indices) {
                         if (idx < submesh.vertices.size()) {
                             const auto& v = submesh.vertices[idx];
-                            if (std::abs(v.x) < 1e-4f && std::abs(v.y) < 1e-4f && std::abs(v.z) < 1e-4f && submesh.vertices.size() > 10) {
+                            if ((v.x * v.x + v.y * v.y + v.z * v.z < 0.25f) && submesh.vertices.size() > 10) {
                                 continue;
                             }
                             entry.minPt[0] = (std::min)(entry.minPt[0], v.x);

@@ -7,6 +7,7 @@
 #include "JSInterop.h"
 #include "ExecutionQueue.h"
 #include "thumbnail/ItemThumbnailService.h"
+#include "ModCatalogManager.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -61,6 +62,7 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
         LoadINI();
         LoadData();
         OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().Initialize();
+        ModCatalogManager::GetSingleton()->EnsureCatalogIndexed();
         EnsurePrismaView();
         WheelInputHandler::Register();
     } else if (message->type == SKSE::MessagingInterface::kPreLoadGame) {
@@ -75,32 +77,65 @@ static void SKSEMessageHandler(SKSE::MessagingInterface::Message* message) {
                 PrismaUI->Unfocus(view);
                 PrismaUI->Hide(view);
             }
-        });
-    } else if (message->type == SKSE::MessagingInterface::kPostLoadGame || message->type == SKSE::MessagingInterface::kNewGame) {
-        LoadINI();
-        LoadData();
-        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().Initialize();
-        ExecutionQueue::GetSingleton()->ResetEnvironmentState();
-        g_gameFullyLoaded.store(true, std::memory_order_release);
-        QueueAllLoadedItemThumbnails();
-        QueuePlayerInventoryThumbnails();
-        QueueWardrobeInventoryThumbnails();
-        QueueFollowerInventoryThumbnails();
-        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().StartProcessing();
-        ExecutionQueue::GetSingleton()->RegisterEvents();
-        isMenuOpen.store(false, std::memory_order_release);
-        g_isEditModeOpen.store(false, std::memory_order_release);
-        g_isTyping.store(false, std::memory_order_release);
-        SKSE::GetTaskInterface()->AddTask([]() {
-            if (PrismaUI && view != 0) {
-                PrismaUI->Unfocus(view);
-                PrismaUI->Hide(view);
+            RestoreStudioActors();
+            auto player = RE::PlayerCharacter::GetSingleton();
+            auto cam = RE::PlayerCamera::GetSingleton();
+            if (cam && player) {
+                cam->cameraTarget = player->GetHandle();
             }
             auto controlMap = RE::ControlMap::GetSingleton();
             if (controlMap) {
                 controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, true);
             }
+            auto pc = RE::PlayerControls::GetSingleton();
+            if (pc) {
+                pc->blockPlayerInput = false;
+                if (pc->attackBlockHandler) pc->attackBlockHandler->SetInputEventHandlingEnabled(true);
+                if (pc->readyWeaponHandler) pc->readyWeaponHandler->SetInputEventHandlingEnabled(true);
+            }
+            SetCameraInputHandlingEnabled(true);
         });
+    } else if (message->type == SKSE::MessagingInterface::kPostLoadGame || message->type == SKSE::MessagingInterface::kNewGame) {
+        LoadINI();
+        LoadData();
+        SanitizeWardrobeContainer();
+        OutfitWheeler::Thumbnail::ItemThumbnailService::GetSingleton().Initialize();
+        ExecutionQueue::GetSingleton()->ResetEnvironmentState();
+        ExecutionQueue::GetSingleton()->RegisterEvents();
+        isMenuOpen.store(false, std::memory_order_release);
+        g_isEditModeOpen.store(false, std::memory_order_release);
+        g_isTyping.store(false, std::memory_order_release);
+        SKSE::GetTaskInterface()->AddTask([]() {
+            g_gameFullyLoaded.store(true, std::memory_order_release);
+            if (PrismaUI && view != 0) {
+                PrismaUI->Unfocus(view);
+                PrismaUI->Hide(view);
+            }
+            RestoreStudioActors();
+            auto player = RE::PlayerCharacter::GetSingleton();
+            auto cam = RE::PlayerCamera::GetSingleton();
+            if (cam && player) {
+                cam->cameraTarget = player->GetHandle();
+            }
+            if (player) {
+                SetActorRestrainedAndDontMove(player, false);
+                player->SetLifeState(RE::ACTOR_LIFE_STATE::kAlive);
+                player->GetActorRuntimeData().boolFlags.reset(RE::Actor::BOOL_FLAGS::kMovementBlocked);
+            }
+            auto controlMap = RE::ControlMap::GetSingleton();
+            if (controlMap) {
+                controlMap->ToggleControls(RE::ControlMap::UEFlag::kAll, true);
+            }
+            auto pc = RE::PlayerControls::GetSingleton();
+            if (pc) {
+                pc->blockPlayerInput = false;
+                if (pc->attackBlockHandler) pc->attackBlockHandler->SetInputEventHandlingEnabled(true);
+                if (pc->readyWeaponHandler) pc->readyWeaponHandler->SetInputEventHandlingEnabled(true);
+            }
+            SetCameraInputHandlingEnabled(true);
+        });
+    } else if (message->type == SKSE::MessagingInterface::kSaveGame) {
+        SanitizeWardrobeContainer();
     }
 }
 
@@ -110,5 +145,20 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     auto messaging = SKSE::GetMessagingInterface();
     if (!messaging) return false;
     messaging->RegisterListener(SKSEMessageHandler);
+
+    auto serialization = SKSE::GetSerializationInterface();
+    if (serialization) {
+        serialization->SetUniqueID('OFWL');
+        serialization->SetSaveCallback([](SKSE::SerializationInterface*) {
+            SanitizeWardrobeContainer();
+        });
+        serialization->SetLoadCallback([](SKSE::SerializationInterface*) {
+            SanitizeWardrobeContainer();
+        });
+        serialization->SetRevertCallback([](SKSE::SerializationInterface*) {
+            SanitizeWardrobeContainer();
+        });
+    }
+
     return true;
 }

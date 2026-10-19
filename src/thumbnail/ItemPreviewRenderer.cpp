@@ -310,6 +310,10 @@ float4 PSMain(VS_OUT input, bool isFrontFace : SV_IsFrontFace) : SV_Target
             return it->second.Get();
         }
 
+        if (m_textureCache.size() > 512) {
+            m_textureCache.clear();
+        }
+
         std::string norm = a_texturePath;
         for (char& c : norm) {
             if (c == '/') c = '\\';
@@ -630,6 +634,9 @@ float4 PSMain(VS_OUT input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         ID3D11SamplerState* prevSampler = nullptr;
         context->PSGetSamplers(0, 1, &prevSampler);
 
+        ID3D11ShaderResourceView* prevPSResource = nullptr;
+        context->PSGetShaderResources(0, 1, &prevPSResource);
+
         D3D11_VIEWPORT prevViewport{};
         UINT numViewports = 1;
         context->RSGetViewports(&numViewports, &prevViewport);
@@ -654,19 +661,84 @@ float4 PSMain(VS_OUT input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         float cx = modelData.boundingCenter[0];
         float cy = modelData.boundingCenter[1];
         float cz = modelData.boundingCenter[2];
+
+        float dx = modelData.aabbMax[0] - modelData.aabbMin[0];
+        float dy = modelData.aabbMax[1] - modelData.aabbMin[1];
+        float dz = modelData.aabbMax[2] - modelData.aabbMin[2];
+
         float radius = modelData.boundingRadius > 0.001f ? modelData.boundingRadius : (modelData.maxExtent * 0.65f);
-        if (radius < 0.1f) radius = 5.0f;
 
-        float fov = XMConvertToRadians(24.0f);
-        float dist = (radius / std::tan(fov * 0.5f)) * 1.25f;
+        bool isWeapon = (a_item && a_item->IsWeapon());
+        bool isShield = false;
+        float minRadius = 16.0f;
 
-        XMVECTOR targetPos = XMVectorSet(cx, cy, cz, 1.0f);
-        XMVECTOR eyeDir = XMVector3Normalize(XMVectorSet(-0.25f, 0.92f, 0.22f, 0.0f));
-        XMVECTOR eyePos = XMVectorAdd(targetPos, XMVectorScale(eyeDir, dist));
+        if (auto* armor = a_item ? a_item->As<RE::TESObjectARMO>() : nullptr) {
+            isShield = armor->IsShield();
+            using BipedSlot = RE::BIPED_MODEL::BipedObjectSlot;
+            uint32_t flags = static_cast<uint32_t>(armor->GetSlotMask());
+            if (flags & static_cast<uint32_t>(BipedSlot::kBody)) {
+                minRadius = 36.0f; // cuirass / dress
+            } else if (flags & (static_cast<uint32_t>(BipedSlot::kHead) | static_cast<uint32_t>(BipedSlot::kHair) | static_cast<uint32_t>(BipedSlot::kCirclet))) {
+                minRadius = 18.0f; // helmet / hood / circlet
+            } else if (flags & static_cast<uint32_t>(BipedSlot::kHands)) {
+                minRadius = 18.0f; // gloves / gauntlets
+            } else if (flags & static_cast<uint32_t>(BipedSlot::kFeet)) {
+                minRadius = 22.0f; // boots
+            } else if (flags & static_cast<uint32_t>(BipedSlot::kShield)) {
+                minRadius = 28.0f; // shield
+            } else {
+                minRadius = 10.0f; // jewelry / small accessory
+            }
+        } else if (isWeapon) {
+            minRadius = 24.0f;
+        }
+
+        if (radius < minRadius) {
+            radius = minRadius;
+        }
+
+        float fov = XMConvertToRadians(30.0f);
+        XMVECTOR eyeDir;
         XMVECTOR upVec = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
 
+        if (isWeapon) {
+            // Rank the axes (longest, second, shortest) to find the flat plane of the blade/weapon
+            float exts[3] = { dx, dy, dz };
+            int longest = 0;
+            if (exts[1] > exts[longest]) longest = 1;
+            if (exts[2] > exts[longest]) longest = 2;
+
+            int shortest = 0;
+            if (exts[1] < exts[shortest]) shortest = 1;
+            if (exts[2] < exts[shortest]) shortest = 2;
+
+            int second = 3 - longest - shortest;
+
+            float dir[3] = { 0.0f, 0.0f, 0.0f };
+            // Look into the flat side (shortest axis normal) with tilt toward second and along longest
+            dir[shortest] = 0.88f;
+            dir[second]   = 0.38f;
+            dir[longest]  = 0.26f;
+            eyeDir = XMVector3Normalize(XMVectorSet(dir[0], dir[1], dir[2], 0.0f));
+
+            float up[3] = { 0.0f, 0.0f, 0.0f };
+            up[longest] = 0.7071f;
+            up[second]  = 0.7071f;
+            upVec = XMVector3Normalize(XMVectorSet(up[0], up[1], up[2], 0.0f));
+        } else if (isShield) {
+            eyeDir = XMVector3Normalize(XMVectorSet(-0.25f, 0.94f, 0.22f, 0.0f));
+        } else {
+            eyeDir = XMVector3Normalize(XMVectorSet(-0.28f, 0.90f, 0.32f, 0.0f));
+        }
+
+        float dist = (radius / std::tan(fov * 0.5f)) * 1.20f;
+        if (dist < 20.0f) dist = 20.0f;
+
+        XMVECTOR targetPos = XMVectorSet(cx, cy, cz, 1.0f);
+        XMVECTOR eyePos = XMVectorAdd(targetPos, XMVectorScale(eyeDir, dist));
+
         XMMATRIX viewMat = XMMatrixLookAtLH(eyePos, targetPos, upVec);
-        XMMATRIX projMat = XMMatrixPerspectiveFovLH(fov, 1.0f, 0.1f, dist * 5.0f);
+        XMMATRIX projMat = XMMatrixPerspectiveFovLH(fov, 1.0f, 0.1f, dist * 6.0f);
         XMMATRIX viewProjMat = XMMatrixMultiply(viewMat, projMat);
 
         context->IASetInputLayout(m_inputLayout.Get());
@@ -753,7 +825,7 @@ float4 PSMain(VS_OUT input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         D3D11_MAPPED_SUBRESOURCE mapped{};
         bool readSuccess = false;
         HRESULT mapHr = E_FAIL;
-        for (int retry = 0; retry < 5; ++retry) {
+        for (int retry = 0; retry < 2; ++retry) {
             mapHr = context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
             if (SUCCEEDED(mapHr)) break;
             if (mapHr != DXGI_ERROR_WAS_STILL_DRAWING) break;
@@ -774,12 +846,23 @@ float4 PSMain(VS_OUT input, bool isFrontFace : SV_IsFrontFace) : SV_Target
             readSuccess = true;
         }
 
-        ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-        context->PSSetShaderResources(0, 1, nullSRV);
+        if (prevPSResource) {
+            context->PSSetShaderResources(0, 1, &prevPSResource);
+            prevPSResource->Release();
+        } else {
+            ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
+            context->PSSetShaderResources(0, 1, nullSRV);
+        }
 
         context->OMSetRenderTargets(1, &prevRTV, prevDSV);
         if (prevRTV) prevRTV->Release();
         if (prevDSV) prevDSV->Release();
+
+        ID3D11Buffer* nullVB[1] = { nullptr };
+        UINT zeroOffset = 0;
+        UINT zeroStride = 0;
+        context->IASetVertexBuffers(0, 1, nullVB, &zeroStride, &zeroOffset);
+        context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
 
         context->OMSetBlendState(prevBlendState, prevBlendFactor, prevSampleMask);
         if (prevBlendState) prevBlendState->Release();
@@ -812,7 +895,11 @@ float4 PSMain(VS_OUT input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         context->PSSetSamplers(0, 1, &prevSampler);
         if (prevSampler) prevSampler->Release();
 
-        if (numViewports > 0) context->RSSetViewports(numViewports, &prevViewport);
+        if (numViewports > 0) {
+            context->RSSetViewports(numViewports, &prevViewport);
+        } else {
+            context->RSSetViewports(0, nullptr);
+        }
 
         return readSuccess;
     }

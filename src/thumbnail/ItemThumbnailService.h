@@ -11,6 +11,7 @@
 #include <thread>
 #include <condition_variable>
 #include <atomic>
+#include <chrono>
 
 namespace OutfitWheeler::Thumbnail
 {
@@ -59,6 +60,7 @@ namespace OutfitWheeler::Thumbnail
         std::unordered_set<RE::FormID> m_failedFormIDs;
         std::mutex m_queueMutex;
         std::atomic<bool> m_processingScheduled{ false };
+        std::chrono::steady_clock::time_point m_lastRenderTime{};
 
         std::queue<PendingSaveTask> m_saveQueue;
         std::mutex m_saveMutex;
