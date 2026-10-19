@@ -266,9 +266,12 @@ Outfit Wheeler creates automatic timestamped `.bak` files on every save. You can
 
 This project is licensed under the **GNU General Public License v3.0** (`GPL-3.0`). See the [`LICENSE`](LICENSE) file for the full license text.
 
+## Author
+
+- **Ariowss** ([@Ariowss](https://github.com/Ariowss))
+
 ## Credits & Acknowledgments
 
-- **Ariowss**: Creator & Lead Developer (architecture, C++23 SKSE plugin, D3D11 rendering pipeline, dynamic theme engine, and web interface).
 - **dTry**: For inspiring the radial interface concept with *Wheeler*.
 - **Prisma UI Team**: For the in-game web rendering engine and API.
 - **CommonLibSSE-NG & SKSE Teams**: For the reverse engineering and SKSE infrastructure.
