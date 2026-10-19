@@ -22,8 +22,8 @@ target("OutfitWheeler-DynamicEquipmentManager")
 
     add_rules("commonlibsse-ng.plugin", {
         name = "Outfit Wheeler - Dynamic Equipment Manager",
-        author = "StarkMP <discord: starkmp>",
-        description = "SKSE64 plugin template using CommonLibSSE-NG and PrismaUI"
+        author = "Ariowss",
+        description = "Dynamic equipment management and outfit radial wheel for Skyrim SE/AE"
     })
 
     add_files("src/**.cpp")

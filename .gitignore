@@ -9,6 +9,7 @@
 build/
 vs*/
 lib/
+Data/
 
 # files
 *.zip
