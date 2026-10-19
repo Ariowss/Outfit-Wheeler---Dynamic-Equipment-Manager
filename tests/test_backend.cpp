@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include "Settings.h"
 #include "ThumbnailDiskCache.h"
+#include "ModCatalogManager.h"
 
 using json = nlohmann::json;
 
@@ -311,11 +312,24 @@ void TestIniReadWriteAndFallback() {
 
     g_uiScale = 1.75f;
     g_autoHomeEnabled.store(true);
+    g_showItemPreviews.store(false);
     SaveINI();
 
     LoadINI();
     TEST_ASSERT(std::fabs(g_uiScale - 1.75f) < 0.001f);
     TEST_ASSERT(g_autoHomeEnabled.load() == true);
+    TEST_ASSERT(g_showItemPreviews.load() == false);
+
+    g_showItemPreviews.store(true);
+    g_themeAccentColor = "#ef4444";
+    g_themeBgColor = "#1a0507";
+    g_themeTextColor = "#fff1f2";
+    SaveINI();
+    LoadINI();
+    TEST_ASSERT(g_showItemPreviews.load() == true);
+    TEST_ASSERT(g_themeAccentColor == "#ef4444");
+    TEST_ASSERT(g_themeBgColor == "#1a0507");
+    TEST_ASSERT(g_themeTextColor == "#fff1f2");
 }
 
 void TestFormIDEncodingAndESLArithmetic() {
@@ -950,9 +964,9 @@ static void TestNonDestructiveGhostItemPersistenceAndAutoBackup() {
 
     std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "OW_BackupTest";
     std::filesystem::create_directories(tempDir);
-    std::filesystem::path primaryFile = tempDir / "PrismaOutfitWheel.json";
-    std::filesystem::path backupFile = tempDir / "PrismaOutfitWheel.json.bak";
-    std::filesystem::path altRestoreFile = tempDir / "PrismaOutfitWheeler.json";
+    std::filesystem::path primaryFile = tempDir / "OutfitWheelerData.json";
+    std::filesystem::path backupFile = tempDir / "OutfitWheelerData.json.bak";
+    std::filesystem::path legacyFile = tempDir / "PrismaOutfitWheel.json";
 
     {
         std::ofstream out(primaryFile);
@@ -969,8 +983,8 @@ static void TestNonDestructiveGhostItemPersistenceAndAutoBackup() {
     std::filesystem::path resolvedLoadPath;
     if (std::filesystem::exists(primaryFile)) {
         resolvedLoadPath = primaryFile;
-    } else if (std::filesystem::exists(altRestoreFile)) {
-        resolvedLoadPath = altRestoreFile;
+    } else if (std::filesystem::exists(legacyFile)) {
+        resolvedLoadPath = legacyFile;
     } else if (std::filesystem::exists(backupFile)) {
         resolvedLoadPath = backupFile;
     }
@@ -983,7 +997,68 @@ static void TestNonDestructiveGhostItemPersistenceAndAutoBackup() {
         inBak.close();
     }
 
+    // Verify auto-migration from legacy file
+    {
+        std::ofstream outLegacy(legacyFile);
+        outLegacy << originalJson.dump();
+    }
+    TEST_ASSERT(std::filesystem::exists(legacyFile));
+
+    if (!std::filesystem::exists(primaryFile) && std::filesystem::exists(legacyFile)) {
+        std::error_code ec;
+        std::filesystem::copy_file(legacyFile, primaryFile, std::filesystem::copy_options::overwrite_existing, ec);
+        std::filesystem::remove(legacyFile, ec);
+    }
+    TEST_ASSERT(std::filesystem::exists(primaryFile));
+    TEST_ASSERT(!std::filesystem::exists(legacyFile));
+
     std::filesystem::remove_all(tempDir);
+}
+
+static void TestModCatalogIndexingAndSpawning() {
+    auto* catMgr = ModCatalogManager::GetSingleton();
+    TEST_ASSERT(catMgr != nullptr);
+
+    json mockSummaries = json::array({
+        {{"modName", "COCO_Shadow.esp"}, {"count", 24}},
+        {{"modName", "Skyrim.esm"}, {"count", 150}},
+        {{"modName", "BDOR_Armor.esp"}, {"count", 40}}
+    });
+
+    json mockItems = json::array({
+        {{"id", "0x00000801"}, {"rawID", 0x801}, {"name", "Shadow Boots"}, {"type", "Boots"}, {"category", "ARMORS"}, {"armor", 18.0f}, {"weight", 2.0f}, {"value", 250}, {"modName", "COCO_Shadow.esp"}, {"thumbnail", ""}, {"source", "MODEX"}},
+        {{"id", "0x00000802"}, {"rawID", 0x802}, {"name", "Shadow Cuirass"}, {"type", "Cuirass"}, {"category", "ARMORS"}, {"armor", 45.0f}, {"weight", 8.0f}, {"value", 850}, {"modName", "COCO_Shadow.esp"}, {"thumbnail", ""}, {"source", "MODEX"}},
+        {{"id", "0x00000803"}, {"rawID", 0x803}, {"name", "Iron Armor"}, {"type", "Cuirass"}, {"category", "ARMORS"}, {"armor", 25.0f}, {"weight", 30.0f}, {"value", 125}, {"modName", "Skyrim.esm"}, {"thumbnail", ""}, {"source", "MODEX"}}
+    });
+
+    catMgr->SetMockData(mockSummaries, mockItems);
+
+    json summaries = catMgr->GetModSummaries();
+    TEST_ASSERT(summaries.is_array());
+    TEST_ASSERT(summaries.size() == 3);
+    TEST_ASSERT(summaries[0]["modName"] == "COCO_Shadow.esp");
+    TEST_ASSERT(summaries[0]["count"] == 24);
+
+    json cocoItems = catMgr->GetModItems("COCO_Shadow.esp");
+    TEST_ASSERT(cocoItems.is_array());
+    TEST_ASSERT(cocoItems.size() == 2);
+    TEST_ASSERT(cocoItems[0]["name"] == "Shadow Boots");
+    TEST_ASSERT(cocoItems[1]["name"] == "Shadow Cuirass");
+
+    json skyrimItems = catMgr->GetModItems("skyrim.esm");
+    TEST_ASSERT(skyrimItems.is_array());
+    TEST_ASSERT(skyrimItems.size() == 1);
+    TEST_ASSERT(skyrimItems[0]["name"] == "Iron Armor");
+
+    json emptyItems = catMgr->GetModItems("NonExistent.esp");
+    TEST_ASSERT(emptyItems.is_array());
+    TEST_ASSERT(emptyItems.empty());
+
+    bool spawnZero = catMgr->SpawnItem(0, "0x00000007", false, "INVENTORY");
+    TEST_ASSERT(spawnZero == false);
+
+    bool spawnValid = catMgr->SpawnItem(0x801, "0x00000007", true, "INVENTORY");
+    TEST_ASSERT(spawnValid == true);
 }
 
 int main() {
@@ -1006,6 +1081,7 @@ int main() {
     RUN_TEST("13. External C-API Hotkey Suppression & Runtime State Machine", TestExternalApiHotkeySuppressionAndRuntimeState);
     RUN_TEST("14. Standalone 3D Thumbnail Disk Cache & WIC PNG Encoding", TestThumbnailDiskCacheAndPngEncoding);
     RUN_TEST("15. Ghost Item Persistence, Fallback Load Paths & Auto .bak Backup", TestNonDestructiveGhostItemPersistenceAndAutoBackup);
+    RUN_TEST("16. Mod Catalog Indexing, Summary Grouping and Spawning Logic", TestModCatalogIndexingAndSpawning);
 
     std::cout << "========================================" << std::endl;
     std::cout << "Backend Test Results: " << g_passedTests << " / " << g_totalTests << " Passed" << std::endl;

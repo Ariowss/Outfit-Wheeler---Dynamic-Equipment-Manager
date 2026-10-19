@@ -39,7 +39,15 @@ function createTestEnvironment() {
                 classes: new Set(),
                 add(c) { this.classes.add(c); },
                 remove(c) { this.classes.delete(c); },
-                contains(c) { return this.classes.has(c); }
+                contains(c) { return this.classes.has(c); },
+                toggle(c, force) {
+                    if (force !== undefined) {
+                        if (force) { this.classes.add(c); return true; }
+                        else { this.classes.delete(c); return false; }
+                    }
+                    if (this.classes.has(c)) { this.classes.delete(c); return false; }
+                    this.classes.add(c); return true;
+                }
             },
             attributes: {},
             children: [],
@@ -133,6 +141,10 @@ function createTestEnvironment() {
         SaveSettings: (payload) => { interopCalls['SaveSettings'] = JSON.parse(payload); },
         RenameSlot: (payload) => { interopCalls['RenameSlot'] = JSON.parse(payload); },
         RenameWheel: (payload) => { interopCalls['RenameWheel'] = JSON.parse(payload); },
+        SpawnModItem: (payload) => { interopCalls['SpawnModItem'] = JSON.parse(payload); },
+        RequestThumbnail: (payload) => { interopCalls['RequestThumbnail'] = JSON.parse(payload); },
+        ExportConfig: (payload) => { interopCalls['ExportConfig'] = JSON.parse(payload); },
+        ImportConfig: (payload) => { interopCalls['ImportConfig'] = JSON.parse(payload); },
         navigator: { getGamepads: () => [] }
     };
 
@@ -288,6 +300,61 @@ runTest('Bug 7: Settings Payload Structure and INI Key Alignment', () => {
     assert.strictEqual(typeof payload.uiScale, 'number');
     assert.strictEqual(typeof payload.wheelScale, 'number');
     assert.strictEqual(typeof payload.autoCloseOnEquip, 'boolean');
+});
+
+runTest('Bug 8: Mod Explorer item click dispatches SpawnModItem and caches locally', () => {
+    const modItem = {
+        name: 'Valkyrie Armor',
+        rawID: 0x02001555,
+        id: '0x02001555',
+        category: 'ARMORS',
+        source: 'MODEX'
+    };
+    if (!env.currentWheelData.playerInventory) env.currentWheelData.playerInventory = [];
+    const card = env.createInventoryItemElement(modItem, 'MODEX');
+    assert.ok(card);
+    card.onclick();
+
+    const spawnPayload = env.interopCalls['SpawnModItem'];
+    assert.ok(spawnPayload, 'SpawnModItem must be dispatched on click');
+    assert.strictEqual(spawnPayload.rawID, 0x02001555);
+    assert.strictEqual(spawnPayload.autoEquip, true);
+
+    const playerInv = env.currentWheelData.playerInventory;
+    assert.ok(playerInv && playerInv.length > 0);
+    assert.strictEqual(playerInv[0].name, 'Valkyrie Armor');
+});
+
+runTest('Bug 9: Source Code Audit - Zero static xinput.lib imports', () => {
+    const srcDir = path.resolve(__dirname, '../src');
+    const files = fs.readdirSync(srcDir);
+    for (const f of files) {
+        if (f.endsWith('.cpp') || f.endsWith('.h')) {
+            const content = fs.readFileSync(path.join(srcDir, f), 'utf8');
+            assert.ok(!content.includes('pragma comment(lib, "Xinput.lib")'), `${f} must not statically link Xinput.lib`);
+            assert.ok(!content.includes('pragma comment(lib, "xinput.lib")'), `${f} must not statically link xinput.lib`);
+            assert.ok(!content.includes('LoadLibraryA("xinput1_4.dll")'), `${f} must not call LoadLibraryA on xinput1_4.dll`);
+        }
+    }
+});
+
+runTest('Bug 10: ExportConfig and ImportConfig dispatch to Prisma UI window listeners', () => {
+    const tEnv = createTestEnvironment();
+    assert.ok(typeof tEnv.exportConfiguration === 'function');
+    assert.ok(typeof tEnv.importConfiguration === 'function');
+
+    tEnv.exportConfiguration();
+    assert.ok(tEnv.interopCalls['ExportConfig'] !== undefined, 'ExportConfig must be called');
+
+    tEnv.importConfiguration('Data/SKSE/Plugins/OutfitWheelerData.json.bak');
+    assert.ok(tEnv.interopCalls['ImportConfig'] !== undefined, 'ImportConfig must be called');
+    assert.strictEqual(tEnv.interopCalls['ImportConfig'].path, 'Data/SKSE/Plugins/OutfitWheelerData.json.bak');
+});
+
+runTest('Bug 11: Source Code Audit - Input toggle strictly uses IsDown to prevent menu flapping', () => {
+    const inputSrc = fs.readFileSync(path.resolve(__dirname, '../src/InputHandler.cpp'), 'utf8');
+    assert.ok(!inputSrc.includes('if (triggerEdit || triggerPlay) {\n                            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastToggleTime).count() < 200) {\n                                buttonEvent->GetRuntimeData().heldDownSecs = 0.0f;'), 'HeldDownSecs must not be cleared in toggle loop');
+    assert.ok(inputSrc.includes('if (buttonEvent->IsDown())'), 'Toggle handling must check IsDown');
 });
 
 console.log(`\n========================================`);
